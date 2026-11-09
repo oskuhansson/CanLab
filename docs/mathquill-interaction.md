@@ -381,3 +381,39 @@ here):
 | Empty slots print `{ }`; `\left(\right)`; `\le` + letter grows a space | `src/latex.rs` |
 | A half-typed field is not an expression | `build_expr` / `ToExprError` |
 
+## 12. Second observation pass: the parity corpus
+
+Everything above was measured once. A second, scripted pass drove the live editor
+with real keystrokes through Playwright — reset the field, type a script, read
+`field.latex()` — over about 140 scripts. The scripts and their observed output
+are now a test: `crates/canlab-input/tests/abitti_parity.rs`. That file, not this
+prose, is the definition of "matches Abitti"; if the two disagree, the file is
+right and this section is stale.
+
+What the second pass changed:
+
+| Finding | Effect on the model |
+| --- | --- |
+| The caret sits **between characters**, not between nodes (`123`, `←`, `←`, `Del` ⇒ `13`) | `Cursor::offset` counts characters; `split_row` splits inside a text run |
+| `\bar`, `\vec`, `\hat`, `\tilde`, `\dot`, `\underline`, `\overline`, `\overrightarrow`, `\overleftarrow` are argument-taking commands | `AccentKind` grew to nine kinds, each with its own mark and side |
+| `\ddot`, `\widehat`, `\widetilde`, `\overbrace`, `\underbrace` are **not** commands — they fall through to `\text{ddot}` | the unknown-command fallback is correct as written |
+| `\bar` + space is `\bar{ }`: an accent with an empty argument is a legal, reachable state | accents always own a body row |
+| A stray `)` wraps the **whole block**, not the trailing run (`1+2)` ⇒ `\left(1+2\right)`) | `wrap_to_the_left` splits at the cursor and takes everything before it |
+| `~` is `\sim`; `½` `²` `³` `×` `π` `≤` are rewritten on input | `insert_char` |
+| `∞`, `α`, `°`, `‰`, `·` stay literal — the rewrite set is small and specific | `insert_char` |
+| `\lim`, `\int`, `\sum` alone are bare tokens; their slots print only once touched | modelled as plain symbols (see divergences) |
+| `\text{…}` / `\mathbb{…}` typed with braces put literal braces inside the command | not modelled (see divergences) |
+
+### Documented divergences
+
+Each of these is a MathQuill internal quirk, not a behaviour a student wants; the
+model does the simpler thing on purpose, and the parity test says so.
+
+| Abitti | CanLab | Why |
+| --- | --- | --- |
+| `\int_0` ⇒ `\int_{_{0}}^{ }` | `\int_0` | the operator owns hidden sub/sup blocks and `_` nests inside them. The palette's `\int_{X}^{X}` gives the full form. |
+| `(]` ⇒ `\left(\right]` | `\left(\left[\right]\right)` | a mismatched closer hardens a ghost there. Building mixed delimiters silently is worse than making the typo visible. |
+| `(x)` then Backspace ⇒ `\left(x\right)` (the `)` becomes a ghost, greyed) | the pair is deleted | a keystroke that appears to do nothing is worse than deleting what the user pointed at. |
+| `\text{x}` ⇒ `\text{\{x\}}` | `\text{text}` | text mode is a separate sub-language; the palette's `roman` covers the use case. |
+
+

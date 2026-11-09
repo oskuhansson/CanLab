@@ -109,14 +109,33 @@ impl Ghost {
 }
 
 /// A one-argument decoration drawn above or below its body.
+///
+/// The set is not invented: each of these was typed into the live Abitti editor
+/// and watched (`docs/mathquill-interaction.md` §4.3). `\ddot`, `\widehat`,
+/// `\widetilde`, `\overbrace` and `\underbrace` are *not* commands there — they
+/// come out as `\text{ddot}` and friends — so they are deliberately absent.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum AccentKind {
     /// `\overrightarrow{…}`
     Vector,
-    /// `\overline{…}`
+    /// `\vec{…}` — the same arrow, spelled the short way.
+    Vec,
+    /// `\overleftarrow{…}`
+    OverLeftArrow,
+    /// `\overline{…}` — a rule across the body.
     Overline,
-    /// `\underrightarrow{…}`
+    /// `\bar{…}` — the same bar, in practice.
+    Bar,
+    /// `\hat{…}`
+    Hat,
+    /// `\tilde{…}`
+    Tilde,
+    /// `\dot{…}`
+    Dot,
+    /// `\underline{…}` — a rule under the body.
     Underline,
+    /// `\underrightarrow{…}`
+    UnderRightArrow,
 }
 
 impl AccentKind {
@@ -124,9 +143,52 @@ impl AccentKind {
     pub fn command(self) -> &'static str {
         match self {
             AccentKind::Vector => "\\overrightarrow",
+            AccentKind::Vec => "\\vec",
+            AccentKind::OverLeftArrow => "\\overleftarrow",
             AccentKind::Overline => "\\overline",
-            AccentKind::Underline => "\\underrightarrow",
+            AccentKind::Bar => "\\bar",
+            AccentKind::Hat => "\\hat",
+            AccentKind::Tilde => "\\tilde",
+            AccentKind::Dot => "\\dot",
+            AccentKind::Underline => "\\underline",
+            AccentKind::UnderRightArrow => "\\underrightarrow",
         }
+    }
+
+    /// The command a `\name` stands for, if it is an accent at all.
+    pub fn from_command(name: &str) -> Option<AccentKind> {
+        Some(match name {
+            "overrightarrow" => AccentKind::Vector,
+            "vec" => AccentKind::Vec,
+            "overleftarrow" => AccentKind::OverLeftArrow,
+            "overline" => AccentKind::Overline,
+            "bar" => AccentKind::Bar,
+            "hat" => AccentKind::Hat,
+            "tilde" => AccentKind::Tilde,
+            "dot" => AccentKind::Dot,
+            "underline" => AccentKind::Underline,
+            "underrightarrow" => AccentKind::UnderRightArrow,
+            _ => return None,
+        })
+    }
+
+    /// The glyph drawn above the body, if this accent is a glyph rather than a
+    /// rule. `None` means "draw a rule", and which side it goes on is
+    /// [`AccentKind::is_below`].
+    pub fn mark(self) -> Option<char> {
+        match self {
+            AccentKind::Vector | AccentKind::Vec | AccentKind::UnderRightArrow => Some('→'),
+            AccentKind::OverLeftArrow => Some('←'),
+            AccentKind::Hat => Some('^'),
+            AccentKind::Tilde => Some('~'),
+            AccentKind::Dot => Some('·'),
+            AccentKind::Overline | AccentKind::Bar | AccentKind::Underline => None,
+        }
+    }
+
+    /// True when the decoration hangs under the body, as in `\underline`.
+    pub fn is_below(self) -> bool {
+        matches!(self, AccentKind::Underline | AccentKind::UnderRightArrow)
     }
 }
 

@@ -41,7 +41,8 @@ fn typing_builds_a_plain_run_with_no_structure() {
     // Every operator is its own node; word characters run together.
     assert_eq!(f.root().len(), 3);
     assert!(f.cursor().path.is_empty());
-    assert_eq!(f.cursor().offset, 3);
+    // Offsets count *characters*, not nodes: `2x+1` is four of them.
+    assert_eq!(f.cursor().offset, 4);
 }
 
 #[test]

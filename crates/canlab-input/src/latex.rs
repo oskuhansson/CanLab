@@ -86,7 +86,10 @@ impl Emitter {
             self.out.push(' ');
         }
         self.out.push_str(s);
-        self.prev_sym = is_sym;
+        // Only a *bare* command needs protecting from the next letter: `\le y`
+        // but `\le3`, and `\text{ddot}x` with no space at all, because the brace
+        // already ends the command. [OBSERVED]
+        self.prev_sym = is_sym && s.ends_with(|c: char| c.is_ascii_alphabetic());
     }
 }
 

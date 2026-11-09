@@ -237,7 +237,7 @@ impl MathField {
         // At the top of a line, `↑` crosses into the equation above.
         if self.cursor.path.is_empty() && self.line > 0 {
             self.line -= 1;
-            let end = self.root().len();
+            let end = row_caret_len(self.root());
             self.cursor = Cursor::at(Vec::new(), end);
             return true;
         }
@@ -285,7 +285,7 @@ impl MathField {
     /// Select the whole current line (`Ctrl-A`).
     pub fn select_all(&mut self) {
         self.finish_command();
-        let end = self.root().len();
+        let end = row_caret_len(self.root());
         self.selection = Some(Selection {
             start: Cursor::root(),
             end: Cursor::at(Vec::new(), end),
@@ -341,7 +341,7 @@ impl MathField {
             };
             row = next;
         }
-        cursor.offset <= row.len()
+        cursor.offset <= row_caret_len(row)
     }
 
     fn delete_selection(&mut self) -> Row {
@@ -351,8 +351,12 @@ impl MathField {
                 let start = sel.start.offset;
                 let end = sel.end.offset;
                 let path = sel.start.path;
-                let row = self.row_at_mut(&path);
-                let taken: Row = row.drain(start..end).collect();
+                let row = std::mem::take(self.row_at_mut(&path));
+                let (left, rest) = split_row(row, start);
+                let (taken, right) = split_row(rest, end.saturating_sub(start));
+                let mut joined = left;
+                joined.extend(right);
+                *self.row_at_mut(&path) = joined;
                 self.cursor = Cursor::at(path, start);
                 taken
             }
@@ -441,6 +445,49 @@ impl MathField {
                 self.insert_equals();
                 true
             }
+            '~' => {
+                // Typing `~` gives the relation, not a tilde character
+                // (observed in the live editor).
+                self.insert_sym("\\sim");
+                true
+            }
+            // The characters MathQuill rewrites on the way in. Everything else
+            // that is not a letter or an operator stays a literal character —
+            // `∞`, `α`, `°` and `‰` do *not* become commands, which is easy to
+            // guess wrong. [OBSERVED]
+            '\u{00bd}' => {
+                // ½
+                self.plain_structure(Node::Frac {
+                    num: vec![Node::text("1")],
+                    den: vec![Node::text("2")],
+                });
+                true
+            }
+            '\u{00b2}' => {
+                // ²
+                self.plain_structure(Node::Sup(vec![Node::text("2")]));
+                true
+            }
+            '\u{00b3}' => {
+                // ³
+                self.plain_structure(Node::Sup(vec![Node::text("3")]));
+                true
+            }
+            '\u{00d7}' => {
+                // ×
+                self.insert_sym("\\times");
+                true
+            }
+            '\u{03c0}' => {
+                // π
+                self.insert_sym("\\pi");
+                true
+            }
+            '\u{2264}' => {
+                // ≤
+                self.insert_sym("\\le");
+                true
+            }
             c if c.is_control() => false,
             c => {
                 self.drop_selection();
@@ -457,22 +504,39 @@ impl MathField {
     /// what makes `/` take only the `2`). Both behaviours observed.
     fn insert_char_literal(&mut self, c: char) {
         let at = self.cursor.offset;
-        let row = self.current_row_mut();
-        if at > 0 {
-            if let Node::Text(s) = &mut row[at - 1] {
-                if let Some(last) = s.chars().last() {
-                    if is_word_char(last) && is_word_char(c) {
-                        s.push(c);
-                        self.cursor.offset = at;
-                        self.auto_operator_name();
-                        return;
-                    }
-                }
+        let (mut left, right) = self.split_here();
+        match left.last_mut() {
+            Some(Node::Text(s)) if s.chars().last().is_some_and(|l| is_word_char(l) && is_word_char(c)) => {
+                s.push(c);
             }
+            _ => left.push(Node::Text(c.to_string())),
         }
-        row.insert(at, Node::Text(c.to_string()));
+        left.extend(right);
+        self.write_row(left);
         self.cursor.offset = at + 1;
         self.auto_operator_name();
+    }
+
+    /// Split the cursor's row at the cursor, leaving it empty on return.
+    fn split_here(&mut self) -> (Row, Row) {
+        let row = std::mem::take(self.current_row_mut());
+        split_row(row, self.cursor.offset)
+    }
+
+    fn write_row(&mut self, row: Row) {
+        *self.current_row_mut() = row;
+    }
+
+    /// The index of the node that ends exactly at the cursor, if any.
+    fn node_ending_at_cursor(&self) -> Option<usize> {
+        let mut offset = 0;
+        for (index, node) in self.current_row().iter().enumerate() {
+            offset += node_caret_len(node);
+            if offset == self.cursor.offset {
+                return Some(index);
+            }
+        }
+        None
     }
 
     /// Split a trailing operator name out of a word run.
@@ -485,79 +549,73 @@ impl MathField {
             "csc", "ln", "log", "exp", "max", "min", "lim", "det", "gcd",
         ];
         let at = self.cursor.offset;
+        let Some(index) = self.node_ending_at_cursor() else {
+            return;
+        };
         let Some(name) = ({
-            let row = self.current_row();
-            match at.checked_sub(1).and_then(|i| row.get(i)) {
-                Some(Node::Text(s)) => {
-                    let mut found = None;
-                    for n in NAMES {
-                        if s.ends_with(n) {
-                            found = Some((*n).to_string());
-                            break;
-                        }
-                    }
-                    found
-                }
+            match self.current_row().get(index) {
+                Some(Node::Text(s)) => NAMES
+                    .iter()
+                    .find(|n| s.ends_with(**n))
+                    .map(|n| (*n).to_string()),
                 _ => None,
             }
         }) else {
             return;
         };
-        let keep_len = {
-            let row = self.current_row();
-            match &row[at - 1] {
-                Node::Text(s) => s.len() - name.len(),
+        let prefix = {
+            match self.current_row().get(index) {
+                Some(Node::Text(s)) => {
+                    let keep = s.chars().count() - name.chars().count();
+                    s.chars().take(keep).collect::<String>()
+                }
                 _ => return,
             }
         };
-        let row = self.current_row_mut();
-        let prefix = match &row[at - 1] {
-            Node::Text(s) => s[..keep_len].to_string(),
-            _ => return,
-        };
-        let replaced = vec![Node::sym(format!("\\{name}"))];
-        if prefix.is_empty() {
-            row.splice(at - 1..at, replaced);
-            self.cursor.offset = at;
-        } else {
-            if let Node::Text(s) = &mut row[at - 1] {
-                *s = prefix;
-            }
-            row.splice(at..at, replaced);
-            self.cursor.offset = at + 1;
+        let (mut left, right) = self.split_here();
+        // `index` is the last node of `left` by construction.
+        left.pop();
+        if !prefix.is_empty() {
+            left.push(Node::Text(prefix));
         }
+        left.push(Node::sym(format!("\\{name}")));
+        left.extend(right);
+        self.write_row(left);
+        // The name's characters became one node, so the caret loses the
+        // difference: `sin` (3) → one `\sin`, cursor still at the end.
+        self.cursor.offset = at - name.chars().count() + 1;
     }
 
     /// `=` after `<` or `>` rewrites the pair as `\le` / `\ge`. Observed:
     /// `2<=3` → `2\le3`, `x<=y` → `x\le y`; but `!=` and `=>` stay literal.
     fn insert_equals(&mut self) {
         let at = self.cursor.offset;
-        let replacement = {
-            let row = self.current_row();
-            match at.checked_sub(1).and_then(|i| row.get(i)) {
+        let replacement = match self.node_ending_at_cursor() {
+            Some(index) => match self.current_row().get(index) {
                 Some(Node::Text(s)) if s.ends_with('<') => Some("\\le"),
                 Some(Node::Text(s)) if s.ends_with('>') => Some("\\ge"),
                 _ => None,
-            }
+            },
+            None => None,
         };
         let Some(sym) = replacement else {
             self.insert_char_literal('=');
             return;
         };
-        let row = self.current_row_mut();
-        let keep_len = match &row[at - 1] {
-            Node::Text(s) => s.len() - 1,
-            _ => 0,
-        };
-        if keep_len == 0 {
-            row[at - 1] = Node::sym(sym);
-        } else {
-            if let Node::Text(s) = &mut row[at - 1] {
-                s.truncate(keep_len);
-            }
-            row.insert(at, Node::sym(sym));
-            self.cursor.offset = at + 1;
+        let (mut left, right) = self.split_here();
+        let mut emptied = false;
+        if let Some(Node::Text(s)) = left.last_mut() {
+            s.pop();
+            emptied = s.is_empty();
         }
+        if emptied {
+            left.pop();
+        }
+        left.push(Node::sym(sym));
+        left.extend(right);
+        self.write_row(left);
+        // The `<` was one caret position, the `\le` is one too.
+        self.cursor.offset = at;
     }
 
     /// Insert a command token, replacing any selection.
@@ -572,15 +630,20 @@ impl MathField {
     // -------------------------------------------------------- LaTeX command entry
 
     fn begin_command(&mut self) {
-        let at = self.cursor.offset;
-        self.current_row_mut().insert(at, Node::text("\\"));
-        self.cursor.offset = at + 1;
+        let (left, right) = self.split_here();
+        let mut row = left;
+        row.push(Node::text("\\"));
+        row.extend(right);
+        self.write_row(row);
+        self.cursor.offset += 1;
         self.command = Some(String::new());
     }
 
+    /// The node the in-progress command lives in: the text run that ends at the
+    /// cursor.
     fn command_node_index(&self) -> Option<usize> {
         if self.command.is_some() {
-            self.cursor.offset.checked_sub(1)
+            self.node_ending_at_cursor()
         } else {
             None
         }
@@ -596,6 +659,8 @@ impl MathField {
         if let Node::Text(s) = &mut self.current_row_mut()[i] {
             *s = raw;
         }
+        // The run grew by one character, so the caret moves with it.
+        self.cursor.offset += 1;
     }
 
     /// Commit an in-progress `\name`.
@@ -617,8 +682,9 @@ impl MathField {
         let Some(name) = self.command.take() else {
             return;
         };
+        let len = node_caret_len(&self.current_row()[i]);
         self.current_row_mut().remove(i);
-        self.cursor.offset = i;
+        self.cursor.offset -= len;
 
         const GREEK: &[&str] = &[
             "alpha", "beta", "gamma", "delta", "epsilon", "varepsilon", "zeta", "eta", "theta",
@@ -639,20 +705,22 @@ impl MathField {
         ];
 
         let nodes: Vec<Node> = match name.as_str() {
+            // `\` followed directly by a space is an escaped space, not an empty
+            // command name. [OBSERVED] (`\ ` → `\ `)
+            "" => vec![Node::text(" ")],
             "sqrt" => vec![Node::sqrt(Vec::new())],
             "frac" => vec![Node::Frac { num: Vec::new(), den: Vec::new() }],
             "binom" => vec![Node::Binom { top: Vec::new(), bottom: Vec::new() }],
-            "int" => vec![
-                Node::sym("\\int"),
-                Node::Sub(Vec::new()),
-                Node::Sup(Vec::new()),
-            ],
-            "sum" => vec![
-                Node::sym("\\sum"),
-                Node::Sub(Vec::new()),
-                Node::Sup(Vec::new()),
-            ],
-            "lim" => vec![Node::sym("\\lim"), Node::Sub(Vec::new())],
+            // Narrow integrals: observed, `\int` on its own is exactly `\int`,
+            // and pressing `_` lands a script *inside* the operator's own
+            // subscript. The palette's `\int_{X}^{X}` is the way to get the full
+            // form, so the command itself stays a plain token. [OBSERVED] /
+            // deliberately simplified.
+            "int" | "sum" | "lim" | "prod" => vec![Node::sym(format!("\\{name}"))],
+            n if AccentKind::from_command(n).is_some() => vec![Node::Accent {
+                kind: AccentKind::from_command(n).expect("checked"),
+                body: Vec::new(),
+            }],
             n if GREEK.contains(&n) || RELATIONS.contains(&n) || FUNCTIONS.contains(&n) => {
                 vec![Node::sym(format!("\\{n}"))]
             }
@@ -707,18 +775,23 @@ impl MathField {
         if at == 0 {
             return Vec::new();
         }
-        let row = self.current_row_mut();
-        let take = match &row[at - 1] {
-            Node::Text(s) => s.chars().next().is_some_and(|c| c.is_alphanumeric()),
-            _ => false,
+        let take = match self.node_ending_at_cursor() {
+            Some(index) => matches!(
+                self.current_row().get(index),
+                Some(Node::Text(s)) if s.chars().next().is_some_and(|c| c.is_alphanumeric())
+            ),
+            None => false,
         };
-        if take {
-            let node = row.remove(at - 1);
-            self.cursor.offset = at - 1;
-            vec![node]
-        } else {
-            Vec::new()
+        if !take {
+            return Vec::new();
         }
+        let (mut left, right) = self.split_here();
+        let node = left.pop().expect("the node ends at the cursor");
+        let len = node_caret_len(&node);
+        left.extend(right);
+        self.write_row(left);
+        self.cursor.offset = at - len;
+        vec![node]
     }
 
     /// Insert a template from the palette (or the keyboard), landing the cursor in
@@ -729,20 +802,17 @@ impl MathField {
         // `^` twice enters the existing superscript rather than nesting a new one.
         // **[INFERRED]**
         if matches!(t, Template::Power | Template::Subscript) && self.selection.is_none() {
-            if let Some(prev) = self.cursor.offset.checked_sub(1) {
-                let exists = {
-                    let row = self.current_row();
-                    matches!(
-                        (t, row.get(prev)),
-                        (Template::Power, Some(Node::Sup(_)))
-                            | (Template::Subscript, Some(Node::Sub(_)))
-                    )
-                };
+            if let Some(index) = self.node_ending_at_cursor() {
+                let exists = matches!(
+                    (t, self.current_row().get(index)),
+                    (Template::Power, Some(Node::Sup(_)))
+                        | (Template::Subscript, Some(Node::Sub(_)))
+                );
                 if exists {
-                    self.cursor = self.cursor.clone().pushed(prev, t.content_slot().unwrap());
+                    self.cursor = self.cursor.clone().pushed(index, t.content_slot().unwrap());
                     let end = {
                         let row = self.current_row();
-                        row.len()
+                        row_caret_len(row)
                     };
                     self.cursor.offset = end;
                     return Ok(());
@@ -779,7 +849,7 @@ impl MathField {
             Template::Vector => vec![Node::Accent { kind: AccentKind::Vector, body: Vec::new() }],
             Template::Overline => vec![Node::Accent { kind: AccentKind::Overline, body: Vec::new() }],
             Template::Underline => {
-                vec![Node::Accent { kind: AccentKind::Underline, body: Vec::new() }]
+                vec![Node::Accent { kind: AccentKind::UnderRightArrow, body: Vec::new() }]
             }
             Template::Int => vec![Node::sym("\\int"), Node::Sub(Vec::new()), Node::Sup(Vec::new())],
             Template::Sum => vec![Node::sym("\\sum"), Node::Sub(Vec::new()), Node::Sup(Vec::new())],
@@ -820,13 +890,14 @@ impl MathField {
         let at = self.cursor.offset;
         let base_path = self.cursor.path.clone();
         let count = nodes.len();
-        {
-            let row = self.row_at_mut(&base_path);
-            for (k, n) in nodes.into_iter().enumerate() {
-                row.insert(at + k, n);
-            }
-        }
-        self.cursor = template_target(self, &base_path, at, count, content_slot);
+        let added: usize = nodes.iter().map(node_caret_len).sum();
+        let (left, right) = self.split_here();
+        let first = left.len();
+        let mut row = left;
+        row.extend(nodes);
+        row.extend(right);
+        self.write_row(row);
+        self.cursor = template_target(self, &base_path, first, count, content_slot, at + added);
     }
 
     fn open_delim(&mut self, delim: Delim) -> bool {
@@ -855,7 +926,7 @@ impl MathField {
         }
         let parent = self.cursor.path[..self.cursor.path.len() - 1].to_vec();
         let (matches, len) = match self.row_at(&parent).get(last.index) {
-            Some(Node::Group { delim: d, body, .. }) => (*d == delim, body.len()),
+            Some(Node::Group { delim: d, body, .. }) => (*d == delim, row_caret_len(body)),
             _ => return false,
         };
         if !matches || self.cursor.offset != len {
@@ -868,16 +939,33 @@ impl MathField {
         true
     }
 
-    /// A closer with nothing to close: it swallows the run to its left.
+    /// A closer with nothing to close: it swallows everything to its left in the
+    /// block.
     ///
-    /// MathQuill's brackets are "first typed as one-sided bracket with matching
-    /// ghost bracket at far end of current block" — so a stray `)` arrives with a
-    /// ghosted `(` in front of what it took. `x+1)` therefore becomes
-    /// `\left(x+1\right)` with the opening half drawn dimmed until it is typed.
+    /// Not "the trailing run" — the live editor wraps the whole block, so `1+2)`
+    /// is `\left(1+2\right)`, not `1+\left(2\right)`, and `()]` is
+    /// `\left[\left(\right)\right]`. MathQuill's brackets are "first typed as
+    /// one-sided bracket with matching ghost bracket at far end of current
+    /// block", and the far end of the block is where the content starts.
+    /// [OBSERVED]
     fn wrap_to_the_left(&mut self, delim: Delim) -> bool {
-        let run = self.take_leading_run();
-        self.insert_constructed(vec![Node::ghost_group(delim, run, Ghost::Open)], None);
+        let taken = if self.selection.is_some() {
+            self.delete_selection()
+        } else {
+            let (left, right) = self.split_here();
+            self.write_row(right);
+            self.cursor.offset = 0;
+            left
+        };
+        self.insert_constructed(vec![Node::ghost_group(delim, taken, Ghost::Open)], None);
         true
+    }
+
+    /// Insert a finished node at the cursor: the cursor ends up after it.
+    fn plain_structure(&mut self, node: Node) {
+        self.finish_command();
+        self.drop_selection();
+        self.insert_constructed(vec![node], None);
     }
 
     // ------------------------------------------------------------------ deleting
@@ -909,21 +997,19 @@ impl MathField {
         }
         let at = self.cursor.offset;
         if at > 0 {
-            let row = self.current_row_mut();
-            let i = at - 1;
-            let mut removed = false;
-            if let Node::Text(s) = &mut row[i] {
-                s.pop();
-                if s.is_empty() {
-                    removed = true;
+            let (mut left, right) = self.split_here();
+            match left.last_mut() {
+                Some(Node::Text(s)) if s.chars().count() > 1 => {
+                    s.pop();
                 }
-            } else {
-                removed = true;
+                Some(_) => {
+                    left.pop();
+                }
+                None => {}
             }
-            if removed {
-                row.remove(i);
-                self.cursor.offset = i;
-            }
+            left.extend(right);
+            self.write_row(left);
+            self.cursor.offset = at - 1;
             return;
         }
         self.backspace_out_of_structure();
@@ -939,15 +1025,17 @@ impl MathField {
             name.pop();
             name.is_empty()
         };
+        let len = node_caret_len(&self.current_row()[i]);
         if empty {
             self.command = None;
             self.current_row_mut().remove(i);
-            self.cursor.offset = i;
+            self.cursor.offset -= len;
         } else {
             let raw = format!("\\{}", self.command.as_ref().expect("checked"));
             if let Node::Text(s) = &mut self.current_row_mut()[i] {
                 *s = raw;
             }
+            self.cursor.offset -= 1;
         }
     }
 
@@ -966,7 +1054,8 @@ impl MathField {
 
         // A non-empty superscript/subscript escalates: backspace deletes the base.
         if matches!(last.slot, Slot::Sup | Slot::Sub) && !slot_is_blank {
-            self.cursor = Cursor::at(parent_path, last.index);
+            let before = caret_before(self.row_at(&parent_path), last.index);
+            self.cursor = Cursor::at(parent_path, before);
             self.backspace();
             return;
         }
@@ -994,13 +1083,21 @@ impl MathField {
             row.remove(last.index)
         };
         let (contents, junction) = unwrap_construct(&node, last.slot);
-        {
+        let offset = {
             let row = self.row_at_mut(&parent_path);
-            for (k, n) in contents.into_iter().enumerate() {
-                row.insert(last.index + k, n);
+            let before = caret_before(row, last.index);
+            let mut at = last.index;
+            for n in contents {
+                row.insert(at, n);
+                at += 1;
             }
-        }
-        self.cursor = Cursor::at(parent_path, last.index + junction);
+            let junction_carets: usize = row[last.index..last.index + junction]
+                .iter()
+                .map(node_caret_len)
+                .sum();
+            before + junction_carets
+        };
+        self.cursor = Cursor::at(parent_path, offset);
     }
 
     /// Forward delete: one character, or one whole node.
@@ -1010,21 +1107,19 @@ impl MathField {
             self.drop_selection();
             return;
         }
-        let at = self.cursor.offset;
-        let row = self.current_row_mut();
-        let Some(node) = row.get_mut(at) else {
-            return;
-        };
-        let mut remove = true;
-        if let Node::Text(s) = node {
-            if !s.is_empty() {
+        let (left, mut right) = self.split_here();
+        match right.first_mut() {
+            Some(Node::Text(s)) if s.chars().count() > 1 => {
                 s.remove(0);
-                remove = s.is_empty();
             }
+            Some(_) => {
+                right.remove(0);
+            }
+            None => {}
         }
-        if remove {
-            row.remove(at);
-        }
+        let mut row = left;
+        row.extend(right);
+        self.write_row(row);
     }
 
     // -------------------------------------------------------------- hand-off keys
@@ -1034,7 +1129,7 @@ impl MathField {
         self.finish_command();
         let was_nested = self.cursor.is_nested();
         self.selection = None;
-        let end = self.root().len();
+        let end = row_caret_len(self.root());
         self.cursor = Cursor::at(Vec::new(), end);
         if was_nested {
             EscapeOutcome::LeftStructure
@@ -1077,7 +1172,7 @@ impl MathField {
         }
         self.lines.remove(self.line);
         self.line -= 1;
-        let end = self.root().len();
+        let end = row_caret_len(self.root());
         self.cursor = Cursor::at(Vec::new(), end);
         true
     }
@@ -1153,6 +1248,7 @@ fn row_at_mut<'a>(row: &'a mut Row, path: &[PathStep]) -> &'a mut Row {
 
 fn collect_positions(row: &Row, path: &mut Vec<PathStep>, out: &mut Vec<Cursor>) {
     out.push(Cursor::at(path.clone(), 0));
+    let mut offset = 0;
     for (i, node) in row.iter().enumerate() {
         for slot in node.slots() {
             path.push(PathStep::new(i, slot));
@@ -1165,10 +1261,81 @@ fn collect_positions(row: &Row, path: &mut Vec<PathStep>, out: &mut Vec<Cursor>)
         // decoration belongs to the atom. Observed: `←` from the start of the sup
         // in `x^2` lands before the `x`, not between `x` and `^2`.
         let followed_by_script = matches!(row.get(i + 1), Some(Node::Sup(_)) | Some(Node::Sub(_)));
+        let len = node_caret_len(node);
         if !followed_by_script {
-            out.push(Cursor::at(path.clone(), i + 1));
+            // One position *between* every pair of characters — a text run is
+            // not one indivisible atom. This is the difference between "the
+            // caret is between nodes" and what the live editor does.
+            for step in 1..=len {
+                out.push(Cursor::at(path.clone(), offset + step));
+            }
         }
+        offset += len;
     }
+}
+
+/// How many caret positions a node contributes: one per character for a text
+/// run, one for a structure.
+fn node_caret_len(node: &Node) -> usize {
+    match node {
+        Node::Text(s) => s.chars().count(),
+        _ => 1,
+    }
+}
+
+/// How many caret positions a row has (its offsets run `0..=row_caret_len`).
+pub fn row_caret_len(row: &Row) -> usize {
+    row.iter().map(node_caret_len).sum()
+}
+
+/// The caret offset immediately before node `index` of `row`.
+fn caret_before(row: &Row, index: usize) -> usize {
+    row[..index.min(row.len())].iter().map(node_caret_len).sum()
+}
+
+/// Split a row at a caret offset.
+///
+/// The split can fall *inside* a text run, which is the whole point: `12|3`
+/// becomes `["12"]` and `["3"]`.
+fn split_row(row: Row, at: usize) -> (Row, Row) {
+    let mut left: Row = Vec::new();
+    let mut right: Row = Vec::new();
+    let mut offset = 0;
+    let mut splitting = true;
+    for node in row {
+        let len = node_caret_len(&node);
+        if splitting && offset + len <= at {
+            left.push(node);
+            offset += len;
+            continue;
+        }
+        if splitting && offset < at {
+            // The offset lands inside this node; only text can be cut.
+            if let Node::Text(s) = &node {
+                let chars: Vec<char> = s.chars().collect();
+                let cut = (at - offset).min(chars.len());
+                let (head, tail) = chars.split_at(cut);
+                let head: String = head.iter().collect();
+                let tail: String = tail.iter().collect();
+                if !head.is_empty() {
+                    left.push(Node::Text(head));
+                }
+                if !tail.is_empty() {
+                    right.push(Node::Text(tail));
+                }
+                offset += len;
+                splitting = false;
+                continue;
+            }
+            left.push(node);
+            offset += len;
+            continue;
+        }
+        splitting = false;
+        right.push(node);
+        offset += len;
+    }
+    (left, right)
 }
 
 /// Where the cursor goes after inserting `count` nodes at `at`.
@@ -1179,30 +1346,31 @@ fn collect_positions(row: &Row, path: &mut Vec<PathStep>, out: &mut Vec<Cursor>)
 fn template_target(
     field: &MathField,
     base_path: &[PathStep],
-    at: usize,
+    first: usize,
     count: usize,
     content_slot: Option<Slot>,
+    caret_after: usize,
 ) -> Cursor {
     let row = field.row_at(base_path);
     for k in 0..count {
-        let node = &row[at + k];
+        let node = &row[first + k];
         for slot in node.slots() {
             if node.slot(slot).is_some_and(|r| r.is_empty()) {
                 let mut path = base_path.to_vec();
-                path.push(PathStep::new(at + k, slot));
+                path.push(PathStep::new(first + k, slot));
                 return Cursor::at(path, 0);
             }
         }
     }
     if let Some(slot) = content_slot {
-        let node = &row[at];
+        let node = &row[first];
         if let Some(r) = node.slot(slot) {
             let mut path = base_path.to_vec();
-            path.push(PathStep::new(at, slot));
-            return Cursor::at(path, r.len());
+            path.push(PathStep::new(first, slot));
+            return Cursor::at(path, row_caret_len(r));
         }
     }
-    Cursor::at(base_path.to_vec(), at + count)
+    Cursor::at(base_path.to_vec(), caret_after)
 }
 
 /// Replace a construct with its contents when Backspace is pressed at the start of

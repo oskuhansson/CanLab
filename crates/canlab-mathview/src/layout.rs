@@ -859,58 +859,58 @@ impl Layout<'_> {
         let pad = self.style.pad;
         let thickness = self.style.rule_thickness;
         let base = self.row(body, size);
+        let below = kind.is_below();
 
-        match kind {
-            AccentKind::Overline => {
-                let width = base.width.max(1.0);
+        let Some(ch) = kind.mark() else {
+            // A rule: above the body for `\overline` / `\bar`, below it for
+            // `\underline`.
+            let width = base.width.max(1.0);
+            let mut out = Frag::new();
+            out.width = width;
+            if below {
+                let y = base.descent + pad;
+                out.ascent = base.ascent;
+                out.descent = base.descent + pad + thickness;
+                out.items.push(Item::Rule {
+                    rect: Rect::new(0.0, y, width, thickness),
+                });
+            } else {
                 let y = -base.ascent - pad - thickness;
-                let mut out = Frag::new();
-                out.width = width;
                 out.ascent = base.ascent + pad + thickness;
                 out.descent = base.descent;
                 out.items.push(Item::Rule {
                     rect: Rect::new(0.0, y, width, thickness),
                 });
-                out.place(base, 0.0, 0.0);
-                out
             }
-            AccentKind::Vector => {
-                let arrow = self.measure.measure("→", size);
-                let width = base.width.max(arrow.width);
-                let dy = -base.ascent - pad - arrow.descent;
-                let mut out = Frag::new();
-                out.width = width;
-                out.ascent = base.ascent + pad + arrow.height();
-                out.descent = base.descent;
-                let pos = Pos2::new((width - arrow.width) * 0.5, dy);
-                out.items.push(Item::Text {
-                    pos,
-                    text: "→".to_owned(),
-                    size,
-                    italic: false,
-                });
-                out.place(base, 0.0, 0.0);
-                out
-            }
-            AccentKind::Underline => {
-                let arrow = self.measure.measure("→", size);
-                let width = base.width.max(arrow.width);
-                let dy = base.descent + pad + arrow.ascent;
-                let mut out = Frag::new();
-                out.width = width;
-                out.ascent = base.ascent;
-                out.descent = base.descent + pad + arrow.height();
-                let pos = Pos2::new((width - arrow.width) * 0.5, dy);
-                out.items.push(Item::Text {
-                    pos,
-                    text: "→".to_owned(),
-                    size,
-                    italic: false,
-                });
-                out.place(base, 0.0, 0.0);
-                out
-            }
-        }
+            out.place(base, 0.0, 0.0);
+            return out;
+        };
+
+        let mut buf = [0u8; 4];
+        let text: &str = ch.encode_utf8(&mut buf);
+        let mark = self.measure.measure(text, size);
+        let width = base.width.max(mark.width);
+        let dx = (width - mark.width) * 0.5;
+
+        let mut out = Frag::new();
+        out.width = width;
+        let dy = if below {
+            out.ascent = base.ascent;
+            out.descent = base.descent + pad + mark.height();
+            base.descent + pad + mark.ascent
+        } else {
+            out.ascent = base.ascent + pad + mark.height();
+            out.descent = base.descent;
+            -base.ascent - pad - mark.descent
+        };
+        out.items.push(Item::Text {
+            pos: Pos2::new(dx, dy),
+            text: text.to_owned(),
+            size,
+            italic: false,
+        });
+        out.place(base, 0.0, 0.0);
+        out
     }
 
     // -- glyphs -------------------------------------------------------------

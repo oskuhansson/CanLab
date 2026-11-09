@@ -474,7 +474,7 @@ fn an_overline_accent_is_a_rule_above_the_base() {
 #[test]
 fn an_underline_accent_is_drawn_below_the_base() {
     let field = MathField::from_row(vec![Node::Accent {
-        kind: AccentKind::Underline,
+        kind: AccentKind::UnderRightArrow,
         body: vec![Node::text("v")],
     }]);
     let list = layout(&field);

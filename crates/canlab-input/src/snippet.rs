@@ -246,19 +246,12 @@ impl Parser {
                     out.push(Node::Sub(self.braced()?));
                 }
             }
-            "overrightarrow" | "underrightarrow" | "overline" | "bar" => {
+            "overrightarrow" | "underrightarrow" | "overline" | "bar" | "overleftarrow" => {
                 let body = self.braced()?;
-                let kind = match name.as_str() {
-                    "overrightarrow" => AccentKind::Vector,
-                    "underrightarrow" => AccentKind::Underline,
-                    _ => AccentKind::Overline,
-                };
+                let kind = AccentKind::from_command(name.as_str()).ok_or_else(|| {
+                    SnippetError::Unsupported(format!("\\{name}"))
+                })?;
                 out.push(Node::Accent { kind, body });
-            }
-            "overleftarrow" => {
-                return Err(SnippetError::Unsupported(String::from(
-                    "\\overleftarrow",
-                )));
             }
             "left" => out.push(self.bracket()?),
             "text" | "mathrm" => {
@@ -433,7 +426,7 @@ mod tests {
 
     #[test]
     fn every_structural_palette_entry_is_modelled_or_refused_on_purpose() {
-        const NOT_MODELLED: &[&str] = &["cases", "matrix", "array", "\u{2190}v"];
+        const NOT_MODELLED: &[&str] = &["cases", "matrix", "array"];
         for button in canlab_parse::palette::STRUCTURES {
             let parsed = parse(button.insert);
             if NOT_MODELLED.contains(&button.label) {

@@ -718,7 +718,7 @@ mod tests {
         // The four entries the model deliberately lacks. Everything else — all
         // ~100 keys, symbols and structures alike — has to put something real in
         // the field.
-        const NOT_MODELLED: &[&str] = &["cases", "matrix", "array", "\u{2190}v"];
+        const NOT_MODELLED: &[&str] = &["cases", "matrix", "array"];
 
         for &(category, buttons) in canlab_parse::palette::ALL {
             for button in buttons {
