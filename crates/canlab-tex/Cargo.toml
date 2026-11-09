@@ -1,0 +1,9 @@
+[package]
+name = "canlab-tex"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LaTeX printer for canlab-core expressions"
+
+[dependencies]
+canlab-core = { path = "../canlab-core" }

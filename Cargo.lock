@@ -560,74 +560,76 @@ dependencies = [
 ]
 
 [[package]]
-name = "cas-cli"
+name = "canlab-cli"
 version = "0.1.0"
 dependencies = [
- "cas-core",
- "cas-parse",
- "cas-plot",
- "cas-solver",
- "cas-tex",
+ "canlab-core",
+ "canlab-parse",
+ "canlab-plot",
+ "canlab-solver",
+ "canlab-tex",
 ]
 
 [[package]]
-name = "cas-core"
+name = "canlab-core"
 version = "0.1.0"
 
 [[package]]
-name = "cas-gui"
+name = "canlab-gui"
 version = "0.1.0"
 dependencies = [
- "cas-core",
- "cas-parse",
- "cas-plot",
- "cas-solver",
- "cas-tex",
+ "canlab-core",
+ "canlab-input",
+ "canlab-mathview",
+ "canlab-parse",
+ "canlab-plot",
+ "canlab-solver",
+ "canlab-tex",
  "eframe",
 ]
 
 [[package]]
-name = "cas-input"
+name = "canlab-input"
 version = "0.1.0"
 dependencies = [
- "cas-core",
- "cas-tex",
+ "canlab-core",
+ "canlab-tex",
 ]
 
 [[package]]
-name = "cas-mathview"
+name = "canlab-mathview"
 version = "0.1.0"
 dependencies = [
- "cas-input",
+ "canlab-input",
  "egui",
 ]
 
 [[package]]
-name = "cas-parse"
+name = "canlab-parse"
 version = "0.1.0"
 dependencies = [
- "cas-core",
+ "canlab-core",
 ]
 
 [[package]]
-name = "cas-plot"
+name = "canlab-plot"
 version = "0.1.0"
 dependencies = [
- "cas-core",
+ "canlab-core",
 ]
 
 [[package]]
-name = "cas-solver"
+name = "canlab-solver"
 version = "0.1.0"
 dependencies = [
- "cas-core",
+ "canlab-core",
 ]
 
 [[package]]
-name = "cas-tex"
+name = "canlab-tex"
 version = "0.1.0"
 dependencies = [
- "cas-core",
+ "canlab-core",
 ]
 
 [[package]]

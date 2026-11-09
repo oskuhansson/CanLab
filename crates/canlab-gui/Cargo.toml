@@ -1,0 +1,20 @@
+[package]
+name = "canlab-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Abitti-style GUI: palette, LaTeX input, typeset output, plot"
+
+[[bin]]
+name = "canlab-gui"
+path = "src/main.rs"
+
+[dependencies]
+canlab-core = { path = "../canlab-core" }
+canlab-input = { path = "../canlab-input" }
+canlab-mathview = { path = "../canlab-mathview" }
+canlab-parse = { path = "../canlab-parse" }
+canlab-tex = { path = "../canlab-tex" }
+canlab-plot = { path = "../canlab-plot" }
+canlab-solver = { path = "../canlab-solver" }
+eframe = "0.37.0"

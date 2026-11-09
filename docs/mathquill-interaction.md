@@ -1,6 +1,6 @@
 # The Abitti / MathQuill interaction model — an observed specification
 
-This document is the behavioural contract that `crates/cas-input` implements. It is
+This document is the behavioural contract that `crates/canlab-input` implements. It is
 written from two kinds of evidence, and every claim is tagged:
 
 | Tag | Meaning |
@@ -348,7 +348,7 @@ through its own renderer, and MathQuill always writes scalable delimiters.
 ## 10. Not determined, and where the model guesses
 
 Honest list of things I could not pin down from observation, plus what
-`crates/cas-input` does about each (all guesses are isolated in one function, named
+`crates/canlab-input` does about each (all guesses are isolated in one function, named
 here):
 
 | Question | Status | Model decision |
@@ -362,7 +362,7 @@ here):
 | `\overline` / `\underrightarrow` / `\overrightarrow` | palette observed; they behave like a one-slot body, same as `\sqrt` | Modelled as `Node::Accent`; `\mathrm` is not modelled at all. |
 | Tables (`cases`, `matrix`, `array`) and `\lim_{x\to\infty}`, `\intsub` | palette observed, cells reachable | Not modelled; `Template::from_palette_action` returns `Err`. |
 
-## 11. How `crates/cas-input` maps onto this specification
+## 11. How `crates/canlab-input` maps onto this specification
 
 | Observed fact | Where it lives |
 | --- | --- |

@@ -1,0 +1,17 @@
+[package]
+name = "canlab-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Command-line front-end and REPL for the CAS"
+
+[[bin]]
+name = "canlab"
+path = "src/main.rs"
+
+[dependencies]
+canlab-core = { path = "../canlab-core" }
+canlab-parse = { path = "../canlab-parse" }
+canlab-tex = { path = "../canlab-tex" }
+canlab-plot = { path = "../canlab-plot" }
+canlab-solver = { path = "../canlab-solver" }

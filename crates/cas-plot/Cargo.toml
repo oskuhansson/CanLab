@@ -1,9 +1,0 @@
-[package]
-name = "cas-plot"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-description = "Adaptive function sampling and SVG rendering"
-
-[dependencies]
-cas-core = { path = "../cas-core" }

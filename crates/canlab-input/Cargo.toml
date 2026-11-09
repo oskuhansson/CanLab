@@ -1,0 +1,10 @@
+[package]
+name = "canlab-input"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Structural (MathQuill-style) math input model: a tree with a cursor inside it"
+
+[dependencies]
+canlab-core = { path = "../canlab-core" }
+canlab-tex = { path = "../canlab-tex" }

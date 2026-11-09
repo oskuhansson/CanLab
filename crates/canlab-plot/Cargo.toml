@@ -1,0 +1,9 @@
+[package]
+name = "canlab-plot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Adaptive function sampling and SVG rendering"
+
+[dependencies]
+canlab-core = { path = "../canlab-core" }

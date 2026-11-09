@@ -1,0 +1,9 @@
+[package]
+name = "canlab-parse"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LaTeX math parser producing canlab-core expressions"
+
+[dependencies]
+canlab-core = { path = "../canlab-core" }

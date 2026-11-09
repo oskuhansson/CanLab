@@ -1,9 +1,0 @@
-[package]
-name = "cas-solver"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-description = "Solver trait and JSON protocol bridging to an external CAS backend"
-
-[dependencies]
-cas-core = { path = "../cas-core" }

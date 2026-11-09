@@ -116,7 +116,7 @@ cursor lands.
 
 ---
 
-## Support matrix for `cas-parse`
+## Support matrix for `canlab-parse`
 
 The parser targets what the palette emits, in priority order.
 
@@ -134,7 +134,7 @@ Until then they produce a clear error: `unsupported relation \leq`.
 ### Deliberately deferred
 - `cases` / `matrix` / `array` environments — need a matrix type, which the
   `Expr` tree does not have and an expression CAS does not need until Phase 9.
-- `\int` / `\sum` / `\lim` with bounds — need binder nodes. `cas-core` has
+- `\int` / `\sum` / `\lim` with bounds — need binder nodes. `canlab-core` has
   `Hold::Integral` for the unevaluated form, so `\int` can land there later.
 - `\overrightarrow`, `\overline`, `\bar` — decoration, not mathematics; the
   solver has nothing to do with them.
