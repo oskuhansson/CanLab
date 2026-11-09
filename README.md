@@ -94,15 +94,36 @@ result. `SolverError::NotImplemented` travels all the way to the screen.
 - The parser/printer round-trip is the load-bearing property test.
 - `canlab-cli/tests/cli.rs` drives the compiled binary, so it fails if any two
   crates disagree about an API or an output format.
+- `canlab-input/tests/abitti_parity.rs` is a corpus of **observed** behaviour:
+  every case was typed into the live editor at <https://math-demo.abitti.fi/> with
+  Playwright and the expected LaTeX is what that editor answered. If the model and
+  the corpus disagree, the model is wrong.
+- `canlab-gui` has a headless frame test: it paints a whole frame with a real
+  `egui::Context`, which is what would catch a panic that shows up as a blank
+  window.
 
-Current state: **366 tests**, all green — `canlab-core` 28, `canlab-parse` 68,
+Current state: **381 tests**, all green — `canlab-core` 28, `canlab-parse` 68,
 `canlab-tex` 43, `canlab-plot` 28, `canlab-solver` 61, `canlab-input` 75,
-`canlab-mathview` 32, `canlab-gui` 12, `canlab-cli` end-to-end 8, plus
-integration and doc tests.
+`canlab-mathview` 32, `canlab-gui` 15, `canlab-cli` end-to-end 8, plus
+integration, parity and doc tests.
 
 ```bash
 cargo test --workspace
 ```
+
+### Looking at the maths without a window
+
+A GPU-composited window cannot be screenshotted over a remote session
+(`PrintWindow` returns a blank bitmap), but the layout is pure geometry:
+
+```bash
+cargo run -p canlab-mathview --example layout_svg -- layout.svg layout.json
+python crates/canlab-mathview/tools/render_layout.py layout.json layout.png
+```
+
+`layout.svg` opens in a browser; the Python renderer needs Pillow and draws the
+same items to a PNG, including every caret position and the faint half of a ghost
+bracket.
 
 The end-to-end milestone the whole thing is aimed at:
 

@@ -4,7 +4,6 @@
 //! panel's body. Keeping the dock chrome in `layout.rs` means these functions
 //! only have to answer one question each: what does this panel show?
 
-use canlab_input::Template;
 use canlab_mathview::{MathView, Style};
 use canlab_plot::{Curve, SampleOptions, sample};
 use canlab_tex::to_latex;

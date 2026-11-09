@@ -33,7 +33,6 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1180.0, 760.0])
             .with_min_inner_size([900.0, 600.0])
-            .with_maximized(true)
             .with_title("CanLab — LaTeX algebra"),
         ..Default::default()
     };
@@ -90,6 +89,9 @@ struct CasApp {
     /// Bumped on every re-parse. A solver result from an older generation is
     /// stale and must not replace the current expression's result.
     generation: u64,
+    /// How many frames have been painted. The first few force a repaint so the
+    /// window is never left showing an unpainted surface.
+    paints: u8,
 }
 
 impl CasApp {
@@ -112,6 +114,7 @@ impl CasApp {
             mode: Mode::Dark,
             jobs: Jobs::spawn(),
             generation: 0,
+            paints: 0,
         };
         app.recompute();
         app
@@ -348,6 +351,26 @@ impl CasApp {
 
 impl eframe::App for CasApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.draw(ui);
+    }
+}
+
+impl CasApp {
+    /// One frame of the whole interface.
+    ///
+    /// Split out of [`eframe::App::ui`] so a test can drive it: constructing a
+    /// real `eframe::Frame` is not possible outside eframe, but a `Ui` is.
+    fn draw(&mut self, ui: &mut egui::Ui) {
+        // Paint a few frames unconditionally before settling into egui's
+        // on-demand mode: a window that has never been presented stays blank
+        // until some event makes egui repaint. The window size, meanwhile, is
+        // decided at creation (`with_inner_size`) and left alone — creating it
+        // maximised, or resizing it afterwards, leaves a stale framebuffer.
+        if self.paints < 4 {
+            self.paints += 1;
+            ui.ctx().request_repaint();
+        }
+
         self.poll_jobs(ui.ctx());
         menu_bar(self, ui);
         status_bar(self, ui);
@@ -531,6 +554,48 @@ fn friendly_error(error: &ToExprError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Paint one complete frame headlessly.
+    ///
+    /// This is the closest a test can get to "the window comes up": eframe's
+    /// frame object cannot be built outside eframe, but everything the interface
+    /// actually does lives in `CasApp::draw`, and a panic in there is exactly
+    /// what produces a blank window.
+    fn draw_a_frame(app: &mut CasApp, ctx: &egui::Context) {
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.draw(ui);
+        });
+        // A real backend uploads these; epaint panics if they are dropped
+        // unhandled, which is the test harness's job and not a UI bug.
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn a_whole_frame_paints_without_panicking() {
+        let ctx = egui::Context::default();
+        let mut app = CasApp::new();
+        // Three frames: the first builds the font atlas and the layout, the
+        // second re-enters with last frame's state, the third is steady state.
+        for _ in 0..3 {
+            draw_a_frame(&mut app, &ctx);
+        }
+    }
+
+    #[test]
+    fn a_frame_with_a_system_and_a_ghost_bracket_paints_too() {
+        let ctx = egui::Context::default();
+        let mut app = CasApp::new();
+        let mut field = MathField::new();
+        field.type_str("(x+1");
+        field.new_line();
+        field.type_str("y=");
+        field.apply_snippet(r"\bar{x}").unwrap();
+        app.field = field;
+        app.recompute();
+        for _ in 0..2 {
+            draw_a_frame(&mut app, &ctx);
+        }
+    }
 
     #[test]
     fn the_default_expression_is_readable() {

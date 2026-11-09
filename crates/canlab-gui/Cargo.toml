@@ -17,4 +17,7 @@ canlab-parse = { path = "../canlab-parse" }
 canlab-tex = { path = "../canlab-tex" }
 canlab-plot = { path = "../canlab-plot" }
 canlab-solver = { path = "../canlab-solver" }
+# The default (wgpu) backend; it is also the only one with a framebuffer
+# capture path, which `shots.rs` needs for looking at the UI over a remote
+# session where `PrintWindow` returns a blank bitmap.
 eframe = "0.37.0"
