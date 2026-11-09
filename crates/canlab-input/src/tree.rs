@@ -76,6 +76,38 @@ impl Delim {
     }
 }
 
+/// Which half of a bracket pair has not been typed yet.
+///
+/// MathQuill draws a bracket pair as soon as *either* half is typed, and the half
+/// you have not typed is a **ghost**: it is visible, it is part of the LaTeX, and
+/// it disappears into a real delimiter the moment you type it yourself. The source
+/// says it plainly — a bracket is "first typed as one-sided bracket with matching
+/// 'ghost' bracket at far end of current block, until you type an opposing one"
+/// (`src/commands/math/commands.js`). See `docs/mathquill-interaction.md` §2.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Default)]
+pub enum Ghost {
+    /// Both delimiters are real: `\left(x\right)` typed in full.
+    #[default]
+    None,
+    /// The opening delimiter is a ghost — it appeared because a stray `)` was
+    /// typed and swallowed the run to its left.
+    Open,
+    /// The closing delimiter is a ghost — it appeared because `(` was typed.
+    Close,
+}
+
+impl Ghost {
+    /// True when the opening delimiter is drawn as a ghost.
+    pub fn is_open(self) -> bool {
+        matches!(self, Ghost::Open)
+    }
+
+    /// True when the closing delimiter is drawn as a ghost.
+    pub fn is_close(self) -> bool {
+        matches!(self, Ghost::Close)
+    }
+}
+
 /// A one-argument decoration drawn above or below its body.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum AccentKind {
@@ -124,8 +156,12 @@ pub enum Node {
     Sup(Row),
     /// A subscript attached to the preceding sibling, if any.
     Sub(Row),
-    /// `\left(…\right)` and friends.
-    Group { delim: Delim, body: Row },
+    /// `\left(…\right)` and friends, with either half possibly still a ghost.
+    Group {
+        delim: Delim,
+        body: Row,
+        ghost: Ghost,
+    },
     /// A vector arrow, overline or underarrow.
     Accent { kind: AccentKind, body: Row },
 }
@@ -139,6 +175,20 @@ impl Node {
     /// Convenience constructor for a command token.
     pub fn sym(s: impl Into<String>) -> Node {
         Node::Sym(s.into())
+    }
+
+    /// A bracket pair with both delimiters real.
+    pub fn group(delim: Delim, body: Row) -> Node {
+        Node::Group {
+            delim,
+            body,
+            ghost: Ghost::None,
+        }
+    }
+
+    /// A bracket pair with one half still a ghost.
+    pub fn ghost_group(delim: Delim, body: Row, ghost: Ghost) -> Node {
+        Node::Group { delim, body, ghost }
     }
 
     /// A root with no optional index.

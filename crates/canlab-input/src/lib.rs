@@ -48,8 +48,10 @@ mod tree;
 pub use cursor::{Cursor, PathStep, Selection};
 pub use expr::ToExprError;
 pub use field::{EscapeOutcome, MathField};
+pub mod snippet;
+pub use snippet::SnippetError;
 pub use template::{Template, TemplateError};
-pub use tree::{AccentKind, Delim, Node, Row, Slot};
+pub use tree::{AccentKind, Delim, Ghost, Node, Row, Slot};
 
 /// Re-export so callers can write `canlab_input::Expr` without also depending on
 /// `canlab-core`.

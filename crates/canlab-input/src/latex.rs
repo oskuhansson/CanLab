@@ -67,7 +67,7 @@ impl Emitter {
                 let s = script('_', row);
                 self.operand(&s, false);
             }
-            Node::Group { delim, body } => {
+            Node::Group { delim, body, .. } => {
                 let s = format!("{}{}{}", delim.open(), emit(body), delim.close());
                 self.operand(&s, false);
             }

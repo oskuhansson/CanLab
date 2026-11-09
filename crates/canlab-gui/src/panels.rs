@@ -174,20 +174,57 @@ fn math_field(app: &mut CasApp, ui: &mut Ui) -> egui::Response {
 /// Greek names, so this function must not special-case printable keys. Enter is
 /// swallowed rather than committed because a dock panel has nowhere to put a
 /// new line.
+///
+/// The events are **taken out of the queue**, not merely read: egui also feeds
+/// them to its focus system, so leaving an arrow key in place moved focus to the
+/// next widget while the caret was walking the expression. Ctrl/⌘ combinations
+/// and `Tab`/`Esc` are left alone on purpose — undo and focus traversal belong to
+/// the shell.
 fn handle_field_keys(app: &mut CasApp, ui: &mut Ui, response: &egui::Response) {
     if !response.has_focus() {
         return;
     }
 
-    let events = ui.input(|input| input.events.clone());
+    let events = ui.input_mut(|input| {
+        let mut ours = Vec::new();
+        input.events.retain(|event| {
+            let claim = match event {
+                egui::Event::Text(text) => !text.is_empty() && !text.chars().all(char::is_control),
+                egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } => {
+                    !modifiers.ctrl
+                        && !modifiers.command
+                        && matches!(
+                            key,
+                            egui::Key::Backspace
+                                | egui::Key::Delete
+                                | egui::Key::ArrowLeft
+                                | egui::Key::ArrowRight
+                                | egui::Key::ArrowUp
+                                | egui::Key::ArrowDown
+                                | egui::Key::Enter
+                        )
+                }
+                _ => false,
+            };
+            if claim {
+                ours.push(event.clone());
+            }
+            !claim
+        });
+        ours
+    });
+
     let mut changed = false;
     for event in events {
         match event {
             egui::Event::Text(text) => {
-                if !text.is_empty() {
-                    app.field.type_str(&text);
-                    changed = true;
-                }
+                app.field.type_str(&text);
+                changed = true;
             }
             egui::Event::Key {
                 key, pressed: true, ..
@@ -204,9 +241,11 @@ fn handle_field_keys(app: &mut CasApp, ui: &mut Ui, response: &egui::Response) {
                 egui::Key::ArrowRight => changed |= app.field.move_right(),
                 egui::Key::ArrowUp => changed |= app.field.move_up(),
                 egui::Key::ArrowDown => changed |= app.field.move_down(),
-                // Enter and every other key are ignored here: there is no
-                // multi-line commitment in this editor.
-                egui::Key::Enter => {}
+                // Enter starts the next equation of the system.
+                egui::Key::Enter => {
+                    app.field.new_line();
+                    changed = true;
+                }
                 _ => {}
             },
             _ => {}
@@ -311,52 +350,15 @@ fn result_card(app: &CasApp, ui: &mut Ui) {
         });
 }
 
-/// Which palette labels are structures rather than symbols, in Abitti's action
-/// vocabulary. The literals are the labels visible on the keys, so they are
-/// matched by what the user clicks, not by the LaTeX the button would insert.
-fn action_for(label: &str) -> Option<&'static str> {
-    Some(match label {
-        "\u{221a}" => "\\sqrt", // √
-        "x\u{207f}" => "^",     // xⁿ
-        "a/b" => "\\frac",
-        "|x|" => "|",
-        "( )" => "(",
-        "[ ]" => "[",
-        "x\u{2099}" => "_",    // xₙ
-        "\u{222b}" => "\\int", // ∫
-        "\u{2211}" => "\\sum", // ∑
-        "lim" => "\\lim_",
-        "sin" => "\\sin",
-        "cos" => "\\cos",
-        "tan" => "\\tan",
-        "\u{221b}" => "\\nthroot",          // ∛
-        "\u{2192}v" => "\\overrightarrow",  // →v
-        "x\u{0332}" => "\\underrightarrow", // x̲
-        "x\u{0304}" => "\\overline",        // x̄
-        "C(n,k)" => "\\binom",
-        _ => return None,
-    })
-}
-
 /// Apply one palette key to the field.
 ///
-/// The order matters: structural labels go through the template table, simple
-/// command tokens (`\alpha`, `\cdot`, `\infty`, `\mathbb{Z}`, …) become a
-/// `Sym`, and only genuinely textual inserts are typed keystroke by keystroke.
+/// The button's own `insert` string is the command Abitti's editor would run, so
+/// it is the thing we interpret: structures become structures, `\alpha` becomes a
+/// token, `½` becomes a real fraction. Entries the model does not have (tables,
+/// `\overleftarrow`) report why instead of pasting raw LaTeX into the field.
 fn apply_palette(app: &mut CasApp, button: &canlab_parse::palette::Button) {
-    if let Some(action) = action_for(button.label) {
-        match Template::from_palette_action(action) {
-            Ok(template) => {
-                if let Err(error) = app.field.insert_template(template) {
-                    app.status = format!("palette: {error}");
-                }
-            }
-            Err(error) => app.status = format!("palette: {error}"),
-        }
-    } else if button.insert.starts_with('\\') {
-        app.field.insert_sym(button.insert);
-    } else {
-        app.field.type_str(button.insert);
+    if let Err(error) = app.field.apply_snippet(button.insert) {
+        app.status = format!("{}: {error}", button.label);
     }
     app.recompute();
 }
@@ -712,35 +714,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn structural_palette_labels_map_to_real_templates() {
-        let table = [
-            ("\u{221a}", "\\sqrt"), // √
-            ("x\u{207f}", "^"),     // xⁿ
-            ("a/b", "\\frac"),
-            ("|x|", "|"),
-            ("( )", "("),
-            ("[ ]", "["),
-            ("x\u{2099}", "_"),    // xₙ
-            ("\u{222b}", "\\int"), // ∫
-            ("\u{2211}", "\\sum"), // ∑
-            ("lim", "\\lim_"),
-            ("sin", "\\sin"),
-            ("cos", "\\cos"),
-            ("tan", "\\tan"),
-            ("\u{221b}", "\\nthroot"),          // ∛
-            ("\u{2192}v", "\\overrightarrow"),  // →v
-            ("x\u{0332}", "\\underrightarrow"), // x̲
-            ("x\u{0304}", "\\overline"),        // x̄
-            ("C(n,k)", "\\binom"),
-        ];
-        for (label, action) in table {
-            assert_eq!(action_for(label), Some(action), "label {label:?}");
-            assert!(
-                Template::from_palette_action(action).is_ok(),
-                "action {action:?} is not modelled"
-            );
+    fn every_palette_key_either_lands_or_says_why_not() {
+        // The four entries the model deliberately lacks. Everything else — all
+        // ~100 keys, symbols and structures alike — has to put something real in
+        // the field.
+        const NOT_MODELLED: &[&str] = &["cases", "matrix", "array", "\u{2190}v"];
+
+        for &(category, buttons) in canlab_parse::palette::ALL {
+            for button in buttons {
+                let mut field = canlab_input::MathField::new();
+                let applied = field.apply_snippet(button.insert);
+                if NOT_MODELLED.contains(&button.label) {
+                    assert!(
+                        applied.is_err(),
+                        "{category}/`{}` should be refused, got {:?}",
+                        button.label,
+                        field.to_latex()
+                    );
+                    continue;
+                }
+                assert!(
+                    applied.is_ok(),
+                    "{category}/`{}` failed: {applied:?}",
+                    button.label
+                );
+                assert!(
+                    !field.to_latex().is_empty(),
+                    "{category}/`{}` inserted nothing",
+                    button.label
+                );
+            }
         }
-        assert_eq!(action_for("cases"), None);
-        assert_eq!(action_for("\u{2211}"), Some("\\sum"));
+    }
+
+    #[test]
+    fn a_palette_fraction_is_a_fraction_and_not_the_text_frac() {
+        let mut field = canlab_input::MathField::new();
+        field.apply_snippet(canlab_parse::palette::find("a/b").unwrap().insert).unwrap();
+        assert_eq!(field.to_latex(), "\\frac{ }{ }");
+        // The cursor is in the numerator, exactly where Abitti puts it.
+        assert_eq!(field.cursor().path.len(), 1);
     }
 }

@@ -8,3 +8,6 @@ description = "Structural (MathQuill-style) math input model: a tree with a curs
 [dependencies]
 canlab-core = { path = "../canlab-core" }
 canlab-tex = { path = "../canlab-tex" }
+
+[dev-dependencies]
+canlab-parse = { path = "../canlab-parse" }

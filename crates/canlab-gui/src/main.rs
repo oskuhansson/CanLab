@@ -138,6 +138,40 @@ impl CasApp {
             return;
         }
 
+        // A system is several equations held together. There is no single
+        // expression to hand the algebra engine, so the result card shows the
+        // system itself and the actions stay disabled until the backend grows a
+        // system solver.
+        if self.field.is_system() {
+            self.expr = None;
+            self.free_vars.clear();
+            self.result_latex = self.field.to_latex();
+            match self.field.build_lines() {
+                Ok(lines) => {
+                    let mut vars = Vec::new();
+                    for line in &lines {
+                        let mut line_vars = Vec::new();
+                        free_symbols(line, &mut line_vars);
+                        for var in line_vars {
+                            if !vars.contains(&var) {
+                                vars.push(var);
+                            }
+                        }
+                    }
+                    self.free_vars = vars;
+                    self.result_plain = format!("system of {} equations", lines.len());
+                }
+                Err(error) => {
+                    self.error = Some(format!(
+                        "One of the equations cannot be read yet: {}.",
+                        friendly_error(&error)
+                    ));
+                    self.result_plain.clear();
+                }
+            }
+            return;
+        }
+
         match self.field.build_expr() {
             Ok(expr) => {
                 let mut vars = Vec::new();
@@ -490,6 +524,7 @@ fn friendly_error(error: &ToExprError) -> String {
         ToExprError::UnexpectedText(text) => {
             format!("cannot read {text:?} as an operand")
         }
+        ToExprError::System => String::from("a system is more than one expression"),
     }
 }
 

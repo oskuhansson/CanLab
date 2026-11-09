@@ -593,6 +593,7 @@ name = "canlab-input"
 version = "0.1.0"
 dependencies = [
  "canlab-core",
+ "canlab-parse",
  "canlab-tex",
 ]
 

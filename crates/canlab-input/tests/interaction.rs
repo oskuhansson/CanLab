@@ -558,10 +558,10 @@ fn escape_leaves_every_structure_and_reports_it() {
 }
 
 #[test]
-fn enter_commits_the_latex_including_empty_slots_and_resets() {
+fn commit_returns_the_latex_including_empty_slots_and_resets() {
     let mut f = typed("1/");
     assert_eq!(f.to_latex(), "\\frac{1}{ }");
-    assert_eq!(f.enter(), "\\frac{1}{ }");
+    assert_eq!(f.commit(), "\\frac{1}{ }");
     assert!(f.is_blank());
     assert_eq!(f.to_latex(), "");
 }

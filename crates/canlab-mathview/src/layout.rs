@@ -45,7 +45,7 @@
 //! there either. Keeping that order is the contract the interactive layer rests
 //! on, and it is why a click can be turned into a structural cursor at all.
 
-use canlab_input::{AccentKind, Delim, MathField, Node, Row};
+use canlab_input::{AccentKind, Delim, Ghost, MathField, Node, Row};
 
 // --------------------------------------------------------------------- geometry
 
@@ -252,6 +252,10 @@ pub enum Item {
         ch: char,
         /// The stretched font size.
         size: f32,
+        /// True for the half of a bracket pair that has not been typed yet: it is
+        /// drawn, but drawn faint, until the user types it. See
+        /// [`canlab_input::Ghost`].
+        ghost: bool,
     },
     /// A box marking an empty slot. A slot with no content is a legal, clickable
     /// object in the input model, so it has to be visible.
@@ -298,8 +302,14 @@ pub struct DisplayList {
     /// [`MathField::positions`]. This is a contract: the caller zips this vector
     /// with that one by index.
     pub carets: Vec<Rect>,
-    /// The y coordinate of the root row's baseline.
+    /// The y coordinate of the current line's baseline.
     pub baseline: f32,
+    /// The vertical band of every line, top to bottom. Empty for a single line,
+    /// where [`DisplayList::carets`] is the whole story; a system fills it so a
+    /// click can land on an equation other than the one being edited.
+    pub line_bands: Vec<Rect>,
+    /// The caret rects of every line, in line order. Also empty for a single line.
+    pub line_carets: Vec<Vec<Rect>>,
 }
 
 impl DisplayList {
@@ -666,7 +676,7 @@ impl Layout<'_> {
             // out on its own.
             Node::Sup(script) => self.script(script, size, -1.0),
             Node::Sub(script) => self.script(script, size, 1.0),
-            Node::Group { delim, body } => self.group(*delim, body, size),
+            Node::Group { delim, body, ghost } => self.group(*delim, body, *ghost, size),
             Node::Accent { kind, body } => self.accent(*kind, body, size),
         }
     }
@@ -769,8 +779,8 @@ impl Layout<'_> {
         let lower_dy = stack_top + upper.ascent + upper.descent + gap + lower.ascent;
 
         let (open, close) = delim_chars(Delim::Paren);
-        let open_frag = self.stretch(open, stack_height + 2.0 * pad, size);
-        let close_frag = self.stretch(close, stack_height + 2.0 * pad, size);
+        let open_frag = self.stretch(open, stack_height + 2.0 * pad, size, false);
+        let close_frag = self.stretch(close, stack_height + 2.0 * pad, size, false);
         let open_width = open_frag.width;
         let close_width = close_frag.width;
 
@@ -825,15 +835,15 @@ impl Layout<'_> {
         out
     }
 
-    fn group(&self, delim: Delim, body: &Row, size: f32) -> Frag {
+    fn group(&self, delim: Delim, body: &Row, ghost: Ghost, size: f32) -> Frag {
         let pad = self.style.pad;
         let radicand = self.row(body, size);
         let body_width = radicand.width;
         let height = radicand.ascent + radicand.descent + 2.0 * pad;
 
         let (open, close) = delim_chars(delim);
-        let open_frag = self.stretch(open, height, size);
-        let close_frag = self.stretch(close, height, size);
+        let open_frag = self.stretch(open, height, size, ghost.is_open());
+        let close_frag = self.stretch(close, height, size, ghost.is_close());
         let open_width = open_frag.width;
         let close_width = close_frag.width;
 
@@ -923,7 +933,7 @@ impl Layout<'_> {
     }
 
     /// A delimiter glyph stretched to `height`, centred on the math axis.
-    fn stretch(&self, ch: char, height: f32, base_size: f32) -> Frag {
+    fn stretch(&self, ch: char, height: f32, base_size: f32, ghost: bool) -> Frag {
         let mut buf = [0u8; 4];
         let text: &str = ch.encode_utf8(&mut buf);
         let base_metrics = self.measure.measure(text, base_size);
@@ -939,7 +949,12 @@ impl Layout<'_> {
         out.ascent = (metrics.ascent - dy).max(0.0);
         out.descent = (metrics.descent + dy).max(0.0);
         let pos = Pos2::new(0.0, dy);
-        out.items.push(Item::Delim { pos, ch, size });
+        out.items.push(Item::Delim {
+            pos,
+            ch,
+            size,
+            ghost,
+        });
         out
     }
 
@@ -983,13 +998,23 @@ impl Layout<'_> {
 /// ```
 pub fn layout_field(field: &MathField, measure: &dyn Measure, style: &Style) -> DisplayList {
     let layout = Layout { measure, style };
+    let lines = field.lines();
+    if lines.len() <= 1 {
+        let empty: Row = Vec::new();
+        return finish_line(&layout, lines.first().unwrap_or(&empty), style);
+    }
+    layout_system(&layout, field, style)
+}
+
+/// Lay out one row into a display list whose origin is its top-left.
+fn finish_line(layout: &Layout<'_>, row: &Row, style: &Style) -> DisplayList {
     let Frag {
         width,
         ascent,
         descent,
         items,
         mut carets,
-    } = layout.row(field.root(), style.base_size);
+    } = layout.row(row, style.base_size);
 
     let ascent = ascent.max(0.0);
     let descent = descent.max(0.0);
@@ -1010,6 +1035,98 @@ pub fn layout_field(field: &MathField, measure: &dyn Measure, style: &Style) -> 
         items,
         carets,
         baseline: ascent,
+        line_bands: Vec::new(),
+        line_carets: Vec::new(),
+    }
+}
+
+/// Lay out a system: one equation per baseline, left-aligned after a brace.
+///
+/// The brace is the whole point of the shape — it is what says "these equations
+/// hold together" rather than "these are two expressions" — and it is also what
+/// Abitti's `cases` environment draws, so the field looks like the LaTeX it
+/// emits.
+fn layout_system(layout: &Layout<'_>, field: &MathField, style: &Style) -> DisplayList {
+    let base = style.base_size;
+    let gap = base * 0.45;
+    let lines = field.lines();
+
+    // Measure every line first: the brace is sized to the whole block, so the
+    // block's height has to be known before anything is placed.
+    let frags: Vec<Frag> = lines.iter().map(|row| layout.row(row, base)).collect();
+    let heights: Vec<f32> = frags
+        .iter()
+        .map(|frag| frag.ascent.max(0.0) + frag.descent.max(0.0))
+        .collect();
+    let width = frags
+        .iter()
+        .map(|frag| frag.width)
+        .fold(0.0f32, f32::max)
+        .max(base * 0.8);
+    let total: f32 = heights.iter().sum::<f32>() + gap * (lines.len() - 1) as f32;
+
+    let brace_size = {
+        let metrics = layout.measure.measure("{", base);
+        base * (total / metrics.height().max(f32::EPSILON)).max(1.0)
+    };
+    let brace = layout.measure.measure("{", brace_size);
+    let x0 = brace.width + base * 0.18;
+
+    let mut items = Vec::new();
+    let mut carets = Vec::new();
+    let mut bands = Vec::new();
+    let mut per_line_carets = Vec::new();
+    let mut baseline = 0.0;
+    let mut y = 0.0;
+
+    for (index, frag) in frags.into_iter().enumerate() {
+        let ascent = frag.ascent.max(0.0);
+        let descent = frag.descent.max(0.0);
+        let dy = y + ascent;
+        let Frag {
+            width: _,
+            ascent: _,
+            descent: _,
+            items: mut line_items,
+            carets: line_carets,
+        } = frag;
+        for item in &mut line_items {
+            item.shift(x0, dy);
+        }
+        let placed: Vec<Rect> = line_carets
+            .into_iter()
+            .map(|caret| {
+                let mut caret = caret;
+                caret.x += x0;
+                caret.y += dy;
+                items.push(Item::Caret { rect: caret });
+                caret
+            })
+            .collect();
+        if index == field.line() {
+            carets = placed.clone();
+            baseline = dy;
+        }
+        items.extend(line_items);
+        bands.push(Rect::new(0.0, y, width + x0, ascent + descent));
+        per_line_carets.push(placed);
+        y += ascent + descent + gap;
+    }
+
+    items.push(Item::Delim {
+        pos: Pos2::new(0.0, (total - brace.height()) * 0.5 + brace.ascent),
+        ch: '{',
+        size: brace_size,
+        ghost: false,
+    });
+
+    DisplayList {
+        size: Vec2::new(x0 + width, total),
+        items,
+        carets,
+        baseline,
+        line_bands: bands,
+        line_carets: per_line_carets,
     }
 }
 
@@ -1023,8 +1140,14 @@ pub fn layout_field(field: &MathField, measure: &dyn Measure, style: &Style) -> 
 /// horizontal distance, with vertical distance as the tie-break (two scripts on
 /// one base share an x).
 pub fn nearest_caret(list: &DisplayList, at: Pos2, band: f32) -> Option<usize> {
+    nearest_in(&list.carets, at, band)
+}
+
+/// [`nearest_caret`] over an arbitrary caret slice — used for the line of a
+/// system that is not the one being edited.
+pub fn nearest_in(carets: &[Rect], at: Pos2, band: f32) -> Option<usize> {
     let band = band.max(0.0);
-    list.carets
+    carets
         .iter()
         .enumerate()
         .filter_map(|(index, caret)| {
@@ -1043,6 +1166,13 @@ pub fn nearest_caret(list: &DisplayList, at: Pos2, band: f32) -> Option<usize> {
         })
         .min_by(|a, b| a.1.total_cmp(&b.1).then(a.2.total_cmp(&b.2)))
         .map(|(index, _, _)| index)
+}
+
+/// Which line of a system the point `at` falls in, if the layout has lines.
+pub fn line_at(list: &DisplayList, at: Pos2) -> Option<usize> {
+    list.line_bands
+        .iter()
+        .position(|band| at.y >= band.y && at.y <= band.bottom())
 }
 
 #[cfg(test)]

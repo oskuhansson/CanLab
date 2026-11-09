@@ -25,7 +25,7 @@ use canlab_input::MathField;
 use egui::{Color32, CornerRadius, FontId, Sense, Stroke, StrokeKind};
 
 use crate::layout::{
-    DisplayList, Item, Measure, Metrics, Pos2, Style, layout_field, nearest_caret,
+    DisplayList, Item, Measure, Metrics, Pos2, Style, layout_field, line_at, nearest_in,
 };
 
 /// [`Measure`] backed by egui's font stack.
@@ -104,19 +104,27 @@ impl MathView {
         let (rect, mut response) = ui.allocate_exact_size(desired, Sense::click());
         response = response.on_hover_cursor(egui::CursorIcon::Text);
 
-        // Clicking maps a pixel back to one of the field's own positions. The
-        // caret list and `positions()` share an order, so the index is the
-        // mapping.
+        // Clicking maps a pixel back to one of the field's own positions. In a
+        // system it first picks the equation that was clicked, then the caret
+        // inside it; the caret list and `positions()` share an order, so the index
+        // is the mapping.
         let mut changed = false;
         if response.clicked()
             && let Some(pointer) = response.interact_pointer_pos()
         {
             let at = Pos2::new(pointer.x - rect.min.x, pointer.y - rect.min.y);
             let band = style.base_size * 0.75;
-            if let Some(index) = nearest_caret(&display, at, band)
+            if let Some(line) = line_at(&display, at) {
+                changed |= field.set_line(line);
+            }
+            let carets = display
+                .line_carets
+                .get(field.line())
+                .map_or(display.carets.as_slice(), |carets| carets.as_slice());
+            if let Some(index) = nearest_in(carets, at, band)
                 && let Some(target) = field.positions().get(index).cloned()
             {
-                changed = field.set_cursor(target);
+                changed |= field.set_cursor(target);
             }
         }
 
@@ -145,6 +153,10 @@ fn paint(
 ) {
     let text_color = visuals.text_color();
     let muted = visuals.weak_text_color();
+    // A ghost delimiter is drawn, not hidden: it is half of the bracket pair the
+    // user will get, so it has to be visible — just not as loud as the half they
+    // actually typed.
+    let faint = visuals.weak_text_color().gamma_multiply(0.65);
 
     for item in &display.items {
         match item {
@@ -156,10 +168,16 @@ fn paint(
             } => {
                 paint_run(painter, origin, pos, text, *size, *italic, text_color);
             }
-            Item::Delim { pos, ch, size } => {
+            Item::Delim {
+                pos,
+                ch,
+                size,
+                ghost,
+            } => {
                 let mut buf = [0u8; 4];
                 let text: &str = ch.encode_utf8(&mut buf);
-                paint_run(painter, origin, pos, text, *size, false, text_color);
+                let color = if *ghost { faint } else { text_color };
+                paint_run(painter, origin, pos, text, *size, false, color);
             }
             Item::Rule { rect } => {
                 painter.rect_filled(to_egui_rect(*rect, origin), CornerRadius::ZERO, text_color);

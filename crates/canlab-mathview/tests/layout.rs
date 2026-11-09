@@ -1,6 +1,6 @@
 //! Layout contract tests — the pure layer, with no window and a fake font.
 
-use canlab_input::{AccentKind, Delim, MathField, Node};
+use canlab_input::{AccentKind, Delim, Ghost, MathField, Node};
 use canlab_mathview::{
     DisplayList, Item, Measure, Metrics, Pos2, Rect, Style, layout_field, nearest_caret,
 };
@@ -86,7 +86,7 @@ fn delimiters(list: &DisplayList) -> Vec<(char, Pos2, f32)> {
     list.items
         .iter()
         .filter_map(|item| match item {
-            Item::Delim { pos, ch, size } => Some((*ch, *pos, *size)),
+            Item::Delim { pos, ch, size, .. } => Some((*ch, *pos, *size)),
             _ => None,
         })
         .collect()
@@ -120,6 +120,7 @@ fn kitchen_sink() -> MathField {
             vec![Node::Group {
                 delim: Delim::Bracket,
                 body: vec![Node::text("z"), Node::Sub(vec![Node::text("1")])],
+                ghost: Ghost::None,
             }],
         ),
         Node::Binom {
@@ -406,6 +407,7 @@ fn group_delimiters_are_scaled_to_tall_content() {
     let field = MathField::from_row(vec![Node::Group {
         delim: Delim::Paren,
         body: vec![frac(vec![Node::text("1")], vec![Node::text("2")])],
+        ghost: Ghost::None,
     }]);
     let list = layout(&field);
 
@@ -434,6 +436,7 @@ fn every_delimiter_kind_produces_its_own_glyphs() {
         let field = MathField::from_row(vec![Node::Group {
             delim,
             body: vec![Node::text("x")],
+            ghost: Ghost::None,
         }]);
         let list = layout(&field);
         let chars: Vec<char> = delimiters(&list).into_iter().map(|(ch, _, _)| ch).collect();
@@ -545,6 +548,7 @@ fn every_item_lies_inside_the_display_list() {
         MathField::from_row(vec![Node::Group {
             delim: Delim::Brace,
             body: vec![frac(vec![Node::text("1")], vec![Node::text("2")])],
+            ghost: Ghost::None,
         }]),
         kitchen_sink(),
     ];

@@ -28,6 +28,8 @@ pub enum ToExprError {
     UnsupportedCommand(String),
     /// Something that is not a number, a variable or an operator.
     UnexpectedText(String),
+    /// The field holds several lines, i.e. a system, which is not one expression.
+    System,
 }
 
 impl std::fmt::Display for ToExprError {
@@ -39,6 +41,7 @@ impl std::fmt::Display for ToExprError {
             ToExprError::UnsupportedConstruct(c) => write!(f, "{c} has no expression form"),
             ToExprError::UnsupportedCommand(c) => write!(f, "{c} has no expression form"),
             ToExprError::UnexpectedText(s) => write!(f, "cannot read {s:?} as an operand"),
+            ToExprError::System => write!(f, "a system is not a single expression"),
         }
     }
 }

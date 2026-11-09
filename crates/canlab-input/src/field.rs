@@ -2,7 +2,7 @@
 
 use crate::cursor::{Cursor, PathStep, Selection};
 use crate::template::{Template, TemplateError};
-use crate::tree::{is_word_char, AccentKind, Delim, Node, Row, Slot};
+use crate::tree::{is_word_char, AccentKind, Delim, Ghost, Node, Row, Slot};
 
 /// What `Esc` did.
 ///
@@ -26,7 +26,16 @@ pub enum EscapeOutcome {
 /// rendering, no measuring and no input-device handling in this crate.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MathField {
-    root: Row,
+    /// One row per line.
+    ///
+    /// A single line is an expression. Several lines are the equations of a
+    /// *system*: they are edited as one block, rendered stacked with a brace, and
+    /// printed as `\begin{cases}…\end{cases}`. A system is how a Finnish student
+    /// writes the pair of equations a task actually asks about, so it is a model
+    /// property rather than a UI detail.
+    lines: Vec<Row>,
+    /// Which line the cursor is in. Cursor paths are relative to that row.
+    line: usize,
     cursor: Cursor,
     selection: Option<Selection>,
     /// A `\name` accumulation in progress. Observed: `\` opens a modal command
@@ -45,7 +54,8 @@ impl MathField {
     /// An empty field with the cursor in the root.
     pub fn new() -> MathField {
         MathField {
-            root: Vec::new(),
+            lines: vec![Vec::new()],
+            line: 0,
             cursor: Cursor::root(),
             selection: None,
             command: None,
@@ -54,15 +64,54 @@ impl MathField {
 
     /// Build a field from an existing tree, cursor at the start.
     pub fn from_row(root: Row) -> MathField {
-        let mut f = MathField::new();
-        f.root = root;
-        f
+        MathField {
+            lines: vec![root],
+            ..MathField::new()
+        }
+    }
+
+    /// Build a field from several rows: one equation per line.
+    pub fn from_lines(lines: Vec<Row>) -> MathField {
+        let lines = if lines.is_empty() {
+            vec![Vec::new()]
+        } else {
+            lines
+        };
+        MathField {
+            lines,
+            ..MathField::new()
+        }
     }
 
     // ---------------------------------------------------------------- accessors
 
+    /// The row the cursor is in.
     pub fn root(&self) -> &Row {
-        &self.root
+        &self.lines[self.line]
+    }
+
+    fn root_mut(&mut self) -> &mut Row {
+        &mut self.lines[self.line]
+    }
+
+    /// Every line, top to bottom.
+    pub fn lines(&self) -> &[Row] {
+        &self.lines
+    }
+
+    /// Which line the cursor is in.
+    pub fn line(&self) -> usize {
+        self.line
+    }
+
+    /// How many equations the field holds (always at least one).
+    pub fn line_count(&self) -> usize {
+        self.lines.len()
+    }
+
+    /// True when the field holds more than one equation.
+    pub fn is_system(&self) -> bool {
+        self.lines.len() > 1
     }
 
     pub fn cursor(&self) -> &Cursor {
@@ -79,15 +128,17 @@ impl MathField {
         self.command.as_deref()
     }
 
-    /// True when the field contains an empty argument anywhere — the field is
+    /// True when any line contains an empty argument — the field is
     /// syntactically fine and algebraically incomplete (`\frac{1}{ }`).
     pub fn is_incomplete(&self) -> bool {
-        crate::tree::row_has_empty_slot(&self.root)
+        self.lines
+            .iter()
+            .any(|row| crate::tree::row_has_empty_slot(row))
     }
 
     /// True when the field holds nothing.
     pub fn is_blank(&self) -> bool {
-        self.root.is_empty() && self.command.is_none()
+        self.lines.iter().all(Vec::is_empty) && self.command.is_none()
     }
 
     /// Discard everything.
@@ -98,11 +149,11 @@ impl MathField {
     // ------------------------------------------------------------ path plumbing
 
     fn row_at(&self, path: &[PathStep]) -> &Row {
-        row_at_ro(&self.root, path)
+        row_at_ro(self.root(), path)
     }
 
     fn row_at_mut(&mut self, path: &[PathStep]) -> &mut Row {
-        row_at_mut(&mut self.root, path)
+        row_at_mut(self.root_mut(), path)
     }
 
     fn current_row(&self) -> &Row {
@@ -117,7 +168,7 @@ impl MathField {
 
     // ------------------------------------------------------------- the position list
 
-    /// Every cursor position in document order.
+    /// Every cursor position in the current line, in document order.
     ///
     /// This *is* the navigation model: MathQuill's Left/Right walk the flattened
     /// depth-first order of slots, which is why leaving a fraction is
@@ -125,7 +176,7 @@ impl MathField {
     /// for `\frac{1}{2}` and `x^2`.
     pub fn positions(&self) -> Vec<Cursor> {
         let mut out = Vec::new();
-        collect_positions(&self.root, &mut Vec::new(), &mut out);
+        collect_positions(self.root(), &mut Vec::new(), &mut out);
         out
     }
 
@@ -179,26 +230,34 @@ impl MathField {
     pub fn move_up(&mut self) -> bool {
         self.finish_command();
         self.selection = None;
-        match self.vertical_target(true) {
-            Some(c) => {
-                self.cursor = c;
-                true
-            }
-            None => false,
+        if let Some(c) = self.vertical_target(true) {
+            self.cursor = c;
+            return true;
         }
+        // At the top of a line, `↑` crosses into the equation above.
+        if self.cursor.path.is_empty() && self.line > 0 {
+            self.line -= 1;
+            let end = self.root().len();
+            self.cursor = Cursor::at(Vec::new(), end);
+            return true;
+        }
+        false
     }
 
     /// Move down one visual row. See [`MathField::move_up`].
     pub fn move_down(&mut self) -> bool {
         self.finish_command();
         self.selection = None;
-        match self.vertical_target(false) {
-            Some(c) => {
-                self.cursor = c;
-                true
-            }
-            None => false,
+        if let Some(c) = self.vertical_target(false) {
+            self.cursor = c;
+            return true;
         }
+        if self.cursor.path.is_empty() && self.line + 1 < self.lines.len() {
+            self.line += 1;
+            self.cursor = Cursor::root();
+            return true;
+        }
+        false
     }
 
     /// The sibling slot directly above (`up == true`) or below, if there is one.
@@ -223,14 +282,15 @@ impl MathField {
 
     // ------------------------------------------------------------------ selection
 
-    /// Select the entire field (`Ctrl-A`).
+    /// Select the whole current line (`Ctrl-A`).
     pub fn select_all(&mut self) {
         self.finish_command();
+        let end = self.root().len();
         self.selection = Some(Selection {
             start: Cursor::root(),
-            end: Cursor::at(Vec::new(), self.root.len()),
+            end: Cursor::at(Vec::new(), end),
         });
-        self.cursor = Cursor::at(Vec::new(), self.root.len());
+        self.cursor = Cursor::at(Vec::new(), end);
     }
 
     /// Drop the selection without touching the tree.
@@ -255,8 +315,23 @@ impl MathField {
         true
     }
 
+    /// Move to another equation of the system, cursor at its start.
+    ///
+    /// Returns `false` when there is no such line, or when it is already the
+    /// active one, so a click handler can treat it as "nothing changed".
+    pub fn set_line(&mut self, line: usize) -> bool {
+        if line >= self.lines.len() || line == self.line {
+            return false;
+        }
+        self.finish_command();
+        self.selection = None;
+        self.line = line;
+        self.cursor = Cursor::root();
+        true
+    }
+
     fn path_exists(&self, cursor: &Cursor) -> bool {
-        let mut row = &self.root;
+        let mut row = self.root();
         for step in &cursor.path {
             let Some(node) = row.get(step.index) else {
                 return false;
@@ -341,17 +416,25 @@ impl MathField {
             '[' => self.open_delim(Delim::Bracket),
             '{' => self.open_delim(Delim::Brace),
             '|' => {
-                // `|` is both halves of an absolute-value pair.
-                if self.closes_innermost(Delim::Abs) {
-                    self.close_innermost();
+                // `|` is both halves of an absolute-value pair: the second one
+                // confirms the first.
+                if self.close_delim(Delim::Abs) {
                     true
                 } else {
                     self.open_delim(Delim::Abs)
                 }
             }
             ')' | ']' | '}' => {
-                self.drop_selection();
-                self.close_or_literal(c)
+                let delim = match c {
+                    ')' => Delim::Paren,
+                    ']' => Delim::Bracket,
+                    _ => Delim::Brace,
+                };
+                if self.selection.is_none() && self.close_delim(delim) {
+                    true
+                } else {
+                    self.wrap_to_the_left(delim)
+                }
             }
             '=' => {
                 self.drop_selection();
@@ -673,6 +756,14 @@ impl MathField {
             self.drop_selection();
             Vec::new()
         };
+        // A bracket typed into an empty field arrives with a ghost closing half —
+        // the pair is drawn, but only the half you typed is real. Wrapping a
+        // selection hardens both immediately: the content already delimits it.
+        let ghost = if content.is_empty() {
+            Ghost::Close
+        } else {
+            Ghost::None
+        };
 
         let mut nodes = match t {
             Template::Frac => vec![Node::Frac { num: Vec::new(), den: Vec::new() }],
@@ -681,10 +772,10 @@ impl MathField {
             Template::NthRoot => vec![Node::Sqrt { index: Some(Vec::new()), body: Vec::new() }],
             Template::Power => vec![Node::Sup(Vec::new())],
             Template::Subscript => vec![Node::Sub(Vec::new())],
-            Template::Paren => vec![Node::Group { delim: Delim::Paren, body: Vec::new() }],
-            Template::Bracket => vec![Node::Group { delim: Delim::Bracket, body: Vec::new() }],
-            Template::Abs => vec![Node::Group { delim: Delim::Abs, body: Vec::new() }],
-            Template::Brace => vec![Node::Group { delim: Delim::Brace, body: Vec::new() }],
+            Template::Paren => vec![Node::ghost_group(Delim::Paren, Vec::new(), ghost)],
+            Template::Bracket => vec![Node::ghost_group(Delim::Bracket, Vec::new(), ghost)],
+            Template::Abs => vec![Node::ghost_group(Delim::Abs, Vec::new(), ghost)],
+            Template::Brace => vec![Node::ghost_group(Delim::Brace, Vec::new(), ghost)],
             Template::Vector => vec![Node::Accent { kind: AccentKind::Vector, body: Vec::new() }],
             Template::Overline => vec![Node::Accent { kind: AccentKind::Overline, body: Vec::new() }],
             Template::Underline => {
@@ -707,6 +798,19 @@ impl MathField {
         }
 
         self.insert_constructed(nodes, t.content_slot());
+        Ok(())
+    }
+
+    /// Apply a palette entry straight from its Abitti `insert` string.
+    ///
+    /// The palette is data — every key carries the LaTeX-ish command Abitti's own
+    /// editor executes — so the field reads the same string instead of keeping a
+    /// second table of special cases. See [`crate::snippet`].
+    pub fn apply_snippet(&mut self, snippet: &str) -> Result<(), crate::SnippetError> {
+        let nodes = crate::snippet::parse(snippet)?;
+        self.finish_command();
+        self.drop_selection();
+        self.insert_constructed(nodes, None);
         Ok(())
     }
 
@@ -736,43 +840,43 @@ impl MathField {
         true
     }
 
-    fn closes_innermost(&self, delim: Delim) -> bool {
-        let Some(last) = self.cursor.path.last() else {
+    /// Confirm the bracket the cursor is at the end of.
+    ///
+    /// Two things happen at once, and both were observed: a ghost delimiter
+    /// becomes real, and the cursor steps outside the pair. Returns `false` when
+    /// there is no matching bracket to close, which is the case that falls through
+    /// to [`MathField::wrap_to_the_left`].
+    fn close_delim(&mut self, delim: Delim) -> bool {
+        let Some(last) = self.cursor.path.last().copied() else {
             return false;
         };
         if last.slot != Slot::Body {
             return false;
         }
-        let path = &self.cursor.path[..self.cursor.path.len() - 1];
-        matches!(self.row_at(path).get(last.index), Some(Node::Group { delim: d, .. }) if *d == delim)
-    }
-
-    fn close_innermost(&mut self) {
-        if let Some(last) = self.cursor.path.last().copied() {
-            let mut path = self.cursor.path.clone();
-            path.pop();
-            self.cursor = Cursor::at(path, last.index + 1);
-        }
-    }
-
-    /// A closing delimiter leaves the enclosing group; anything else is literal.
-    ///
-    /// A stray `)` in Abitti builds a "ghost" bracket pair around the preceding
-    /// run; that is not modelled here. **[INFERRED]**
-    fn close_or_literal(&mut self, c: char) -> bool {
-        let delimiter = match c {
-            ')' => Some(Delim::Paren),
-            ']' => Some(Delim::Bracket),
-            '}' => Some(Delim::Brace),
-            _ => None,
+        let parent = self.cursor.path[..self.cursor.path.len() - 1].to_vec();
+        let (matches, len) = match self.row_at(&parent).get(last.index) {
+            Some(Node::Group { delim: d, body, .. }) => (*d == delim, body.len()),
+            _ => return false,
         };
-        if let Some(d) = delimiter {
-            if self.closes_innermost(d) {
-                self.close_innermost();
-                return true;
-            }
+        if !matches || self.cursor.offset != len {
+            return false;
         }
-        self.insert_char_literal(c);
+        if let Some(Node::Group { ghost, .. }) = self.row_at_mut(&parent).get_mut(last.index) {
+            *ghost = Ghost::None;
+        }
+        self.cursor = Cursor::at(parent, last.index + 1);
+        true
+    }
+
+    /// A closer with nothing to close: it swallows the run to its left.
+    ///
+    /// MathQuill's brackets are "first typed as one-sided bracket with matching
+    /// ghost bracket at far end of current block" — so a stray `)` arrives with a
+    /// ghosted `(` in front of what it took. `x+1)` therefore becomes
+    /// `\left(x+1\right)` with the opening half drawn dimmed until it is typed.
+    fn wrap_to_the_left(&mut self, delim: Delim) -> bool {
+        let run = self.take_leading_run();
+        self.insert_constructed(vec![Node::ghost_group(delim, run, Ghost::Open)], None);
         true
     }
 
@@ -797,6 +901,10 @@ impl MathField {
         }
         if self.selection.is_some() {
             self.drop_selection();
+            return;
+        }
+        // At the very start of an empty line: fold the line away again.
+        if self.cursor.path.is_empty() && self.cursor.offset == 0 && self.remove_empty_line() {
             return;
         }
         let at = self.cursor.offset;
@@ -926,7 +1034,8 @@ impl MathField {
         self.finish_command();
         let was_nested = self.cursor.is_nested();
         self.selection = None;
-        self.cursor = Cursor::at(Vec::new(), self.root.len());
+        let end = self.root().len();
+        self.cursor = Cursor::at(Vec::new(), end);
         if was_nested {
             EscapeOutcome::LeftStructure
         } else {
@@ -934,29 +1043,74 @@ impl MathField {
         }
     }
 
-    /// `Enter`: commit the formula and start a fresh field.
+    /// `Enter`: the next equation of the same system.
     ///
-    /// Observed: Abitti inserts the current LaTeX into the outer editor, adds a
-    /// line break, and opens a new empty formula editor. The model returns the
-    /// committed LaTeX — including an incomplete `\frac{1}{ }`, because that is
-    /// exactly what MathQuill hands over — and empties itself.
-    pub fn enter(&mut self) -> String {
+    /// Abitti's `Enter` commits the formula into an inline editor; this field *is*
+    /// the editor, so the same key does the thing a student means by it: it starts
+    /// a new line, and the lines are read together as one system.
+    pub fn new_line(&mut self) -> bool {
+        self.finish_command();
+        self.selection = None;
+        self.lines.insert(self.line + 1, Vec::new());
+        self.line += 1;
+        self.cursor = Cursor::root();
+        true
+    }
+
+    /// `Enter` in an inline editor: hand back the LaTeX and empty the field.
+    ///
+    /// Kept because it is the observed Abitti behaviour for a field embedded in a
+    /// document, and it is the honest definition of "commit". The GUI uses
+    /// [`MathField::new_line`] instead.
+    pub fn commit(&mut self) -> String {
         self.finish_command();
         let latex = self.to_latex();
         *self = MathField::new();
         latex
     }
 
+    /// Drop a line that is empty, when the cursor is on it and it is not the only
+    /// one. Used by Backspace so a system can be shortened again.
+    fn remove_empty_line(&mut self) -> bool {
+        if self.lines.len() < 2 || self.line == 0 || !self.root().is_empty() {
+            return false;
+        }
+        self.lines.remove(self.line);
+        self.line -= 1;
+        let end = self.root().len();
+        self.cursor = Cursor::at(Vec::new(), end);
+        true
+    }
+
     // ------------------------------------------------------------------- output
 
     /// Abitti-flavoured LaTeX for the whole field. See [`crate::latex`].
+    ///
+    /// One line is just that line. Several lines are a system, and Abitti's own
+    /// vocabulary for a system is the `cases` environment.
     pub fn to_latex(&self) -> String {
-        crate::latex::emit(&self.root)
+        if self.lines.len() == 1 {
+            return crate::latex::emit(&self.lines[0]);
+        }
+        let rows: Vec<String> = self.lines.iter().map(crate::latex::emit).collect();
+        format!("\\begin{{cases}} {} \\end{{cases}}", rows.join(" \\\\ "))
     }
 
-    /// Convert to a `canlab-core` expression, or explain why not.
+    /// Convert the current line to a `canlab-core` expression, or explain why not.
+    ///
+    /// A system has no single expression; use [`MathField::build_lines`] for one.
     pub fn build_expr(&self) -> Result<crate::Expr, crate::ToExprError> {
-        crate::expr::build(&self.root)
+        if self.lines.len() != 1 {
+            return Err(crate::ToExprError::System);
+        }
+        crate::expr::build(&self.lines[0])
+    }
+
+    /// Convert every line to an expression: the equations of a system.
+    ///
+    /// Fails with the first line's error, so the caller can point at it.
+    pub fn build_lines(&self) -> Result<Vec<crate::Expr>, crate::ToExprError> {
+        self.lines.iter().map(|row| crate::expr::build(row)).collect()
     }
 
     /// Convert to a `canlab-core` expression when the field is complete enough.

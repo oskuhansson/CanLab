@@ -59,6 +59,6 @@ pub mod layout;
 pub mod view;
 
 pub use layout::{
-    DisplayList, Item, Measure, Metrics, Pos2, Rect, Style, Vec2, layout_field, nearest_caret,
+    DisplayList, Item, Measure, Metrics, Pos2, Rect, Style, Vec2, layout_field, line_at, nearest_caret, nearest_in,
 };
 pub use view::{EguiMeasure, MathView};
