@@ -1,7 +1,7 @@
 //! `cas-mathview` — turning a [`cas_input::MathField`] into pixels, in two layers.
 //!
-//! * [`layout`] is **pure**: a field plus a [`Measure`](layout::Measure) becomes a
-//!   [`DisplayList`](layout::DisplayList). No window, no egui, fully testable.
+//! * [`layout`] is **pure**: a field plus a [`Measure`] becomes a
+//!   [`DisplayList`]. No window, no egui, fully testable.
 //! * [`view`] is a thin egui adapter that measures with the real font, paints the
 //!   list and turns a click into a cursor.
 //!
@@ -59,6 +59,6 @@ pub mod layout;
 pub mod view;
 
 pub use layout::{
-    layout_field, nearest_caret, DisplayList, Item, Measure, Metrics, Pos2, Rect, Style, Vec2,
+    DisplayList, Item, Measure, Metrics, Pos2, Rect, Style, Vec2, layout_field, nearest_caret,
 };
 pub use view::{EguiMeasure, MathView};

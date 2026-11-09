@@ -595,6 +595,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cas-mathview"
+version = "0.1.0"
+dependencies = [
+ "cas-input",
+ "egui",
+]
+
+[[package]]
 name = "cas-parse"
 version = "0.1.0"
 dependencies = [
