@@ -1,0 +1,9 @@
+[package]
+name = "cas-tex"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LaTeX printer for cas-core expressions"
+
+[dependencies]
+cas-core = { path = "../cas-core" }
