@@ -28,7 +28,9 @@
 //! about 2.4×10⁻⁵ from the touch. An exactly singular Jacobian is still refused.
 //! A fixed residual-noise acceptance bound does not separate the two at every
 //! scale: Newton can reach a point whose residual is rounding noise while it is
-//! still off the touching curves.
+//! still off the touching curves. A far guess on a tangent line can simply fail
+//! to converge; that is a property of the iteration, not a refusal of the
+//! tangency.
 //!
 //! # Why it is a separate module
 //!
@@ -625,10 +627,11 @@ mod tests {
     }
 
     #[test]
-    fn a_tangent_line_at_a_large_radius_is_not_reported_as_a_crossing() {
-        // The radius-10⁴ circle and its tangent y = 10⁴, from a guess well
-        // below the touch. The current tree refuses this one; the test keeps it
-        // refused.
+    fn a_far_guess_on_a_tangent_line_does_not_converge() {
+        // The guess is about 9900 units from both the radius-10⁴ circle and
+        // its tangent y = 10⁴. This is a statement about a far guess failing to
+        // converge, not about refusing a tangency; a nearby guess can return a
+        // point near the touch, as the module note says.
         let circle = |x: f64, y: f64| x * x + y * y - 1.0e8;
         let tangent = |_x: f64, y: f64| y - 1.0e4;
         let refined = refine(circle, tangent, (5.0, 95.0));
