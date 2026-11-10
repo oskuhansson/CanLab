@@ -342,7 +342,7 @@ fn plot_row(app: &mut CasApp, ui: &mut Ui) {
         });
 
         if axes_changed || range_changed {
-            app.plot();
+            crate::panels::build_curve_fitting(app, false);
         }
     });
 }
@@ -725,8 +725,8 @@ fn equal_aspect(rect: Rect, x_range: (f64, f64), y_range: (f64, f64)) -> Rect {
 /// Draw the grid, the axes and the window label into `rect`.
 fn paint_axes(painter: &egui::Painter, rect: Rect, x_range: (f64, f64), y_range: (f64, f64)) {
     let visuals = painter.ctx().global_style().visuals.clone();
-    let axis_color = visuals.widgets.noninteractive.bg_stroke.color;
-    let label_color = visuals.weak_text_color();
+    let axis_color = visuals.weak_text_color();
+    let label_color = visuals.text_color().gamma_multiply(0.8);
     let (x0, x1) = x_range;
     let (y0, y1) = y_range;
     if !(x1 > x0 && y1 > y0) {
@@ -748,7 +748,7 @@ fn paint_axes(painter: &egui::Painter, rect: Rect, x_range: (f64, f64), y_range:
     };
 
     // A subtle grid: four vertical and four horizontal divisions.
-    let grid = Stroke::new(1.0, axis_color.gamma_multiply(0.35));
+    let grid = Stroke::new(1.0, axis_color.gamma_multiply(0.55));
     for step in 1..4 {
         let t = step as f64 / 4.0;
         let x = rect.left() + rect.width() * t as f32;
@@ -757,7 +757,7 @@ fn paint_axes(painter: &egui::Painter, rect: Rect, x_range: (f64, f64), y_range:
         painter.line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], grid);
     }
 
-    let axis = Stroke::new(1.0, axis_color);
+    let axis = Stroke::new(1.4, axis_color);
     if x0 <= 0.0 && x1 >= 0.0 {
         let x = to_px(0.0, y0).x;
         painter.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], axis);
@@ -796,7 +796,7 @@ fn paint_curve(
             rect.bottom() - ((y - y0) / (y1 - y0)) as f32 * rect.height(),
         )
     };
-    let stroke = Stroke::new(1.8, color);
+    let stroke = Stroke::new(2.2, color);
     for segment in &curve.segments {
         let points: Vec<egui::Pos2> = segment
             .iter()
@@ -859,6 +859,13 @@ pub fn history(app: &CasApp, ui: &mut Ui) {
 ///   students mean by plotting an equation. A system gives one curve per line,
 ///   and several systems give all of their lines.
 pub fn build_curve(app: &mut CasApp) {
+    build_curve_fitting(app, true);
+}
+
+/// As [uild_curve], but saying whether the view should be fitted to what was
+/// drawn. Automatic plotting fits (a unit circle in a -10..10 window is tiny);
+/// changing the range by hand must not, or the two would fight.
+pub fn build_curve_fitting(app: &mut CasApp, fit: bool) {
     app.curves.clear();
     if !app.x_max.is_finite() || !app.x_min.is_finite() || app.x_max <= app.x_min {
         app.plot_note = String::from("x range is empty");
@@ -869,7 +876,7 @@ pub fn build_curve(app: &mut CasApp) {
     if let Ok(equations) = &equations
         && equations.iter().any(|(_, right)| right.is_some())
     {
-        plot_equations(app, equations);
+        plot_equations(app, equations, fit);
         return;
     }
 
@@ -906,7 +913,11 @@ pub fn build_curve(app: &mut CasApp) {
 /// irrelevant: `i² + j² = 1` with `i` on x and `j` on y plots exactly the same
 /// circle as `x² + y² = 1` does. An equation with a third free variable cannot be
 /// drawn on two axes, so it is skipped rather than guessed at.
-fn plot_equations(app: &mut CasApp, equations: &[(canlab_core::Expr, Option<canlab_core::Expr>)]) {
+fn plot_equations(
+    app: &mut CasApp,
+    equations: &[(canlab_core::Expr, Option<canlab_core::Expr>)],
+    fit: bool,
+) {
     let Some(horizontal) = app.x_axis else {
         app.plot_note = String::from("no variables to plot");
         return;
@@ -968,6 +979,37 @@ fn plot_equations(app: &mut CasApp, equations: &[(canlab_core::Expr, Option<canl
     }
 
     app.y_range = (y_min, y_max);
+    // Fit the view to what was drawn. A unit circle in a -10..10 window is a
+    // tenth of the width, which reads as "the graph is tiny" however large the
+    // panel is. The window is only ever *shrunk* to the curve, never grown, and
+    // never below a sensible minimum.
+    if fit && !app.curves.is_empty() {
+        let mut low_x = f64::MAX;
+        let mut high_x = f64::MIN;
+        let mut low_y = f64::MAX;
+        let mut high_y = f64::MIN;
+        for curve in &app.curves {
+            for segment in &curve.segments {
+                for point in segment {
+                    low_x = low_x.min(point[0]);
+                    high_x = high_x.max(point[0]);
+                    low_y = low_y.min(point[1]);
+                    high_y = high_y.max(point[1]);
+                }
+            }
+        }
+        if low_x < high_x && low_y < high_y {
+            let pad = |low: f64, high: f64| {
+                let margin = ((high - low) * 0.12).max(0.5);
+                (low - margin, high + margin)
+            };
+            let (low_x, high_x) = pad(low_x, high_x);
+            let (low_y, high_y) = pad(low_y, high_y);
+            app.x_min = low_x;
+            app.x_max = high_x;
+            app.y_range = (low_y, high_y);
+        }
+    }
     app.plot_note = match (plotted, skipped) {
         (0, _) => format!("no curve found in this window ({axes_label})"),
         (n, 0) => format!("{n} equation curve(s), {axes_label}"),
