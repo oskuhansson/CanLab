@@ -11,6 +11,11 @@
 //! where both are zero — quadratically, so half a dozen iterations is enough even
 //! from a guess a grid cell away.
 //!
+//! Tolerances here are relative to the problem's scale: residuals to the starting
+//! values, steps and duplicate distances to the coordinates, and a Jacobian to the
+//! products that form its determinant. Multiplying both equations by the same
+//! constant therefore leaves the crossing unchanged.
+//!
 //! # Why it is a separate module
 //!
 //! Nothing here knows about egui, curves or colours: two closures, a pair of
@@ -41,6 +46,12 @@ const STEP_EPSILON: f64 = 1.0e-13;
 /// of order 10¹² near its edge, where one ulp is about 2e-4: an absolute 10⁻⁹
 /// asks for more precision than f64 has at that magnitude.
 const RESIDUAL: f64 = 1.0e-9;
+/// A Jacobian is singular when its determinant is negligible compared with the
+/// two products that form it. An absolute cutoff is a units error: multiplying
+/// both functions by 10⁻⁸ scales the determinant by 10⁻¹⁶, so a real crossing
+/// would be called a tangency. The sum of the product magnitudes has the same
+/// units as the determinant, which makes this test scale-invariant.
+const SINGULAR_EPSILON: f64 = 1.0e-12;
 /// Roots closer than this fraction of their coordinates are the same root. At
 /// x = 10⁶ the duplicate radius is 10⁻³; at x = 1 it stays 10⁻⁹. Scaling by the
 /// coordinates is what lets one root be merged at both scales.
@@ -66,15 +77,21 @@ where
     // The tolerance has to follow the problem's own scale. On a unit circle a
     // residual of 10⁻⁹ is precise; on a circle of radius 10⁶ the function
     // subtracts x² + y² from 10¹², so values near the edge have a resolution
-    // around 2e-4 and a fixed 10⁻⁹ can never be met. Scaling by the starting
-    // values keeps both cases meaningful without pretending to more precision
-    // than f64 has.
+    // around 2e-4 and a fixed 10⁻⁹ can never be met. The starting values set
+    // that scale without an absolute floor: a floor would break scale
+    // invariance, so multiplying both equations by 10⁻⁸ would let a point far
+    // from the root pass on an unscaled 10⁻⁹ residual.
     let f_start = f(x, y);
     let g_start = g(x, y);
     if !f_start.is_finite() || !g_start.is_finite() {
         return None;
     }
-    let residual_tolerance = RESIDUAL * 1.0_f64.max(f_start.abs()).max(g_start.abs());
+    let residual_scale = f_start.abs().max(g_start.abs());
+    if residual_scale == 0.0 {
+        // Both equations are exactly zero here, so this is a root already.
+        return Some(Intersection { x, y });
+    }
+    let residual_tolerance = RESIDUAL * residual_scale;
 
     for _ in 0..MAX_ITERATIONS {
         let fx = f(x, y);
@@ -94,8 +111,17 @@ where
         let dgx = (g(x + h, y) - g(x - h, y)) / (2.0 * h);
         let dgy = (g(x, y + h) - g(x, y - h)) / (2.0 * h);
 
-        let determinant = dxx * dgy - dxy * dgx;
-        if !determinant.is_finite() || determinant.abs() < 1.0e-14 {
+        let first_product = dxx * dgy;
+        let second_product = dxy * dgx;
+        let determinant = first_product - second_product;
+        let product_scale = first_product.abs() + second_product.abs();
+        // Compare the determinant with the terms it came from, not with an
+        // absolute number: the determinant has those terms' units. A zero
+        // Jacobian has no scale at all and is the degenerate singular case.
+        if !determinant.is_finite()
+            || product_scale == 0.0
+            || determinant.abs() <= SINGULAR_EPSILON * product_scale
+        {
             // Parallel tangents: a tangency, a cusp, or no crossing at all.
             return None;
         }
@@ -169,6 +195,18 @@ fn cluster(points: &[[f64; 2]], tolerance: f64) -> Vec<(f64, f64)> {
     merged
 }
 
+/// Whether two refined points are the same root at their coordinate scale.
+fn same_root(first: &Intersection, second: &Intersection) -> bool {
+    // The same root can come from two adjacent rings, and the two refinements
+    // need only agree to a relative precision. Scale the radius by the
+    // coordinates: 10⁻⁹ at x = 1 and 10⁻³ at x = 10⁶, so the test means the same
+    // thing at both scales. An absolute 10⁻⁶ split one root at small scale and
+    // was too fine at large scale.
+    let x_tolerance = DUPLICATE_EPSILON * 1.0_f64.max(first.x.abs()).max(second.x.abs());
+    let y_tolerance = DUPLICATE_EPSILON * 1.0_f64.max(first.y.abs()).max(second.y.abs());
+    (first.x - second.x).abs() <= x_tolerance && (first.y - second.y).abs() <= y_tolerance
+}
+
 /// Locate the intersections of two curves, given samples *near* them.
 ///
 /// `near` is the tracer's near-zero level set — the hint. Each cluster of it is
@@ -185,18 +223,7 @@ where
         let Some(point) = refine(&f, &g, guess) else {
             continue;
         };
-        let duplicate = found.iter().any(|existing| {
-            // The same root can come from two adjacent rings, and the two
-            // refinements need only agree to a relative precision. Scale the
-            // radius by the coordinates: 10⁻⁹ at x = 1 and 10⁻³ at x = 10⁶, so
-            // the test means the same thing at both scales. An absolute 10⁻⁶
-            // split one root at small scale and was too fine at large scale.
-            let x_tolerance = DUPLICATE_EPSILON * 1.0_f64.max(existing.x.abs()).max(point.x.abs());
-            let y_tolerance = DUPLICATE_EPSILON * 1.0_f64.max(existing.y.abs()).max(point.y.abs());
-            (existing.x - point.x).abs() <= x_tolerance
-                && (existing.y - point.y).abs() <= y_tolerance
-        });
-        if !duplicate {
+        if !found.iter().any(|existing| same_root(existing, &point)) {
             found.push(point);
         }
     }
@@ -221,6 +248,35 @@ mod tests {
 
         let point = refine(circle, line, (-0.6, -0.55)).expect("converges");
         assert!((point.x + root).abs() < 1e-9, "{point:?}");
+    }
+
+    #[test]
+    fn scaling_both_functions_leaves_the_crossing_where_it_was() {
+        let circle = |x: f64, y: f64| x * x + y * y - 1.0;
+        let line = |x: f64, y: f64| y - x;
+        let guess = (0.6, 0.55);
+        let expected = refine(circle, line, guess).expect("unscaled converges");
+
+        // Multiplying both equations by the same constant does not move their
+        // zero set. It scales the determinant by the square of the constant, so
+        // the scaled copies are where an absolute singularity cutoff fails: at
+        // 10⁻⁸ the determinant is around 10⁻¹⁶ even though the crossing is real.
+        for scale in [1.0e-8, 1.0e8] {
+            let point = refine(
+                |x, y| scale * circle(x, y),
+                |x, y| scale * line(x, y),
+                guess,
+            )
+            .unwrap_or_else(|| panic!("scale {scale:e}"));
+            assert!(
+                (point.x - expected.x).abs() <= 1.0e-9 * expected.x.abs(),
+                "scale {scale:e}: {point:?} vs {expected:?}"
+            );
+            assert!(
+                (point.y - expected.y).abs() <= 1.0e-9 * expected.y.abs(),
+                "scale {scale:e}: {point:?} vs {expected:?}"
+            );
+        }
     }
 
     #[test]
@@ -259,6 +315,15 @@ mod tests {
         let circle = |x: f64, y: f64| x * x + y * y - 1.0;
         let tangent = |_x: f64, _y: f64| 0.0;
         let refined = refine(circle, tangent, (0.05, 0.95));
+        assert!(refined.is_none(), "got {refined:?}");
+    }
+
+    #[test]
+    fn a_zero_jacobian_is_still_singular() {
+        // Both functions are non-zero constants: every derivative is zero and
+        // the two products are both zero. There is no scale to compare with, so
+        // this is the degenerate singular case rather than a relative pass.
+        let refined = refine(|_x: f64, _y: f64| 1.0, |_x: f64, _y: f64| 2.0, (0.0, 0.0));
         assert!(refined.is_none(), "got {refined:?}");
     }
 
@@ -360,13 +425,34 @@ mod tests {
     #[test]
     fn duplicate_roots_a_million_units_out_are_judged_on_a_relative_distance() {
         // Two hints half a thousandth either side of (10⁶, 10⁶), so 10⁻³
-        // apart. The functions are scaled down so both already satisfy the
-        // residual tolerance and `refine` returns them unchanged; that isolates
-        // the duplicate radius. It is 10⁻⁹ of the coordinate, or 10⁻³ here, so
-        // the pair is one root. The old absolute 10⁻⁶ called them two.
+        // apart. The duplicate radius is 10⁻⁹ of the coordinate, or 10⁻³ here,
+        // so the pair is one root. The old absolute 10⁻⁶ called them two.
         let root = 1.0e6;
-        let vertical = |_x: f64, y: f64| (y - root) * 1.0e-6;
-        let horizontal = |x: f64, _y: f64| (x - root) * 1.0e-6;
+        let first = Intersection {
+            x: root - 5.0e-4,
+            y: root,
+        };
+        let second = Intersection {
+            x: root + 5.0e-4,
+            y: root,
+        };
+        assert!(same_root(&first, &second), "{first:?} {second:?}");
+
+        // Twice that distance is no longer the same root.
+        let farther = Intersection {
+            x: root + 1.5e-3,
+            y: root,
+        };
+        assert!(!same_root(&first, &farther), "{first:?} {farther:?}");
+    }
+
+    #[test]
+    fn locate_still_reports_one_point_when_two_hints_refine_the_same_root() {
+        // Two hints a thousandth apart at 10⁶. Both refine to the same
+        // crossing, so the result is one point rather than two.
+        let root = 1.0e6;
+        let vertical = |_x: f64, y: f64| y - root;
+        let horizontal = |x: f64, _y: f64| x - root;
         let near = vec![vec![[root - 5.0e-4, root]], vec![[root + 5.0e-4, root]]];
         let found = locate(vertical, horizontal, &near, 1.0e-4);
         assert_eq!(found.len(), 1, "{found:?}");
