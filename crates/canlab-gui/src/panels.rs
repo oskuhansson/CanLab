@@ -949,6 +949,27 @@ fn plot_equations(
         y_max,
     };
 
+    // Any variable that is not on an axis is a *parameter*. With no value it
+    // cannot be sampled, so it takes 1.0 and the caption says so - better than
+    // silently drawing nothing, and the seed of a real parameter control.
+    let mut parameters: Vec<canlab_core::SymbolId> = Vec::new();
+    for (left, right) in equations {
+        let expression = match right {
+            Some(right) => canlab_core::add(vec![
+                left.clone(),
+                canlab_core::mul(vec![canlab_core::int(-1), right.clone()]),
+            ]),
+            None => left.clone(),
+        };
+        for variable in canlab_solver::variables_of(&expression) {
+            if !variables.contains(&variable) && !parameters.contains(&variable) {
+                parameters.push(variable);
+            }
+        }
+    }
+    let mut sampling = variables.clone();
+    sampling.extend(parameters.iter().copied());
+
     let mut plotted = 0;
     let mut skipped = 0;
     for (left, right) in equations {
@@ -960,15 +981,29 @@ fn plot_equations(
             ]),
             None => left.clone(),
         };
-        let Some(program) = canlab_core::Program::compile(&expression, &variables) else {
+        let Some(program) = canlab_core::Program::compile(&expression, &sampling) else {
             skipped += 1;
             continue;
         };
         let curve = if variables.len() == 2 {
-            sample_implicit(|x, y| program.eval(&[x, y]), &options)
+            sample_implicit(
+                |x, y| {
+                    let mut args = vec![x, y];
+                    args.resize(sampling.len(), 1.0);
+                    program.eval(&args)
+                },
+                &options,
+            )
         } else {
             // One variable: the zero set is a set of vertical lines.
-            sample_implicit(|x, _| program.eval(&[x]), &options)
+            sample_implicit(
+                |x, _| {
+                    let mut args = vec![x];
+                    args.resize(sampling.len(), 1.0);
+                    program.eval(&args)
+                },
+                &options,
+            )
         };
         if curve.segments.is_empty() {
             skipped += 1;
@@ -1012,7 +1047,17 @@ fn plot_equations(
     }
     app.plot_note = match (plotted, skipped) {
         (0, _) => format!("no curve found in this window ({axes_label})"),
-        (n, 0) => format!("{n} equation curve(s), {axes_label}"),
+        (n, 0) if parameters.is_empty() => format!("{n} equation curve(s), {axes_label}"),
+        (n, 0) => {
+            let assumed: Vec<String> = parameters
+                .iter()
+                .map(|parameter| parameter.as_str().to_string())
+                .collect();
+            format!(
+                "{n} equation curve(s), {axes_label}; {} = 1 assumed",
+                assumed.join(", ")
+            )
+        }
         (n, s) => format!("{n} equation curve(s), {s} skipped, {axes_label}"),
     };
 }

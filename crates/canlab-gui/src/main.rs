@@ -938,16 +938,16 @@ mod tests {
     }
 
     #[test]
-    fn an_equation_with_an_unselected_third_variable_is_skipped() {
-        // Three variables cannot live on two axes; the plot says so instead of
-        // drawing something arbitrary.
+    fn an_equation_with_extra_variables_plots_them_as_parameters() {
+        // `a` and `b` are not on an axis, so they are parameters: sampled at 1.0
+        // and *said* to be, rather than skipped as if nothing could be drawn.
         let mut app = CasApp::new();
         app.field = MathField::from_latex("a*x+b*y=1").expect("an equation in four letters");
         app.recompute();
         crate::panels::build_curve(&mut app);
-        assert!(app.curves.is_empty());
+        assert_eq!(app.curves.len(), 1, "plot note: {}", app.plot_note);
         assert!(
-            app.plot_note.contains("skipped") || app.plot_note.contains("no curve"),
+            app.plot_note.contains("assumed"),
             "plot note: {}",
             app.plot_note
         );
