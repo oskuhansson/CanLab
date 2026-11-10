@@ -648,7 +648,15 @@ pub fn open() -> Result<SympyWorker, String> {
 /// the worker, which imports SymPy, and round-trips a request through the real
 /// protocol. `canlab solver` prints the result.
 pub fn probe() -> Result<String, String> {
-    let description = discovery().describe();
+    // Not `describe()`, which tells the caller to run this command.
+    let description = match discovery() {
+        Discovery::Ready { interpreter, script } => format!(
+            "Python and worker.py found: `{} {}`",
+            interpreter.display(),
+            script.display()
+        ),
+        other => other.describe(),
+    };
     // `open` already round-trips a request, so reaching this line means the
     // worker imported SymPy and answered.
     let worker = open()?;

@@ -276,3 +276,31 @@ fn a_blank_line_does_not_break_reading() {
     assert_eq!(lines.map(|lines| lines.len()), Ok(1));
 }
 
+#[test]
+fn a_good_definition_behind_a_broken_one_of_the_same_name_is_used() {
+    // The broken line is reported, and the second `f` still defines `f`; `g` must
+    // therefore be built, not skipped because the first candidate for `f` failed.
+    let field = document(&["f(x) = x+", "f(x) = x^2", "g(x) = f(x)+1", "g(2)"]);
+    let harvest = field.harvest();
+    assert!(harvest.definitions.get("f").is_some(), "{:?}", harvest.problems);
+    assert!(harvest.definitions.get("g").is_some(), "{:?}", harvest.problems);
+    let lines = field.build_lines_with(&harvest.definitions).expect("readable");
+    assert_eq!(lines[0].to_string(), "5");
+}
+
+#[test]
+fn a_derivative_call_is_a_dependency_too() {
+    // `calls()` steps over the primes the reader resolves, so the order of these
+    // two lines must not matter.
+    for lines in [
+        ["a(x) = b'(x)", "b(x) = x^2", "a(3)"],
+        ["b(x) = x^2", "a(x) = b'(x)", "a(3)"],
+    ] {
+        let field = document(&lines);
+        let harvest = field.harvest();
+        assert!(harvest.problems.is_empty(), "{:?}", harvest.problems);
+        let read = field.build_lines_with(&harvest.definitions).expect("readable");
+        assert_eq!(read[0].to_string(), "6", "{lines:?}");
+    }
+}
+

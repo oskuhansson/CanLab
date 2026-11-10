@@ -11,6 +11,13 @@
 //!
 //! Recursion is refused when the definition is made: a name may not mention
 //! itself. This is a calculator, not a programming language.
+//!
+//! A *bare* name is not a call, and the two rules about it are deliberately
+//! different: a body that mentions its own name (`f(x) = f + 1`) is refused as
+//! recursion, because that is certainly a mistake; a body that mentions *another*
+//! name (`f(x) = g + 1`) leaves `g` a variable, because that is an ordinary
+//! parameter. Applying a name is what makes it a dependency — `f(x) = g(x) + 1`
+//! waits for `g`, and a name applied with brackets is never read as a factor.
 
 use std::collections::BTreeMap;
 
@@ -232,36 +239,54 @@ pub fn harvest(candidates: &[Candidate]) -> (Definitions, Vec<(usize, DefineErro
         visit(index, &dependencies, &mut state, &mut order);
     }
 
-    // A definition that could not be made leaves its dependents unbuildable. They
-    // must be *skipped*, not built against a table that lacks the name: a missing
-    // name reads as a product, so the dependent would be quietly wrong rather
-    // than absent.
-    let mut failed = vec![false; candidates.len()];
-    for index in order {
-        let candidate = &candidates[index];
-        let broken = dependencies[index].iter().any(|dependency| failed[*dependency]);
-        if broken {
-            problems.push((
-                index,
-                DefineError::Unreadable(String::from(
-                    "it uses a definition that cannot be made",
-                )),
-            ));
-            failed[index] = true;
-            continue;
+    // A definition can only be built once every name it applies is in the table.
+    // The test is by *name*, not by the candidate the dependency edge pointed at:
+    // a name may be defined by a later candidate (`f(x) = x+` then `f(x) = x²`),
+    // and the good one must not be rejected because the first was broken.
+    // Anything still unbuildable after the rest have been tried is reported, never
+    // built against a missing name — which would read the name as a product and be
+    // quietly wrong.
+    let mut pending: Vec<usize> = order;
+    loop {
+        if pending.is_empty() {
+            break;
         }
-        let body = match crate::expr::build_with(&candidate.body, &definitions) {
-            Ok(body) => body,
-            Err(error) => {
-                problems.push((index, DefineError::Unreadable(error.to_string())));
-                failed[index] = true;
+        let mut deferred: Vec<usize> = Vec::new();
+        let mut settled = false;
+        for index in pending {
+            let candidate = &candidates[index];
+            let missing = dependencies[index]
+                .iter()
+                .any(|dependency| definitions.get(&candidates[*dependency].name).is_none());
+            if missing {
+                deferred.push(index);
                 continue;
             }
-        };
-        if let Err(error) = definitions.define(&candidate.name, candidate.params.clone(), body) {
-            problems.push((index, error));
-            failed[index] = true;
+            settled = true;
+            let body = match crate::expr::build_with(&candidate.body, &definitions) {
+                Ok(body) => body,
+                Err(error) => {
+                    problems.push((index, DefineError::Unreadable(error.to_string())));
+                    continue;
+                }
+            };
+            if let Err(error) = definitions.define(&candidate.name, candidate.params.clone(), body) {
+                problems.push((index, error));
+            }
         }
+        // Nothing was settled, so the next pass would defer everything again.
+        if !settled {
+            for index in deferred {
+                problems.push((
+                    index,
+                    DefineError::Unreadable(String::from(
+                        "it uses a definition that cannot be made",
+                    )),
+                ));
+            }
+            break;
+        }
+        pending = deferred;
     }
 
     // Whatever the ordering could not place: a cycle, or something downstream of
@@ -351,11 +376,19 @@ fn visit(
 /// somewhere in the document.
 ///
 /// Spaces between the name and the bracket are layout, not algebra: `f (x)` is a
-/// call, so they are stepped over rather than breaking the pattern.
+/// call. So are primes — `f'(x)` is a call to `f`'s derivative, which the reader
+/// resolves — so a run of nothing but primes is stepped over too. Missing either
+/// would make the dependency order depend on how the line was typed.
 fn calls(body: &Row, names: &[&str]) -> Vec<usize> {
+    let is_prime_run = |node: &Node| {
+        matches!(node, Node::Text(text)
+            if !text.is_empty()
+                && text.chars().all(|c| c == '\'' || c == '\u{2032}'))
+    };
     let significant: Vec<&Node> = body
         .iter()
         .filter(|node| !matches!(node, Node::Text(text) if text.trim().is_empty()))
+        .filter(|node| !is_prime_run(node))
         .collect();
     let mut out: Vec<usize> = Vec::new();
     for window in significant.windows(2) {
