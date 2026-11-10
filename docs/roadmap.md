@@ -38,8 +38,8 @@ because there is no Python here. That is in the list below.
 
 ## What is left
 
-Six things are worth naming. The order is roughly the order they hurt a user, not
-the order they are easiest to fix.
+Seven things are worth naming. The order is roughly the order they hurt a user,
+not the order they are easiest to fix.
 
 | # | Item | Hours | What is wrong, and what done means |
 |---|---|---|---|
@@ -49,6 +49,7 @@ the order they are easiest to fix.
 | 4 | Window resize on the wgpu build | 12 | The window is created at 1180×760; resizing it on this machine leaves the surface wrong. The `glow` build is for screenshots, not a shipping answer. Done means a resize is a surface reconfigure that neither blanks nor stretches the frame. This is the least certain estimate here. |
 | 5 | SymPy, actually run | 4 | Discovery and the protocol are tested in memory, but with no Python on this machine the worker has never imported SymPy here. The GUI probes before it claims a backend, so the first real check is `canlab solver --probe`. Done means that passes on a machine with Python and the GUI reports SymPy; whatever the first real request turns up is extra. |
 | 6 | A plot-level test for a broken definition | 3 | The definition reader tests what it refuses, but no test builds a document whose definition is fine until the plot tries to compile or sample it. Done means a test asserts the plot's note and that the rest of the document still draws. |
+| 7 | A tangency is reported as a nearby meeting point | 6 | Newton finds crossings, not touches. Near a tangency the Jacobian is invertible and the first-order distance is optimistic, so the unit circle and `y = 1` from `(0.05, 0.95)` return a point about 2.4e-5 from the touch. It is sub-pixel, but the hover coordinate is not exact. A residual-noise bound was tried and cannot separate this from the exact root of a large-radius circle at every scale — see the `# Tangencies` section of `canlab-plot/src/intersect.rs`. Done means a second-order test (curvature, or a bracket on the parameter) that refuses a touch without refusing a shallow crossing. |
 
 ## Known sharp edges
 
