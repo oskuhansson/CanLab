@@ -6,7 +6,7 @@
 
 use canlab_mathview::{DisplayList, MathView, Style};
 use canlab_plot::implicit::{ImplicitOptions, sample_implicit};
-use canlab_plot::{Curve, SampleOptions, sample};
+use canlab_plot::{Curve, Intersection, SampleOptions, sample};
 use canlab_tex::to_latex;
 use eframe::egui::{
     self, Align, Align2, Button, Color32, FontId, Label, Layout, Rect, RichText,
@@ -1453,6 +1453,19 @@ fn fit_to_intersections(app: &mut CasApp) {
     app.y_range = (centre_y - half, centre_y + half);
 }
 
+/// True when two refined crossings are the same point.
+///
+/// The tolerance is relative because a coordinate can be arbitrarily large or
+/// small: a constant 1e-6 is looser than the plot's own `1e-9 * max(1, |x|)`
+/// refinement near zero and far tighter than it near 1e6. Scaling by the larger
+/// coordinate keeps this merge rule consistent with `locate` at both ends.
+fn same_point(a: &Intersection, b: &Intersection) -> bool {
+    let close = |left: f64, right: f64| {
+        (left - right).abs() <= 1.0e-9 * left.abs().max(right.abs()).max(1.0)
+    };
+    close(a.x, b.x) && close(a.y, b.y)
+}
+
 /// Trace every equation in the document as an implicit curve.
 ///
 /// The two axes come from the document's variable list, so the letters are
@@ -1582,10 +1595,10 @@ fn plot_equations(
                     tolerance,
                 );
                 for point in found {
-                    let duplicate = app.intersections.iter().any(|existing| {
-                        (existing.x - point.x).abs() < 1.0e-6
-                            && (existing.y - point.y).abs() < 1.0e-6
-                    });
+                    let duplicate = app
+                        .intersections
+                        .iter()
+                        .any(|existing| same_point(existing, &point));
                     if !duplicate {
                         app.intersections.push(point);
                     }
@@ -1742,6 +1755,60 @@ mod tests {
         app.y_axis = Some(p);
         assert_eq!(axis_options(&app, Axis::Horizontal), vec![q]);
         assert_eq!(axis_options(&app, Axis::Vertical), vec![p]);
+    }
+
+    #[test]
+    fn crossings_far_from_the_origin_are_not_merged() {
+        // The relative tolerance at 1e6 is about 1e-3; these two sit just
+        // outside it, so the large-coordinate branch must not fall back to a
+        // constant.
+        let a = Intersection {
+            x: 1.0e6,
+            y: 1.0e6,
+        };
+        let b = Intersection {
+            x: 1.0e6 + 1.0e-3,
+            y: 1.0e6 + 1.0e-3,
+        };
+        assert!(!same_point(&a, &b));
+    }
+
+    #[test]
+    fn crossings_within_the_relative_tolerance_are_one_point() {
+        // At 0.5 the rule is 1e-9, so a 1e-12 shift is the same crossing.
+        let a = Intersection { x: 0.5, y: 0.5 };
+        let b = Intersection {
+            x: 0.5 + 1.0e-12,
+            y: 0.5,
+        };
+        assert!(same_point(&a, &b));
+    }
+
+    #[test]
+    fn crossings_far_out_that_share_a_coordinate_are_one_point() {
+        // Half a thousandth at 1e6 is inside the relative tolerance; the old
+        // absolute 1e-6 kept this as a second point for the same crossing.
+        let a = Intersection {
+            x: 1.0e6,
+            y: 1.0e6,
+        };
+        let b = Intersection {
+            x: 1.0e6 + 5.0e-4,
+            y: 1.0e6 + 5.0e-4,
+        };
+        assert!(same_point(&a, &b));
+    }
+
+    #[test]
+    fn crossings_below_one_use_the_finer_relative_rule() {
+        // At 0.5 the tolerance is 5e-10, so 1e-7 apart is two crossings. An
+        // absolute 1e-6 would have merged them.
+        let a = Intersection { x: 0.5, y: 0.5 };
+        let b = Intersection {
+            x: 0.5 + 1.0e-7,
+            y: 0.5,
+        };
+        assert!(!same_point(&a, &b));
     }
 
     #[test]
