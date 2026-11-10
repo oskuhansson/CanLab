@@ -268,9 +268,10 @@ pub(crate) fn press_enter(app: &mut CasApp, command: bool) {
 ///
 /// `MathView` deliberately owns clicks only. `Event::Text` is the key here:
 /// `type_str` already implements `/`, `*`, `^`, `_`, `\name` commands and the
-/// Greek names, so this function must not special-case printable keys. Enter is
-/// swallowed rather than committed because a dock panel has nowhere to put a
-/// new line.
+/// Greek names, so this function must not special-case printable keys. Enter
+/// goes through [`press_enter`], which starts the next line of the system (or a
+/// whole new system, after a definition or with Ctrl). Every edit is
+/// checkpointed before it is applied, so it can be taken back.
 ///
 /// The events are **taken out of the queue**, not merely read: egui also feeds
 /// them to its focus system, so leaving an arrow key in place moved focus to the
@@ -361,11 +362,13 @@ fn handle_field_keys(app: &mut CasApp, ui: &mut Ui, response: &egui::Response) {
                 egui::Key::ArrowRight => changed |= app.field.move_right(),
                 egui::Key::ArrowUp => changed |= app.field.move_up(),
                 egui::Key::ArrowDown => changed |= app.field.move_down(),
-                // Enter means three things, in this order:
+                // Enter means four things, in this order:
                 // 1. a half-typed `\name` is committed (`\bar` + Enter is the
                 //    accent, not a new line);
                 // 2. Ctrl+Enter starts a new, separate system;
-                // 3. otherwise the next equation of this system.
+                // 3. after a definition, a new system too: a definition is not
+                //    one of the equations of a system;
+                // 4. otherwise the next equation of this system.
                 egui::Key::Enter => {
                     // A structural change is always its own undo step.
                     app.note_edit(true);
@@ -390,7 +393,9 @@ fn solver_row(app: &mut CasApp, ui: &mut Ui) {
     ui.horizontal_wrapped(|ui| {
         let size = vec2(92.0, 30.0);
         let expression = app.expr.is_some();
-        let equation = !app.equations.is_empty();
+        // A half-typed field has no document behind it: its equations were just
+        // cleared, so Solve is disabled for the same reason it would send nothing.
+        let equation = !app.equations.is_empty() && !app.is_typing();
         if ui
             .add_enabled(expression, Button::new("Simplify").min_size(size))
             .on_hover_text("Simplify the expression above")
@@ -418,6 +423,16 @@ fn solver_row(app: &mut CasApp, ui: &mut Ui) {
     });
 }
 
+/// The session changed from the plot panel: a view gesture, an axis or a
+/// parameter. Remember it, and redraw at the chosen setting.
+///
+/// None of these are document edits, but all of them are saved in `session()`,
+/// so each one has to ask for a save or it is lost on quit.
+pub(crate) fn plot_changed(app: &mut CasApp) {
+    app.mark_dirty();
+    build_curve_fitting(app, false);
+}
+
 /// The plot's own controls, in the plot panel: the button, which variables go on
 /// which axis, and the window it draws into. They belong together.
 fn plot_row(app: &mut CasApp, ui: &mut Ui) {
@@ -443,7 +458,7 @@ fn plot_row(app: &mut CasApp, ui: &mut Ui) {
             app.refresh_parameters();
         }
         if axes_changed || range_changed {
-            crate::panels::build_curve_fitting(app, false);
+            plot_changed(app);
         }
     });
 }
@@ -452,6 +467,23 @@ fn plot_row(app: &mut CasApp, ui: &mut Ui) {
 enum Axis {
     Horizontal,
     Vertical,
+}
+
+/// The choices one axis picker offers.
+///
+/// The variable on the *other* axis is left out: offering it let both axes be the
+/// same variable, and `q² + q² = 1` then sampled `q` twice and drew two vertical
+/// lines instead of a curve.
+fn axis_options(app: &CasApp, axis: Axis) -> Vec<canlab_core::SymbolId> {
+    let other = match axis {
+        Axis::Horizontal => app.y_axis,
+        Axis::Vertical => app.x_axis,
+    };
+    app.free_vars
+        .iter()
+        .copied()
+        .filter(|variable| Some(*variable) != other)
+        .collect()
 }
 
 /// One "which variable is this axis?" selector.
@@ -471,7 +503,7 @@ fn axis_picker(app: &mut CasApp, ui: &mut Ui, label: &str, axis: Axis) -> bool {
         .selected_text(RichText::new(selected).monospace().size(12.0))
         .width(52.0)
         .show_ui(ui, |ui| {
-            for variable in app.free_vars.clone() {
+            for variable in axis_options(app, axis) {
                 let is_current = current == Some(variable);
                 if ui
                     .selectable_label(is_current, variable.as_str().to_string())
@@ -876,7 +908,7 @@ pub fn plot(app: &mut CasApp, ui: &mut Ui) {
     if moved {
         // Not fitted: the user has chosen this window, and refitting would fight
         // the gesture that just set it.
-        build_curve_fitting(app, false);
+        plot_changed(app);
         ui.ctx().request_repaint();
     }
 
@@ -1031,7 +1063,7 @@ fn parameter_row(app: &mut CasApp, ui: &mut Ui) {
         }
     });
     if changed {
-        build_curve_fitting(app, false);
+        plot_changed(app);
     }
 }
 
@@ -1346,7 +1378,10 @@ fn plot_definitions(app: &mut CasApp) -> Vec<String> {
 /// and never below a minimum: a curve that is a single point would otherwise ask
 /// for a zero-width window.
 fn fit_to_curves(app: &mut CasApp, limit: usize) {
-    if app.curves.is_empty() {
+    // No equation curve was produced. `plot_definitions` may still have added a
+    // definition curve to the same list, and fitting to that is what the comment
+    // on `plot_equations` promises not to do.
+    if limit == 0 || app.curves.is_empty() {
         return;
     }
     let mut low_x = f64::MAX;
@@ -1670,6 +1705,44 @@ fn vertical_extent(curve: &Curve) -> Option<(f64, f64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fitting_to_no_equation_curves_leaves_the_window_alone() {
+        // `y = x²` runs off a plot of the unit circle, so a definition curve
+        // must not decide the window when no equation produced one.
+        let mut app = crate::CasApp::new();
+        app.x_min = -3.0;
+        app.x_max = 3.0;
+        app.y_range = (-2.0, 2.0);
+        app.curves = vec![Curve {
+            segments: vec![vec![[0.0, 0.0], [1.0, 1.0]]],
+        }];
+        fit_to_curves(&mut app, 0);
+        assert_eq!((app.x_min, app.x_max), (-3.0, 3.0));
+        assert_eq!(app.y_range, (-2.0, 2.0));
+    }
+
+    #[test]
+    fn an_axis_picker_does_not_offer_the_other_axis() {
+        // Offering it let both combos show the same variable, which sampled it
+        // twice: `q² + q² = 1` drew two vertical lines.
+        let mut app = crate::CasApp::new();
+        app.field = canlab_input::MathField::from_latex("p^2+q^2=1").expect("a circle");
+        app.recompute();
+        let p = canlab_core::SymbolId::intern("p");
+        let q = canlab_core::SymbolId::intern("q");
+        app.x_axis = Some(p);
+        app.y_axis = Some(q);
+        assert_eq!(axis_options(&app, Axis::Horizontal), vec![p], "q is vertical");
+        assert_eq!(axis_options(&app, Axis::Vertical), vec![q], "p is horizontal");
+
+        // The variable already on this axis stays listed: swapping the two axes
+        // is a normal thing to want.
+        app.x_axis = Some(q);
+        app.y_axis = Some(p);
+        assert_eq!(axis_options(&app, Axis::Horizontal), vec![q]);
+        assert_eq!(axis_options(&app, Axis::Vertical), vec![p]);
+    }
 
     #[test]
     fn the_plot_keeps_one_scale_for_both_axes() {

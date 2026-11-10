@@ -145,16 +145,16 @@ impl Session {
 
         let mut current: Option<Vec<String>> = None;
         for line in lines {
-            if let Some(latex) = line.strip_prefix("line ") {
+            // `line` takes the rest of the line verbatim, after at most one
+            // separating space. Splitting on whitespace or trimming would eat a
+            // space that is part of the LaTeX, so `line  x+1` (a line that starts
+            // with a space) must come back as " x+1".
+            if let Some(rest) = line.strip_prefix("line")
+                && (rest.is_empty() || rest.starts_with(' '))
+            {
+                let latex = rest.strip_prefix(' ').unwrap_or(rest);
                 match current.as_mut() {
                     Some(system) => system.push(latex.to_string()),
-                    None => return Err(String::from("a line before the first system")),
-                }
-                continue;
-            }
-            if line.trim() == "line" {
-                match current.as_mut() {
-                    Some(system) => system.push(String::new()),
                     None => return Err(String::from("a line before the first system")),
                 }
                 continue;
@@ -350,6 +350,19 @@ mod tests {
     fn an_empty_line_is_a_line() {
         let read = Session::from_text(&sample().to_text()).expect("readable");
         assert_eq!(read.document[0][1], "");
+    }
+
+    #[test]
+    fn a_line_that_starts_with_a_space_round_trips() {
+        // `to_text` writes `line ` before the LaTeX, so a line that starts with a
+        // space is written as `line  x+1`; the extra space belongs to the line.
+        let mut session = sample();
+        session.document[0][1] = String::from(" x+1");
+        let text = session.to_text();
+        assert!(text.contains("line  x+1"), "written verbatim: {text:?}");
+        let read = Session::from_text(&text).expect("readable");
+        assert_eq!(read.document[0][1], " x+1");
+        assert_eq!(read, session);
     }
 
     #[test]

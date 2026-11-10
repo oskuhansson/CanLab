@@ -9,10 +9,13 @@
 //! # Coalescing
 //!
 //! A snapshot per keystroke would make Ctrl+Z step back one character, which is
-//! not what anyone means by undo. Changes closer together than [`COALESCE`] are
-//! one step, so a burst of typing undoes as a burst. A *structural* change (a new
-//! line, a palette insert, a paste) always starts a new step, because those are
-//! the ones people want to take back one at a time.
+//! not what anyone means by undo. Changes that begin within [`COALESCE`] of a
+//! burst's start are one step, so a burst of typing undoes as a burst. A burst is
+//! also closed once it has collected [`MAX_BURST`] checkpoints: time alone would
+//! never close a burst typed at a normal speed, and one Ctrl+Z would take back a
+//! whole document. A *structural* change (a new line, a palette insert, a paste)
+//! always starts a new step, because those are the ones people want to take back
+//! one at a time.
 //!
 //! The snapshot is taken *before* the change is applied, so the first keystroke of
 //! a burst is what lands in the ring: undoing a burst leaves the field as it was
@@ -22,9 +25,15 @@ use std::time::{Duration, Instant};
 
 use canlab_input::MathField;
 
-/// How long a burst of typing lasts: changes closer together than this undo as one
-/// step.
+/// How long a burst of typing lasts: a checkpoint that begins less than this
+/// after the burst started joins the same step.
 pub const COALESCE: Duration = Duration::from_millis(400);
+
+/// How many checkpoints one burst may collect before it is closed anyway.
+///
+/// Without a cap, a burst only ends at a pause, and there is no pause in a
+/// document typed in one sitting: every keystroke landed in the same step.
+pub const MAX_BURST: usize = 40;
 
 /// How many steps are kept. A long document's snapshot is small, but the ring is
 /// bounded anyway: an unbounded history of a document you have been editing for an
@@ -35,8 +44,10 @@ pub const DEPTH: usize = 100;
 pub struct Undo {
     past: Vec<MathField>,
     future: Vec<MathField>,
-    /// When the current burst last saw a change.
-    last: Option<Instant>,
+    /// When the current burst began, if one is open.
+    burst: Option<Instant>,
+    /// How many checkpoints the current burst has taken.
+    edits: usize,
 }
 
 impl Default for Undo {
@@ -51,20 +62,22 @@ impl Undo {
         Undo {
             past: Vec::new(),
             future: Vec::new(),
-            last: None,
+            burst: None,
+            edits: 0,
         }
     }
 
     /// Record `field` before an edit.
     ///
     /// Call this *before* mutating the field. `structural` forces a new step; a
-    /// plain keystroke joins the current burst when it is recent enough.
+    /// plain keystroke joins the current burst while it is recent enough and
+    /// short enough.
     pub fn checkpoint(&mut self, field: &MathField, structural: bool) {
         let now = Instant::now();
-        let fresh = structural
-            || self
-                .last
-                .is_none_or(|last| now.duration_since(last) > COALESCE);
+        let stale = self
+            .burst
+            .is_none_or(|start| now.duration_since(start) > COALESCE);
+        let fresh = structural || stale || self.edits >= MAX_BURST;
         if fresh {
             self.past.push(field.clone());
             if self.past.len() > DEPTH {
@@ -72,8 +85,10 @@ impl Undo {
             }
             // A new edit invalidates the redo branch, as in every editor.
             self.future.clear();
+            self.burst = Some(now);
+            self.edits = 0;
         }
-        self.last = Some(now);
+        self.edits += 1;
     }
 
     /// End the current burst, so the next edit starts a new step.
@@ -81,7 +96,8 @@ impl Undo {
     /// Called when focus leaves the editor or a command runs, so a pause and a
     /// resume are not silently fused into one undo step.
     pub fn break_burst(&mut self) {
-        self.last = None;
+        self.burst = None;
+        self.edits = 0;
     }
 
     /// Step back. Returns false when there is nothing to undo.
@@ -91,7 +107,7 @@ impl Undo {
         };
         let current = std::mem::replace(field, previous);
         self.future.push(current);
-        self.last = None;
+        self.break_burst();
         true
     }
 
@@ -102,7 +118,7 @@ impl Undo {
         };
         let current = std::mem::replace(field, next);
         self.past.push(current);
-        self.last = None;
+        self.break_burst();
         true
     }
 
@@ -178,6 +194,51 @@ mod tests {
 
         assert!(undo.undo(&mut field));
         assert_eq!(field.to_latex(), "", "the whole burst came back off");
+    }
+
+    #[test]
+    fn a_long_fast_burst_is_more_than_one_step() {
+        // Typing faster than 2.5 keys a second never leaves a 400 ms gap, so a
+        // time-only burst would make this whole run a single undo step.
+        let mut field = MathField::new();
+        let mut undo = Undo::new();
+        for _ in 0..60 {
+            undo.checkpoint(&field, false);
+            typed(&mut field, "x");
+        }
+        assert!(
+            undo.undo_depth() > 1,
+            "60 rapid edits were one step, so Ctrl+Z would delete all of them"
+        );
+
+        // Undoing still reaches the start, one phrase at a time.
+        let steps = undo.undo_depth();
+        let mut taken = 0;
+        while undo.undo(&mut field) {
+            taken += 1;
+        }
+        assert_eq!(taken, steps);
+        assert_eq!(field.to_latex(), "");
+    }
+
+    #[test]
+    fn a_pause_then_a_fast_burst_is_two_steps() {
+        let mut field = MathField::new();
+        let mut undo = Undo::new();
+        undo.checkpoint(&field, false);
+        typed(&mut field, "a");
+        // Longer than the coalesce window, so the burst is over.
+        std::thread::sleep(COALESCE + Duration::from_millis(80));
+        for _ in 0..5 {
+            undo.checkpoint(&field, false);
+            typed(&mut field, "b");
+        }
+        assert_eq!(undo.undo_depth(), 2, "the pause starts a new step");
+
+        assert!(undo.undo(&mut field));
+        assert_eq!(field.to_latex(), "a", "the fast burst came off as one step");
+        assert!(undo.undo(&mut field));
+        assert_eq!(field.to_latex(), "", "and the edit before the pause");
     }
 
     #[test]

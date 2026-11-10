@@ -290,7 +290,16 @@ impl CasApp {
 
         // Do not flash an error at someone who is halfway through a fraction
         // or a `\sqrt` command. Keep whatever was last readable.
+        //
+        // The *derived* state does not survive, though: these equations, the
+        // solve answer and the curves describe the last complete parse, and
+        // `start_solve` would send that stale document under the new generation.
+        // Clearing them is what makes "half-typed" mean "nothing to send".
         if self.is_typing() {
+            self.equations.clear();
+            self.solve = SolveState::Idle;
+            self.intersections.clear();
+            self.curves.clear();
             return;
         }
 
@@ -498,8 +507,10 @@ impl CasApp {
 
     /// Keep the axis choice coherent with the document.
     ///
-    /// Called after every re-parse. A variable that no longer exists cannot stay
-    /// on an axis, and a document with two named variables should get both axes
+    /// Called after every re-parse. A choice that is still valid is kept — both
+    /// axes are the user's to make, and `p² + q² = 1` with `q` vertical must stay
+    /// that way while they type. A variable that no longer exists cannot stay on
+    /// an axis, and a document with two named variables should get both axes
     /// filled without anyone having to choose: `x`/`y` first, then the common
     /// alternative pairs, so `i² + j² = 1` plots straight away.
     ///
@@ -524,12 +535,27 @@ impl CasApp {
         let vertical = pick(&["y", "j", "v"], self.x_axis);
         // Only a *named* second axis is guessed. `a` in `a·x = 1` is a parameter,
         // and silently plotting it as an axis hid the control that belongs there.
-        if self.y_axis != vertical {
+        // A vertical axis the user picked survives as long as it is still a free
+        // variable and not the horizontal one; rewriting it on every parse lost
+        // that choice on the next keystroke.
+        if !self
+            .y_axis
+            .is_some_and(|axis| has(&axis) && Some(axis) != self.x_axis)
+        {
             self.y_axis = vertical;
         }
     }
 
     // ---------------------------------------------------------------- editing
+
+    /// Note that the session has changed, so it is written after the debounce.
+    ///
+    /// An edit is not the only thing `session()` holds: the palette, the plot
+    /// window, the axes and the parameter values are saved too, and a change that
+    /// did not ask for a save was simply lost on quit.
+    pub fn mark_dirty(&mut self) {
+        self.dirty_since = Some(Instant::now());
+    }
 
     /// Record the document before an edit, so it can be taken back.
     ///
@@ -537,14 +563,14 @@ impl CasApp {
     /// the palette, paste, and loading a history entry.
     pub fn note_edit(&mut self, structural: bool) {
         self.undo.checkpoint(&self.field, structural);
-        self.dirty_since = Some(Instant::now());
+        self.mark_dirty();
     }
 
     /// Undo one step.
     pub fn undo_edit(&mut self) {
         if self.undo.undo(&mut self.field) {
             self.recompute();
-            self.dirty_since = Some(Instant::now());
+            self.mark_dirty();
             self.status = match self.undo.undo_depth() {
                 0 => String::from("undone"),
                 left => format!("undone ({left} more)"),
@@ -558,7 +584,7 @@ impl CasApp {
     pub fn redo_edit(&mut self) {
         if self.undo.redo(&mut self.field) {
             self.recompute();
-            self.dirty_since = Some(Instant::now());
+            self.mark_dirty();
             self.status = match self.undo.redo_depth() {
                 0 => String::from("redone"),
                 left => format!("redone ({left} more)"),
@@ -762,8 +788,18 @@ impl CasApp {
         let Some(session) = persist::load() else {
             return;
         };
-        if self.apply_session(&session) {
+        self.load_session(&session);
+    }
+
+    /// Install a session that was already read, reporting a refusal.
+    ///
+    /// `apply_session` refuses a document the field cannot build; staying silent
+    /// looked exactly like a run with no saved session.
+    fn load_session(&mut self, session: &persist::Session) {
+        if self.apply_session(session) {
             self.status = String::from("restored the last session");
+        } else {
+            self.status = String::from("the saved session could not be read");
         }
     }
 
@@ -805,7 +841,23 @@ impl CasApp {
         self.start_job(JobKind::Integrate);
     }
 
+    /// Refuse to send a half-typed field as if it were a document.
+    ///
+    /// Returns true when the caller must not submit anything. A job reads the
+    /// whole document, and an open argument slot is not one yet.
+    fn refuse_half_typed(&mut self) -> bool {
+        if self.is_typing() {
+            self.status = String::from("nothing to send: the document is still being typed");
+            true
+        } else {
+            false
+        }
+    }
+
     fn start_solve(&mut self) {
+        if self.refuse_half_typed() {
+            return;
+        }
         // A document with several equations is a *system*: solve it as one, or
         // the answer would only cover the first line.
         if self.equations.len() > 1 {
@@ -838,29 +890,42 @@ impl CasApp {
     }
 
     fn start_job(&mut self, kind: JobKind) {
+        if self.refuse_half_typed() {
+            return;
+        }
         // Send the field's own tree. Re-parsing `to_latex()` here would be a
         // second, subtly different interpretation of what the user built.
         //
+        // The definitions are part of that interpretation: the panel and the
+        // variable list were built with them, so `y = f(2)` must leave here as
+        // the substituted equation rather than as an unresolved `f·2`.
+        //
         // Solve wants an equation `left − right = 0`, not the bare left side, so
         // the relation is folded in before the expression leaves the editor.
-        let equation = self.field.build_equations().ok().and_then(|equations| {
-            equations
-                .into_iter()
-                .find(|(_, right)| right.is_some())
-                .map(|(left, right)| {
-                    canlab_core::add(vec![
-                        left,
-                        canlab_core::mul(vec![canlab_core::int(-1), right.expect("checked")]),
-                    ])
-                })
-        });
+        let equation = self
+            .field
+            .build_equations_with(&self.definitions)
+            .ok()
+            .and_then(|equations| {
+                equations
+                    .into_iter()
+                    .find(|(_, right)| right.is_some())
+                    .map(|(left, right)| {
+                        canlab_core::add(vec![
+                            left,
+                            canlab_core::mul(vec![canlab_core::int(-1), right.expect("checked")]),
+                        ])
+                    })
+            });
         let expr = match kind {
-            JobKind::Solve => match equation.or_else(|| self.field.build_expr().ok()) {
+            JobKind::Solve => match equation
+                .or_else(|| self.field.build_expr_with(&self.definitions).ok())
+            {
                 Some(expr) => expr,
                 None => {
                     let reason = self
                         .field
-                        .build_expr()
+                        .build_expr_with(&self.definitions)
                         .err()
                         .map(|error| friendly_error(&error))
                         .unwrap_or_else(|| String::from("no equation to solve"));
@@ -868,7 +933,7 @@ impl CasApp {
                     return;
                 }
             },
-            _ => match self.field.build_expr() {
+            _ => match self.field.build_expr_with(&self.definitions) {
                 Ok(expr) => expr,
                 Err(error) => {
                     self.status = format!("nothing to send: {}", friendly_error(&error));
@@ -1072,6 +1137,15 @@ impl CasApp {
     }
 }
 
+/// Choose one palette: the look, and the fact that the session changed.
+///
+/// The palette is part of `session()`, so changing it without asking for a save
+/// meant a scheme chosen in Settings was gone at the next start.
+fn choose_palette(app: &mut CasApp, palette: &'static theme::Palette) {
+    app.palette = palette;
+    app.mark_dirty();
+}
+
 /// The Settings menu: appearance, in one place.
 ///
 /// Deliberately small — a settings page that drifts into a second control panel
@@ -1117,10 +1191,10 @@ fn settings(app: &mut CasApp, ui: &mut egui::Ui) {
                     palette.mode.label()
                 ));
                 if response.clicked() {
-                    app.palette = palette;
+                    choose_palette(app, palette);
                     theme::apply(ui.ctx(), palette);
                 }
-                // Three swatches under the name: surface, accent, first curve.
+                // Two palettes per row.
                 if index % 2 == 1 {
                     ui.end_row();
                 }
@@ -1560,6 +1634,26 @@ mod tests {
     }
 
     #[test]
+    fn a_hand_picked_vertical_axis_survives_a_recompute() {
+        // `recompute` runs on every keystroke, so an axis guess that overwrote
+        // the vertical one would undo the choice as soon as the user typed.
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex("p^2+q^2=1").expect("a circle");
+        app.recompute();
+        app.x_axis = Some(SymbolId::intern("q"));
+        app.y_axis = Some(SymbolId::intern("p"));
+        app.recompute();
+        assert_eq!(
+            app.x_axis.map(|v| v.as_str().to_string()),
+            Some(String::from("q"))
+        );
+        assert_eq!(
+            app.y_axis.map(|v| v.as_str().to_string()),
+            Some(String::from("p"))
+        );
+    }
+
+    #[test]
     fn an_equation_with_extra_variables_plots_them_as_parameters() {
         // `a` and `b` are not on an axis, so they are parameters. They start at
         // 1 — but the value is a control in the plot overlay, and the caption
@@ -1692,6 +1786,37 @@ mod tests {
     }
 
     #[test]
+    fn a_definition_is_resolved_before_the_solver_is_asked() {
+        // The panel and the variable list are built with the definitions, so the
+        // job must be too: `y = f(2)` is `y = 5`, not `y - 2f = 0`.
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex_lines(&[
+            String::from("f(x) = x^2+1"),
+            String::from("y = f(2)"),
+        ])
+        .expect("a definition and an equation");
+        app.recompute();
+        assert_eq!(app.equations.len(), 1, "{:?}", app.error);
+        app.start_solve();
+
+        let ctx = egui::Context::default();
+        for _ in 0..400 {
+            app.poll_jobs(&ctx);
+            if !matches!(app.solve, SolveState::Idle) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        match &app.solve {
+            SolveState::Solved { values, .. } => {
+                assert_eq!(values.len(), 1);
+                assert_eq!(values[0].to_string(), "5", "y = f(2) is y = 5");
+            }
+            other => panic!("expected y = 5, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn a_definition_of_two_variables_is_not_a_curve() {
         // `g(a, b) = a·b` is a surface. It defines a name — `g(2, 3)` works — but
         // it must not make `a` and `b` look like free variables of the page.
@@ -1812,6 +1937,84 @@ mod tests {
     }
 
     #[test]
+    fn a_saved_non_standard_axis_is_restored() {
+        // `p` and `q` are not natural axis letters, so only the saved choice can
+        // put them there; `recompute` must keep that choice.
+        let session = persist::Session {
+            document: vec![vec![String::from("p^2+q^2=1")]],
+            axes: (Some(String::from("q")), Some(String::from("p"))),
+            ..persist::Session::default()
+        };
+        let mut app = CasApp::new();
+        assert!(app.apply_session(&session));
+        assert_eq!(
+            app.x_axis.map(|v| v.as_str().to_string()),
+            Some(String::from("q"))
+        );
+        assert_eq!(
+            app.y_axis.map(|v| v.as_str().to_string()),
+            Some(String::from("p"))
+        );
+    }
+
+    #[test]
+    fn a_palette_choice_and_a_parameter_drag_ask_for_a_save() {
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex("a*x=1").expect("a line");
+        app.recompute();
+        assert_eq!(app.parameters.len(), 1);
+
+        app.dirty_since = None;
+        app.parameters[0].value = 2.0;
+        crate::panels::plot_changed(&mut app);
+        assert!(
+            app.dirty_since.is_some(),
+            "a parameter drag is part of the session"
+        );
+
+        app.dirty_since = None;
+        choose_palette(&mut app, theme::by_name("Nord").expect("a palette"));
+        assert!(
+            app.dirty_since.is_some(),
+            "a palette choice is part of the session"
+        );
+    }
+
+    #[test]
+    fn the_session_reflects_a_palette_choice_and_a_parameter_value() {
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex("a*x=1").expect("a line");
+        app.recompute();
+        app.parameters[0].value = 2.5;
+        crate::panels::plot_changed(&mut app);
+        choose_palette(&mut app, theme::by_name("Nord").expect("a palette"));
+
+        let session = app.session();
+        assert_eq!(session.palette, "Nord");
+        assert_eq!(
+            session.parameters,
+            vec![(String::from("a"), 2.5)],
+            "the parameter value travels with the session"
+        );
+    }
+
+    #[test]
+    fn a_session_that_cannot_be_read_says_so() {
+        let mut app = CasApp::new();
+        let broken = persist::Session {
+            document: vec![vec![String::from("\\frac{")]],
+            ..persist::Session::default()
+        };
+        assert!(!app.apply_session(&broken), "the document cannot be built");
+        app.load_session(&broken);
+        assert!(
+            app.status.contains("could not be read"),
+            "status: {}",
+            app.status
+        );
+    }
+
+    #[test]
     fn a_system_plots_one_curve_per_equation() {
         // `x+y=3` is not a function of x, so this is the implicit path: each
         // line of the system becomes the set of points where it holds.
@@ -1899,6 +2102,30 @@ mod tests {
         app.recompute();
         assert!(app.error.is_none());
         assert_eq!(app.result_latex, previous_latex);
+    }
+
+    #[test]
+    fn a_half_typed_equation_is_not_sent_to_the_solver() {
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex("x=1").expect("an equation");
+        app.recompute();
+        assert_eq!(app.equations.len(), 1);
+
+        // `/` opens an empty fraction: a legal editing state, not a document.
+        app.field.type_str("/");
+        app.recompute();
+        assert!(app.is_typing());
+        assert!(
+            app.equations.is_empty(),
+            "the equations still describe the previous complete parse"
+        );
+        app.start_solve();
+        assert!(
+            app.status.starts_with("nothing to send"),
+            "status: {}",
+            app.status
+        );
+        assert_eq!(app.jobs.in_flight(), 0, "no job could have been queued");
     }
 
     #[test]
