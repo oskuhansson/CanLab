@@ -217,13 +217,26 @@ fn atom(node: &Node) -> Result<Expr, ToExprError> {
         Node::Frac { num, den } => {
             let n = build(num)?;
             let d = build(den)?;
+            // Division by zero is not a value. Without this it becomes a NaN
+            // constant, which then poisons everything downstream silently.
+            if matches!(&*d, ExprNode::Num(number) if number.is_zero()) {
+                return Err(ToExprError::UnexpectedText(String::from("1/0")));
+            }
             Ok(match (int_of(&n), int_of(&d)) {
                 (Some(a), Some(b)) if b != 0 => ExprNode::num(Number::ratio(a, b)),
                 _ => mul([n, pow(d, ExprNode::int(-1))]),
             })
         }
         Node::Sqrt { index: None, body } => Ok(pow(build(body)?, ExprNode::num(Number::ratio(1, 2)))),
-        Node::Sqrt { index: Some(_), .. } => Err(ToExprError::UnsupportedConstruct("an indexed root")),
+        // `\sqrt[n]{x}` is `x^(1/n)` — a cube root is school mathematics, and
+        // refusing it was a limitation, not a policy.
+        Node::Sqrt {
+            index: Some(index),
+            body,
+        } => Ok(pow(
+            build(body)?,
+            pow(build(index)?, ExprNode::int(-1)),
+        )),
         Node::Group { body, .. } => build(body),
         Node::Accent { .. } => Err(ToExprError::UnsupportedConstruct("an accent")),
         Node::Binom { .. } => Err(ToExprError::UnsupportedConstruct("\\binom")),

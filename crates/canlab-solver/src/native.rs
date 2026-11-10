@@ -113,21 +113,14 @@ impl Solver for NativeSolver {
         Ok(e.clone())
     }
 
-    /// `d/dvar` of a polynomial.
+    /// `d/dvar`, by the real rules rather than by polynomial bookkeeping.
+    ///
+    /// [`canlab_core::differentiate`] does sums, the product rule, the power
+    /// rule, the chain rule through `sin`/`cos`/`tan`/`exp`/`ln`, and the
+    /// general `u^v` form. Higher orders repeat it, which is what `f''` will
+    /// mean when definitions land.
     fn diff(&self, e: &Expr, var: SymbolId) -> Result<Expr, SolverError> {
-        let map = coefficients(e, var).ok_or(SolverError::NotImplemented)?;
-        let mut terms = Vec::new();
-        for (power, coefficient) in map {
-            if power <= 0 {
-                continue;
-            }
-            terms.push(term(
-                &coefficient.mul(&Number::int(power)),
-                power - 1,
-                var,
-            ));
-        }
-        Ok(polynomial(terms))
+        canlab_core::differentiate(e, var).ok_or(SolverError::NotImplemented)
     }
 
     /// `∫ e dvar` of a sum of integer powers.

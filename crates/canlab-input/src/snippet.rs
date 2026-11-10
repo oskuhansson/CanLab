@@ -140,6 +140,20 @@ impl Parser {
                 // A bare bracket is a group, exactly as typing one is. The
                 // printer writes `\left(…\right)`, but a hand-written or
                 // externally produced `(a+b)^2` has to read too.
+                // `/` is the fraction key, as it is when typing: the run to its
+                // left becomes the numerator and what follows the denominator.
+                '/' => {
+                    self.pos += 1;
+                    let numerator = match out.pop() {
+                        Some(node) => vec![node],
+                        None => Vec::new(),
+                    };
+                    let denominator = self.script_argument()?;
+                    out.push(Node::Frac {
+                        num: numerator,
+                        den: denominator,
+                    });
+                }
                 '(' => {
                     self.pos += 1;
                     let body = self.row()?;
@@ -183,16 +197,24 @@ impl Parser {
     /// The argument of `^` or `_`: a braced row, or a single character.
     fn script_argument(&mut self) -> Result<Row, SnippetError> {
         if self.peek() == Some('{') {
-            self.braced()
-        } else if let Some(c) = self.bump() {
-            let mut row = Vec::new();
-            if c != 'X' {
-                row.push(Node::text(c.to_string()));
-            }
-            Ok(row)
-        } else {
-            Ok(Vec::new())
+            return self.braced();
         }
+        // A script absorbs the following *run*, not one character: `x^23` is
+        // x²³ and `x^2y` is x^(2y), exactly as typing behaves.
+        let mut run = String::new();
+        while let Some(c) = self.peek() {
+            if crate::tree::is_word_char(c) {
+                run.push(c);
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+        let mut row = Vec::new();
+        if !run.is_empty() && run != "X" {
+            row.push(Node::text(run));
+        }
+        Ok(row)
     }
 
     /// A run of plain characters.
@@ -204,7 +226,10 @@ impl Parser {
     fn text(&mut self, out: &mut Row) {
         let mut run = String::new();
         while let Some(c) = self.peek() {
-            if matches!(c, '\\' | '{' | '}' | '^' | '_' | 'X' | ']' | ')' | '(' | '[' | ' ' | '\t') {
+            if matches!(
+                c,
+                '\\' | '{' | '}' | '^' | '_' | 'X' | ']' | ')' | '(' | '[' | '/' | ' ' | '\t'
+            ) {
                 break;
             }
             if crate::tree::is_word_char(c) {

@@ -5,17 +5,18 @@
 //! expect. The test prints the whole table as Markdown so the expectations can be
 //! reviewed against what the app actually does.
 //!
-//! Run it with the table visible:
-//!
 //! ```text
 //! cargo test -p canlab-input --test acceptance -- --nocapture
 //! ```
 //!
-//! Two layers are being tested, and confusing them was the first mistake this
+//! Three layers are being tested, and confusing them was the first mistake this
 //! file caught:
 //!
-//! * `Latex` — what the editor *pane* shows, which is what was typed;
-//! * `Simplified` — what the *result card* shows, which is what it means.
+//! * `Latex` — what the editor pane shows, which is what was typed;
+//! * `Simplified` — what the result card shows, which is what it means;
+//! * `Value` — the number it evaluates to.
+//!
+//! `Reads` and `Refused` are about whether the document is algebra at all.
 
 use canlab_input::MathField;
 
@@ -42,77 +43,83 @@ struct Case {
 }
 
 fn cases() -> Vec<Case> {
+    let case = |document: &'static str, why: &'static str, expect: Expect| Case {
+        document,
+        why,
+        expect,
+    };
     vec![
-        Case {
-            document: "2x+3x",
-            why: "like terms collect",
-            expect: Expect::Simplified("5x"),
-        },
-        Case {
-            document: "\\frac{1}{2}+\\frac{1}{3}",
-            why: "exact rational arithmetic",
-            expect: Expect::Simplified("\\frac{5}{6}"),
-        },
-        Case {
-            document: "\\sqrt{2}",
-            why: "a radical is a value",
-            expect: Expect::Value(std::f64::consts::SQRT_2),
-        },
-        Case {
-            document: "2*3",
-            why: "star is a multiplication sign",
-            expect: Expect::Simplified("6"),
-        },
-        Case {
-            document: "2x",
-            why: "juxtaposition is multiplication",
-            expect: Expect::Reads,
-        },
-        Case {
-            document: "80°",
-            why: "a unit marker is notation, not an operator",
-            expect: Expect::Value(80.0),
-        },
-        Case {
-            document: "\\log_2(10)",
-            why: "a subscript on a function is its base",
-            expect: Expect::Value(10.0f64.log2()),
-        },
-        Case {
-            document: "e^{-x^2}",
-            why: "a negative exponent keeps its sign",
-            expect: Expect::Simplified("e^{-x^{2}}"),
-        },
-        Case {
-            document: "-x^2",
-            why: "a leading minus is a sign, not a factor",
-            expect: Expect::Simplified("-x^{2}"),
-        },
-        Case {
-            document: "\\bar{x}",
-            why: "an accent is a decoration, not a scalar",
-            expect: Expect::Refused,
-        },
-        Case {
-            document: "(x+1)^2",
-            why: "bare parentheses are a group",
-            expect: Expect::Simplified("\\left(1 + x\\right)^{2}"),
-        },
-        Case {
-            document: "x^2+y^2=1",
-            why: "an equation is not an expression",
-            expect: Expect::Refused,
-        },
-        Case {
-            document: "f'(x)",
-            why: "derivatives need function definitions (roadmap P0)",
-            expect: Expect::Refused,
-        },
-        Case {
-            document: "x_1",
-            why: "a subscript on a variable is not algebraic",
-            expect: Expect::Refused,
-        },
+        // ---------------------------------------------------------- arithmetic
+        case("1+2*3", "precedence", Expect::Simplified("7")),
+        case("2*3", "star is a multiplication sign", Expect::Simplified("6")),
+        case("10^6", "an exact integer power", Expect::Simplified("1000000")),
+        case(
+            "2^100",
+            "beyond i128, degrades to a float",
+            Expect::Value(2f64.powi(100)),
+        ),
+        case("2^10", "a modest power", Expect::Simplified("1024")),
+        case("2^{-1}", "a negative power is a reciprocal", Expect::Simplified("\\frac{1}{2}")),
+        case("(1+2)*3", "bare parentheses group", Expect::Simplified("9")),
+        case("-3+5", "a leading minus", Expect::Simplified("2")),
+        case("-7", "a negative literal", Expect::Simplified("-7")),
+        case("0", "zero", Expect::Simplified("0")),
+        case("x--y", "double minus is a plus", Expect::Simplified("x + y")),
+        // ----------------------------------------------------------- fractions
+        case("\\frac{2}{4}", "reduces to lowest terms", Expect::Simplified("\\frac{1}{2}")),
+        case("\\frac{1}{2}+\\frac{1}{3}", "exact rational arithmetic", Expect::Simplified("\\frac{5}{6}")),
+        case("\\frac{0}{5}", "zero over anything", Expect::Simplified("0")),
+        case("\\frac{1}{3}*3", "the thirds cancel exactly", Expect::Value(1.0)),
+        case("1/2x", "the denominator keeps the x (Abitti)", Expect::Latex("\\frac{1}{2x}")),
+        case(
+            "\\frac{1}{2}x",
+            "a coefficient is not part of a fraction",
+            Expect::Simplified("\\frac{1}{2}x"),
+        ),
+        // -------------------------------------------------------------- powers
+        case("x^2", "a power", Expect::Simplified("x^{2}")),
+        case("-x^2", "a leading minus is a sign, not a factor", Expect::Simplified("-x^{2}")),
+        case("e^{-x^2}", "a negative exponent keeps its sign", Expect::Simplified("e^{-x^{2}}")),
+        case("x^2y", "a script absorbs what follows it", Expect::Latex("x^{2y}")),
+        case("x^2+1", "LaTeX is unambiguous: the script ends at the operator", Expect::Latex("x^2+1")),
+        case("\\sqrt{16}", "a square root of a square", Expect::Value(4.0)),
+        case("\\sqrt[3]{8}", "a cube root", Expect::Value(2.0)),
+        case("\\sqrt{2}", "an irrational radical", Expect::Value(std::f64::consts::SQRT_2)),
+        case(
+            "\\sqrt{2}+\\sqrt{2}",
+            "like surds collect",
+            Expect::Value(2.0 * std::f64::consts::SQRT_2),
+        ),
+        case("2^{0.5}", "a fractional exponent", Expect::Value(std::f64::consts::SQRT_2)),
+        // ----------------------------------------------------------- functions
+        case("\\sin 0", "sin of zero", Expect::Value(0.0)),
+        case("\\cos 0", "cos of zero", Expect::Value(1.0)),
+        case("\\ln 1", "ln of one", Expect::Value(0.0)),
+        case("\\exp 0", "e to the zero", Expect::Value(1.0)),
+        case("\\log_2(8)", "a logarithm with a base", Expect::Value(3.0)),
+        case("\\log_2(10)", "and an irrational one", Expect::Value(10.0f64.log2())),
+        // --------------------------------------------------- products and runs
+        case("2x", "juxtaposition is multiplication", Expect::Simplified("2x")),
+        case("2*x", "an explicit sign is the same thing", Expect::Simplified("2x")),
+        case("2x+3x", "like terms collect", Expect::Simplified("5x")),
+        case("2.5x", "a decimal coefficient", Expect::Simplified("2.5x")),
+        case("3xy", "three factors", Expect::Reads),
+        case("x2", "a digit after a letter", Expect::Simplified("2x")),
+        case("abc", "a run of variables", Expect::Reads),
+        // ------------------------------------------------------------- units
+        case("80°", "a degree marker is notation", Expect::Value(80.0)),
+        case("50%", "so is a percent sign", Expect::Value(50.0)),
+        // --------------------------------------------------------- not algebra
+        case("x=1", "an equation is not an expression", Expect::Refused),
+        case("x<y", "neither is a relation", Expect::Refused),
+        case("x_1", "a subscript on a variable", Expect::Refused),
+        case("\\bar{x}", "an accent is a decoration", Expect::Refused),
+        case("\\vec{v}", "so is a vector arrow", Expect::Refused),
+        case("f'", "a derivative needs definitions (roadmap P0)", Expect::Refused),
+        // ---------------------------------------------------------- edge shapes
+        case("(x+1)^2", "bare parentheses are a group", Expect::Simplified("\\left(1 + x\\right)^{2}")),
+        case("\\frac{x}{x}", "policy: never cancelled silently", Expect::Reads),
+        case("x/0", "division by zero has no value", Expect::Refused),
     ]
 }
 
@@ -153,8 +160,9 @@ fn the_corpus_behaves_as_documented() {
     println!();
     assert!(
         failures.is_empty(),
-        "{} case(s) did not match: {:?}",
+        "{} of {} case(s) did not match: {:?}",
         failures.len(),
+        cases().len(),
         failures
     );
 }
@@ -185,7 +193,7 @@ fn check(field: &MathField, expect: &Expect) -> (String, String, bool) {
                     return (format!("{want}"), String::from("not evaluable"), false);
                 };
                 let got = program.eval(&[]);
-                let ok = (got - want).abs() < 1e-9;
+                let ok = (got - want).abs() <= 1e-9 * want.abs().max(1.0);
                 (format!("{want}"), format!("{got}"), ok)
             }
         },
@@ -195,11 +203,7 @@ fn check(field: &MathField, expect: &Expect) -> (String, String, bool) {
         },
         Expect::Refused => match value_latex() {
             None => (String::from("refused"), String::from("refused"), true),
-            Some(got) => (
-                String::from("refused"),
-                format!("read as `{got}`"),
-                false,
-            ),
+            Some(got) => (String::from("refused"), format!("read as `{got}`"), false),
         },
     }
 }
