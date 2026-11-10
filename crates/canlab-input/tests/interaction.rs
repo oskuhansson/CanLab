@@ -652,6 +652,81 @@ fn up_and_down_cross_between_equations() {
     assert_eq!(f.line(), 1);
 }
 
+#[test]
+fn a_run_of_letters_and_digits_is_a_product() {
+    // The field glues `2x` into one run (which is what `/` needs), so the reader
+    // has to split it again. This is how everyone writes a product.
+    assert_eq!(typed("2x").to_expr_latex().unwrap(), "2x");
+    // canlab-tex separates adjacent symbols so `xy` cannot be read as one name.
+    assert_eq!(typed("3xy").to_expr_latex().unwrap(), "3x y");
+    assert_eq!(typed("2.5x").to_expr_latex().unwrap(), "2.5x");
+    assert_eq!(typed("x2").to_expr_latex().unwrap(), "2x");
+    assert!(typed("2x+1").to_expr().is_some());
+}
+
+#[test]
+fn a_document_holds_several_separate_systems() {
+    // Two questions on one page: they must not merge into one long system.
+    let mut f = MathField::new();
+    f.type_str("x+y=3");
+    f.new_line();
+    f.type_str("2x-y=0");
+    assert_eq!(f.system_count(), 1);
+    assert_eq!(f.line_count(), 2);
+
+    f.new_system();
+    assert_eq!(f.system_count(), 2);
+    assert_eq!(f.line_count(), 1);
+    f.type_str("a+b=1");
+
+    assert_eq!(
+        f.to_latex(),
+        "\\begin{cases} x+y=3 \\\\ 2x-y=0 \\end{cases}\\quad a+b=1"
+    );
+    // Equations come out in document order, across systems.
+    assert_eq!(f.build_equations().map(|e| e.len()), Ok(3));
+    // And `build_expr` still refuses: a page is not a value.
+    assert!(matches!(
+        f.build_expr(),
+        Err(canlab_input::ToExprError::System)
+    ));
+}
+
+#[test]
+fn a_single_line_system_folds_back_when_it_is_left_empty() {
+    let mut f = typed("x=1");
+    f.new_system();
+    assert_eq!(f.system_count(), 2);
+    f.backspace();
+    assert_eq!(f.system_count(), 1);
+    assert_eq!(f.to_latex(), "x=1");
+}
+
+#[test]
+fn moving_down_crosses_into_the_next_system() {
+    let mut f = typed("x=1");
+    f.new_system();
+    f.type_str("y=2");
+    // Back to the first system's only line, then down again into the second.
+    assert_eq!((f.system(), f.line()), (1, 0));
+    assert!(f.move_up());
+    assert_eq!((f.system(), f.line()), (0, 0));
+    assert!(f.move_down());
+    assert_eq!((f.system(), f.line()), (1, 0));
+}
+
+#[test]
+fn the_cursor_can_be_sent_to_any_equation_of_any_system() {
+    let mut f = typed("a=1");
+    f.new_line();
+    f.type_str("b=2");
+    f.new_system();
+    f.type_str("c=3");
+    assert!(f.set_position(0, 1));
+    assert_eq!((f.system(), f.line()), (0, 1));
+    assert!(!f.set_position(9, 0), "there is no such system");
+}
+
 // ------------------------------------------------------------ esc and enter
 
 #[test]

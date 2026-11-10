@@ -5,6 +5,7 @@
 //! only have to answer one question each: what does this panel show?
 
 use canlab_mathview::{MathView, Style};
+use canlab_plot::implicit::{ImplicitOptions, sample_implicit};
 use canlab_plot::{Curve, SampleOptions, sample};
 use canlab_tex::to_latex;
 use eframe::egui::{
@@ -17,18 +18,19 @@ use crate::{CasApp, SolveState};
 
 /// Width of the editor's reading column. Wide enough for a display equation,
 /// narrow enough that the eye does not lose the line.
-const EDITOR_WIDTH: f32 = 880.0;
+const EDITOR_WIDTH: f32 = 900.0;
 
 /// Size of the mathematics in the hero field, and the caret/padding around it.
 const FIELD_BASE_SIZE: f32 = 30.0;
 /// The field is the centre of the app, so it gets more than one text line even
 /// when the expression is short.
-const FIELD_MIN_HEIGHT: f32 = FIELD_BASE_SIZE * 2.5;
+/// One line of mathematics, plus the padding around it. The field grows with the
+/// document; this is only the floor for an empty one.
+const FIELD_MIN_HEIGHT: f32 = FIELD_BASE_SIZE * 1.9;
 const FIELD_PADDING_X: f32 = 14.0;
 const FIELD_PADDING_Y: f32 = 10.0;
 
 pub fn editor(app: &mut CasApp, ui: &mut Ui) {
-    let viewport_height = ui.available_height();
     egui::ScrollArea::vertical()
         .id_salt("editor-scroll")
         .auto_shrink([false, false])
@@ -36,12 +38,11 @@ pub fn editor(app: &mut CasApp, ui: &mut Ui) {
             let available = ui.available_width().max(120.0);
             let width = available.min(EDITOR_WIDTH);
             let side = ((available - width) * 0.5).max(0.0);
-            // The result card height varies with the expression, so this is
-            // an estimate rather than a measurement. It is close enough at
-            // normal window sizes, and the scroll area takes over when the
-            // content outgrows the panel.
-            let top = ((viewport_height - 340.0) * 0.5).clamp(8.0, 400.0);
-            ui.add_space(top);
+            // Top-aligned, like a document: the first line sits where a text
+            // editor's first line would, and the block grows downwards as lines
+            // are added. Centring it vertically made a one-line expression float
+            // in the middle of the panel, which read as a dialog, not an editor.
+            ui.add_space(10.0);
             ui.horizontal(|ui| {
                 ui.add_space(side);
                 ui.allocate_ui_with_layout(vec2(width, 0.0), Layout::top_down(Align::Min), |ui| {
@@ -54,7 +55,16 @@ pub fn editor(app: &mut CasApp, ui: &mut Ui) {
 
 fn editor_column(app: &mut CasApp, ui: &mut Ui) {
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Expression").small().strong());
+        let title = if app.field.system_count() > 1 || app.field.is_system() {
+            format!(
+                "Document · {} system(s), {} line(s)",
+                app.field.system_count(),
+                app.field.build_equations().map(|e| e.len()).unwrap_or(0)
+            )
+        } else {
+            String::from("Document")
+        };
+        ui.label(RichText::new(title).small().strong());
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let (text, color) = if app.error.is_some() {
                 ("parse error", ui.visuals().error_fg_color)
@@ -212,7 +222,7 @@ fn handle_field_keys(app: &mut CasApp, ui: &mut Ui, response: &egui::Response) {
                     // other command combination is left to the shell.
                     (plain && editing)
                         || (modifiers.shift && arrow)
-                        || (modifiers.command && matches!(key, egui::Key::A))
+                        || (modifiers.command && matches!(key, egui::Key::A | egui::Key::Enter))
                 }
                 _ => false,
             };
@@ -257,7 +267,12 @@ fn handle_field_keys(app: &mut CasApp, ui: &mut Ui, response: &egui::Response) {
                 egui::Key::ArrowRight => changed |= app.field.move_right(),
                 egui::Key::ArrowUp => changed |= app.field.move_up(),
                 egui::Key::ArrowDown => changed |= app.field.move_down(),
-                // Enter starts the next equation of the system.
+                // Enter starts the next equation of the system; Ctrl+Enter starts
+                // a new, separate system on the page.
+                egui::Key::Enter if modifiers.command => {
+                    app.field.new_system();
+                    changed = true;
+                }
                 egui::Key::Enter => {
                     app.field.new_line();
                     changed = true;
@@ -312,7 +327,7 @@ fn action_row(app: &mut CasApp, ui: &mut Ui) {
         range_changed |= ui
             .add(egui::DragValue::new(&mut app.x_max).speed(0.5))
             .changed();
-        if range_changed && app.curve.is_some() {
+        if range_changed && !app.curves.is_empty() {
             app.plot();
         }
 
@@ -351,19 +366,45 @@ fn result_card(app: &CasApp, ui: &mut Ui) {
                         .color(ui.visuals().weak_text_color()),
                 );
             } else {
+                result_body(app, ui);
+            }
+        });
+}
+
+/// The typeset result, with its LaTeX source beside it in small type.
+///
+/// The LaTeX is the thing that travels — to the clipboard, into an exam answer, to
+/// the solver — so it stays visible next to the picture rather than being hidden
+/// behind it. When the string is outside the subset the renderer understands
+/// (a `cases` block, say), the card falls back to showing the source alone.
+fn result_body(app: &CasApp, ui: &mut Ui) {
+    let style = Style {
+        base_size: 28.0,
+        ..Style::default()
+    };
+    let weak = ui.visuals().weak_text_color();
+    let rendered = canlab_input::MathField::from_latex(&app.result_latex).ok();
+
+    ui.horizontal_top(|ui| {
+        if let Some(field) = &rendered {
+            MathView::display(ui, field, &style);
+        } else {
+            ui.label(RichText::new(app.result_plain.as_str()).size(24.0));
+        }
+
+        ui.with_layout(Layout::right_to_left(Align::Max), |ui| {
+            ui.vertical(|ui| {
+                ui.add_space(2.0);
                 ui.label(
                     RichText::new(app.result_latex.as_str())
                         .monospace()
-                        .size(21.0),
+                        .size(11.0)
+                        .color(weak),
                 );
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new(app.result_plain.as_str())
-                        .small()
-                        .color(ui.visuals().weak_text_color()),
-                );
-            }
+                ui.label(RichText::new("LaTeX").size(9.0).color(weak));
+            });
         });
+    });
 }
 
 /// Apply one palette key to the field.
@@ -525,7 +566,7 @@ pub fn plot(app: &CasApp, ui: &mut Ui) {
         egui::StrokeKind::Inside,
     );
 
-    let Some(curve) = &app.curve else {
+    if app.curves.is_empty() {
         painter.text(
             rect.center(),
             Align2::CENTER_CENTER,
@@ -534,18 +575,37 @@ pub fn plot(app: &CasApp, ui: &mut Ui) {
             visuals.weak_text_color(),
         );
         return;
-    };
+    }
 
-    paint_curve(&painter, rect, curve, (app.x_min, app.x_max), app.y_range);
+    // Axes once, then every curve on top of them in its own colour, so a system
+    // of two equations reads as two lines rather than one thick one.
+    paint_axes(&painter, rect, (app.x_min, app.x_max), app.y_range);
+    for (index, curve) in app.curves.iter().enumerate() {
+        paint_curve(
+            &painter,
+            rect,
+            curve,
+            (app.x_min, app.x_max),
+            app.y_range,
+            curve_color(index),
+        );
+    }
 }
 
-fn paint_curve(
-    painter: &egui::Painter,
-    rect: Rect,
-    curve: &Curve,
-    x_range: (f64, f64),
-    y_range: (f64, f64),
-) {
+/// A distinct colour per curve: the accent first, then a small wheel.
+fn curve_color(index: usize) -> Color32 {
+    const WHEEL: [Color32; 6] = [
+        ACCENT,
+        Color32::from_rgb(0x62, 0xB0, 0xF5),
+        Color32::from_rgb(0x8B, 0xC3, 0x4A),
+        Color32::from_rgb(0xE5, 0x7A, 0xC8),
+        Color32::from_rgb(0xF2, 0xC9, 0x4C),
+        Color32::from_rgb(0x7A, 0xE0, 0xD4),
+    ];
+    WHEEL[index % WHEEL.len()]
+}
+
+fn paint_axes(painter: &egui::Painter, rect: Rect, x_range: (f64, f64), y_range: (f64, f64)) {
     let visuals = painter.ctx().global_style().visuals.clone();
     let axis_color = visuals.widgets.noninteractive.bg_stroke.color;
     let label_color = visuals.weak_text_color();
@@ -589,7 +649,36 @@ fn paint_curve(
         painter.line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], axis);
     }
 
-    let stroke = Stroke::new(1.8, ACCENT);
+    painter.text(
+        pos2(rect.left() + 8.0, rect.top() + 6.0),
+        Align2::LEFT_TOP,
+        format!("x [{x0:.3}, {x1:.3}]   y [{y0:.3}, {y1:.3}]"),
+        FontId::monospace(10.0),
+        label_color,
+    );
+}
+
+/// Draw one curve; the axes are drawn once, before any of them.
+fn paint_curve(
+    painter: &egui::Painter,
+    rect: Rect,
+    curve: &Curve,
+    x_range: (f64, f64),
+    y_range: (f64, f64),
+    color: Color32,
+) {
+    let (x0, x1) = x_range;
+    let (y0, y1) = y_range;
+    if !(x1 > x0 && y1 > y0) {
+        return;
+    }
+    let to_px = |x: f64, y: f64| {
+        pos2(
+            rect.left() + ((x - x0) / (x1 - x0)) as f32 * rect.width(),
+            rect.bottom() - ((y - y0) / (y1 - y0)) as f32 * rect.height(),
+        )
+    };
+    let stroke = Stroke::new(1.8, color);
     for segment in &curve.segments {
         let points: Vec<egui::Pos2> = segment
             .iter()
@@ -600,14 +689,6 @@ fn paint_curve(
             painter.add(egui::Shape::line(points, stroke));
         }
     }
-
-    painter.text(
-        pos2(rect.left() + 8.0, rect.top() + 6.0),
-        Align2::LEFT_TOP,
-        format!("x [{x0:.3}, {x1:.3}]   y [{y0:.3}, {y1:.3}]"),
-        FontId::monospace(10.0),
-        label_color,
-    );
 }
 
 /// Display-only: `canlab-input` has no LaTeX-to-tree parser, so a row cannot be loaded back into the field.
@@ -649,19 +730,37 @@ pub fn history(app: &CasApp, ui: &mut Ui) {
         });
 }
 
-/// Sample the current expression and keep the curve for the Plot panel.
+/// Sample the document and keep the curves for the Plot panel.
+///
+/// Two kinds of picture come out of the same button:
+///
+/// * a *function* `y = f(x)` — the field holds one expression, so it is sampled
+///   along x;
+/// * an *equation* — a line like `x + y = 3` is not a function of x, so it is
+///   traced as the set of points where `left − right = 0`, which is what
+///   students mean by plotting an equation. A system gives one curve per line,
+///   and several systems give all of their lines.
 pub fn build_curve(app: &mut CasApp) {
-    app.curve = None;
+    app.curves.clear();
+    if !app.x_max.is_finite() || !app.x_min.is_finite() || app.x_max <= app.x_min {
+        app.status = String::from("x range is empty");
+        return;
+    }
+
+    let equations = app.field.build_equations();
+    if let Ok(equations) = &equations
+        && equations.iter().any(|(_, right)| right.is_some())
+    {
+        plot_equations(app, equations);
+        return;
+    }
+
     let Some(expr) = app.expr.clone() else {
         app.status = String::from("nothing to plot");
         return;
     };
     if app.free_vars.len() != 1 {
         app.status = format!("plot needs one variable, found {}", app.free_vars.len());
-        return;
-    }
-    if !app.x_max.is_finite() || !app.x_min.is_finite() || app.x_max <= app.x_min {
-        app.status = String::from("x range is empty");
         return;
     }
     let Some(program) = canlab_core::Program::compile(&expr, &app.free_vars) else {
@@ -680,7 +779,57 @@ pub fn build_curve(app: &mut CasApp) {
     let count = curve.segments.len();
     let suffix = if count == 1 { "" } else { "s" };
     app.status = format!("{count} segment{suffix}");
-    app.curve = Some(curve);
+    app.curves.push(curve);
+}
+
+/// Trace every equation in the document as an implicit curve.
+fn plot_equations(app: &mut CasApp, equations: &[(canlab_core::Expr, Option<canlab_core::Expr>)]) {
+    let x = canlab_core::SymbolId::intern("x");
+    let y = canlab_core::SymbolId::intern("y");
+
+    // An equation has no preferred y range, so the window is square: the two
+    // axes get the same span, which is also what makes a circle look round.
+    let span = (app.x_max - app.x_min).abs().max(1.0);
+    let y_min = -span / 2.0;
+    let y_max = span / 2.0;
+    let options = ImplicitOptions {
+        resolution: 240,
+        x_min: app.x_min,
+        x_max: app.x_max,
+        y_min,
+        y_max,
+    };
+
+    let mut plotted = 0;
+    let mut skipped = 0;
+    for (left, right) in equations {
+        let expression = match right {
+            // `left − right`, so the curve is where the equation holds.
+            Some(right) => canlab_core::add(vec![
+                left.clone(),
+                canlab_core::mul(vec![canlab_core::int(-1), right.clone()]),
+            ]),
+            None => left.clone(),
+        };
+        let Some(program) = canlab_core::Program::compile(&expression, &[x, y]) else {
+            skipped += 1;
+            continue;
+        };
+        let curve = sample_implicit(|px, py| program.eval(&[px, py]), &options);
+        if curve.segments.is_empty() {
+            skipped += 1;
+        } else {
+            plotted += 1;
+            app.curves.push(curve);
+        }
+    }
+
+    app.y_range = (y_min, y_max);
+    app.status = match (plotted, skipped) {
+        (0, _) => String::from("no curve found in this window"),
+        (n, 0) => format!("{n} equation curve(s)"),
+        (n, s) => format!("{n} equation curve(s), {s} skipped"),
+    };
 }
 
 /// Vertical display range for the plot.
@@ -727,8 +876,6 @@ fn vertical_extent(curve: &Curve) -> Option<(f64, f64)> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn every_palette_key_either_lands_or_says_why_not() {
         // The four entries the model deliberately lacks. Everything else — all

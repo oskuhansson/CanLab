@@ -136,6 +136,12 @@ fn corpus() -> &'static [(&'static str, &'static str)] {
         ("x^", "x^{ }"),
         ("x_", "x_{ }"),
         ("x_i^2", "x_{i^2}"),
+        // A script keeps absorbing until you move out of it — including
+        // operators. This is why the arrow keys matter so much: leaving a
+        // superscript is done with `→`. [OBSERVED]
+        ("x^2+1", "x^{2+1}"),
+        ("x_1+1", "x_{1+1}"),
+        ("x^2 y", "x^{2\\ y}"),
         // -------------------------------------------------------------- brackets
         ("(", "\\left(\\right)"),
         ("()", "\\left(\\right)"),

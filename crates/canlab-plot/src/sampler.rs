@@ -102,10 +102,11 @@ const MAX_UNIFORM_SAMPLES: usize = 1_000_000;
 
 /// Polyline data for one plot frame.
 ///
-/// Each inner vector is one connected polyline, in increasing `x` order. A
-/// discontinuity *ends* a segment, so a renderer never draws a vertical line
-/// across an asymptote: `1/x` on `[-1, 1]` produces two segments and no
-/// segment contains points from both sides of the pole.
+/// For [`sample`] output each inner vector is one connected polyline in
+/// increasing `x` order; a contour from [`crate::implicit`] may instead turn
+/// and close on itself. A discontinuity *ends* a segment, so a renderer never
+/// draws a vertical line across an asymptote: `1/x` on `[-1, 1]` produces two
+/// segments and no segment contains points from both sides of the pole.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Curve {
     pub segments: Vec<Vec<[f64; 2]>>,

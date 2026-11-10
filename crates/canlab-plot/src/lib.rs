@@ -1,10 +1,12 @@
-//! `canlab-plot` — from a compiled expression to polylines, and from polylines to
-//! SVG.
+//! `canlab-plot` — from a compiled expression or an implicit equation to
+//! polylines, and from polylines to SVG.
 //!
-//! The crate is deliberately two small, separable stages:
+//! The crate is deliberately a set of small, separable stages:
 //!
 //! * [`sampler`] turns a [`canlab_core::Program`] into a [`Curve`]: a list of
 //!   polylines where every break means "the function is not connected here".
+//! * [`implicit`] turns an `f(x, y)` predicate into a [`Curve`] with marching
+//!   squares, for equations that cannot be written as `y = g(x)`.
 //! * [`svg`] turns a [`Curve`] into a self-contained SVG document.
 //!
 //! # Why a curve is a list of segments and not a list of points
@@ -47,8 +49,10 @@
 //! assert!(svg.starts_with("<svg"));
 //! ```
 
+pub mod implicit;
 pub mod sampler;
 pub mod svg;
 
+pub use implicit::{ImplicitOptions, sample_implicit};
 pub use sampler::{Curve, SampleOptions, SampleStats, sample, sample_with_stats};
 pub use svg::{SvgOptions, map_to_pixels, to_svg};

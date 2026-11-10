@@ -404,6 +404,24 @@ What the second pass changed:
 | `\lim`, `\int`, `\sum` alone are bare tokens; their slots print only once touched | modelled as plain symbols (see divergences) |
 | `\text{…}` / `\mathbb{…}` typed with braces put literal braces inside the command | not modelled (see divergences) |
 
+### Beyond Abitti: documents
+
+Abitti's math field lives *inside* a document, and `Enter` commits it and opens a
+new one on the next line. A standalone editor has to own that structure, so the
+field holds a **document** rather than a single formula:
+
+* `Enter` starts the next line of the same system;
+* `Ctrl+Enter` starts a new, separate system (a new sub-task);
+* a system of several lines prints as `\begin{cases}…\end{cases}`, systems are
+  joined with `\quad`;
+* `Backspace` at the start of an empty line folds it away, and an empty
+  single-line system folds into the one above it;
+* `↑`/`↓` cross between lines and between systems.
+
+That is a deliberate step past the reference behaviour: Abitti delegates it to the
+outer editor, which we do not have.
+
+
 ### Documented divergences
 
 Each of these is a MathQuill internal quirk, not a behaviour a student wants; the

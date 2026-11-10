@@ -310,6 +310,10 @@ pub struct DisplayList {
     pub line_bands: Vec<Rect>,
     /// The caret rects of every line, in line order. Also empty for a single line.
     pub line_carets: Vec<Vec<Rect>>,
+    /// Which `(system, line)` each entry of [`DisplayList::line_bands`] belongs
+    /// to, so a click can move the cursor to the right equation of the right
+    /// system.
+    pub line_refs: Vec<(usize, usize)>,
 }
 
 impl DisplayList {
@@ -998,12 +1002,12 @@ impl Layout<'_> {
 /// ```
 pub fn layout_field(field: &MathField, measure: &dyn Measure, style: &Style) -> DisplayList {
     let layout = Layout { measure, style };
-    let lines = field.lines();
-    if lines.len() <= 1 {
+    if field.system_count() == 1 && field.line_count() == 1 {
         let empty: Row = Vec::new();
-        return finish_line(&layout, lines.first().unwrap_or(&empty), style);
+        let row = field.lines().first().unwrap_or(&empty);
+        return finish_line(&layout, row, style);
     }
-    layout_system(&layout, field, style)
+    layout_document(&layout, field, style)
 }
 
 /// Lay out one row into a display list whose origin is its top-left.
@@ -1037,88 +1041,116 @@ fn finish_line(layout: &Layout<'_>, row: &Row, style: &Style) -> DisplayList {
         baseline: ascent,
         line_bands: Vec::new(),
         line_carets: Vec::new(),
+        line_refs: Vec::new(),
     }
 }
 
-/// Lay out a system: one equation per baseline, left-aligned after a brace.
+/// Lay out a whole document: every system, one equation per baseline.
 ///
-/// The brace is the whole point of the shape — it is what says "these equations
-/// hold together" rather than "these are two expressions" — and it is also what
-/// Abitti's `cases` environment draws, so the field looks like the LaTeX it
-/// emits.
-fn layout_system(layout: &Layout<'_>, field: &MathField, style: &Style) -> DisplayList {
+/// A system with more than one line gets a brace down its left side. That brace
+/// is the whole point of the shape — it says "these equations hold together"
+/// rather than "these are two expressions" — and it is what Abitti's `cases`
+/// environment draws, so the field looks like the LaTeX it emits. Systems are
+/// separated by a wider gap than the lines inside one, so the page reads as
+/// groups of equations.
+fn layout_document(layout: &Layout<'_>, field: &MathField, style: &Style) -> DisplayList {
     let base = style.base_size;
-    let gap = base * 0.45;
-    let lines = field.lines();
+    let line_gap = base * 0.45;
+    let system_gap = base * 0.9;
 
-    // Measure every line first: the brace is sized to the whole block, so the
-    // block's height has to be known before anything is placed.
-    let frags: Vec<Frag> = lines.iter().map(|row| layout.row(row, base)).collect();
-    let heights: Vec<f32> = frags
+    // Measure everything first: a brace is sized to its whole system, and the
+    // left margin has to clear the widest brace in the document.
+    let systems: Vec<Vec<Frag>> = field
+        .systems()
         .iter()
-        .map(|frag| frag.ascent.max(0.0) + frag.descent.max(0.0))
+        .map(|lines| lines.iter().map(|row| layout.row(row, base)).collect())
         .collect();
-    let width = frags
+    let heights: Vec<f32> = systems
         .iter()
-        .map(|frag| frag.width)
+        .map(|frags| {
+            frags
+                .iter()
+                .map(|frag| frag.ascent.max(0.0) + frag.descent.max(0.0))
+                .sum::<f32>()
+                + line_gap * frags.len().saturating_sub(1) as f32
+        })
+        .collect();
+    let widest_brace = systems
+        .iter()
+        .zip(&heights)
+        .filter(|(frags, _)| frags.len() > 1)
+        .map(|(_, height)| layout.measure.measure("{", brace_size(layout, base, *height)).width)
+        .fold(0.0f32, f32::max);
+    let x0 = if widest_brace > 0.0 {
+        widest_brace + base * 0.18
+    } else {
+        0.0
+    };
+    let width = systems
+        .iter()
+        .flat_map(|frags| frags.iter().map(|frag| frag.width))
         .fold(0.0f32, f32::max)
         .max(base * 0.8);
-    let total: f32 = heights.iter().sum::<f32>() + gap * (lines.len() - 1) as f32;
-
-    let brace_size = {
-        let metrics = layout.measure.measure("{", base);
-        base * (total / metrics.height().max(f32::EPSILON)).max(1.0)
-    };
-    let brace = layout.measure.measure("{", brace_size);
-    let x0 = brace.width + base * 0.18;
+    let total: f32 = heights.iter().sum::<f32>() + system_gap * systems.len().saturating_sub(1) as f32;
 
     let mut items = Vec::new();
     let mut carets = Vec::new();
     let mut bands = Vec::new();
+    let mut refs = Vec::new();
     let mut per_line_carets = Vec::new();
     let mut baseline = 0.0;
     let mut y = 0.0;
 
-    for (index, frag) in frags.into_iter().enumerate() {
-        let ascent = frag.ascent.max(0.0);
-        let descent = frag.descent.max(0.0);
-        let dy = y + ascent;
-        let Frag {
-            width: _,
-            ascent: _,
-            descent: _,
-            items: mut line_items,
-            carets: line_carets,
-        } = frag;
-        for item in &mut line_items {
-            item.shift(x0, dy);
+    for (system_index, (frags, height)) in systems.into_iter().zip(heights).enumerate() {
+        let many = frags.len() > 1;
+        let mut line_y = y;
+        for (line_index, frag) in frags.into_iter().enumerate() {
+            let ascent = frag.ascent.max(0.0);
+            let descent = frag.descent.max(0.0);
+            let dy = line_y + ascent;
+            let Frag {
+                width: _,
+                ascent: _,
+                descent: _,
+                items: mut line_items,
+                carets: line_carets,
+            } = frag;
+            for item in &mut line_items {
+                item.shift(x0, dy);
+            }
+            let placed: Vec<Rect> = line_carets
+                .into_iter()
+                .map(|caret| {
+                    let mut caret = caret;
+                    caret.x += x0;
+                    caret.y += dy;
+                    items.push(Item::Caret { rect: caret });
+                    caret
+                })
+                .collect();
+            if system_index == field.system() && line_index == field.line() {
+                carets = placed.clone();
+                baseline = dy;
+            }
+            items.extend(line_items);
+            bands.push(Rect::new(0.0, line_y, width + x0, ascent + descent));
+            refs.push((system_index, line_index));
+            per_line_carets.push(placed);
+            line_y += ascent + descent + line_gap;
         }
-        let placed: Vec<Rect> = line_carets
-            .into_iter()
-            .map(|caret| {
-                let mut caret = caret;
-                caret.x += x0;
-                caret.y += dy;
-                items.push(Item::Caret { rect: caret });
-                caret
-            })
-            .collect();
-        if index == field.line() {
-            carets = placed.clone();
-            baseline = dy;
-        }
-        items.extend(line_items);
-        bands.push(Rect::new(0.0, y, width + x0, ascent + descent));
-        per_line_carets.push(placed);
-        y += ascent + descent + gap;
-    }
 
-    items.push(Item::Delim {
-        pos: Pos2::new(0.0, (total - brace.height()) * 0.5 + brace.ascent),
-        ch: '{',
-        size: brace_size,
-        ghost: false,
-    });
+        if many {
+            let size = brace_size(layout, base, height);
+            let metrics = layout.measure.measure("{", size);
+            items.push(Item::Delim {
+                pos: Pos2::new(0.0, y + (height - metrics.height()) * 0.5 + metrics.ascent),
+                ch: '{',
+                size,
+                ghost: false,
+            });
+        }
+        y += height + system_gap;
+    }
 
     DisplayList {
         size: Vec2::new(x0 + width, total),
@@ -1126,8 +1158,15 @@ fn layout_system(layout: &Layout<'_>, field: &MathField, style: &Style) -> Displ
         carets,
         baseline,
         line_bands: bands,
+        line_refs: refs,
         line_carets: per_line_carets,
     }
+}
+
+/// The font size that stretches `{` to `height`.
+fn brace_size(layout: &Layout<'_>, base: f32, height: f32) -> f32 {
+    let metrics = layout.measure.measure("{", base);
+    base * (height / metrics.height().max(f32::EPSILON)).max(1.0)
 }
 
 /// The index of the caret nearest to `at`, if one is within `band`.

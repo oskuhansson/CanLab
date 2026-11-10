@@ -57,6 +57,21 @@ fn settle(ctx: &egui::Context, field: &mut MathField) -> egui::Id {
 }
 
 #[test]
+fn display_never_takes_focus() {
+    // The result card draws with `display`, which must stay inert: if it could
+    // take focus, clicking a result would steal the keyboard from the editor.
+    let ctx = egui::Context::default();
+    let mut field = MathField::new();
+    field.type_str("x+1");
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let response = MathView::display(ui, &field, &Style::default());
+        assert_eq!(response.sense, egui::Sense::hover());
+    });
+    output.textures_delta.clear();
+    assert_eq!(ctx.memory(|memory| memory.focused()), None);
+}
+
+#[test]
 fn the_field_can_hold_focus() {
     let ctx = egui::Context::default();
     let mut field = MathField::new();

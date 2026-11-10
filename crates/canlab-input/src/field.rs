@@ -26,15 +26,18 @@ pub enum EscapeOutcome {
 /// rendering, no measuring and no input-device handling in this crate.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct MathField {
-    /// One row per line.
+    /// A document is a list of **systems**, and a system is a list of lines.
     ///
-    /// A single line is an expression. Several lines are the equations of a
-    /// *system*: they are edited as one block, rendered stacked with a brace, and
-    /// printed as `\begin{cases}…\end{cases}`. A system is how a Finnish student
-    /// writes the pair of equations a task actually asks about, so it is a model
-    /// property rather than a UI detail.
-    lines: Vec<Row>,
-    /// Which line the cursor is in. Cursor paths are relative to that row.
+    /// One line is an expression. Several lines in one system are equations that
+    /// hold together: they are edited as one block, rendered stacked with a
+    /// brace, and printed as `\begin{cases}…\end{cases}`. Several systems in one
+    /// document are separate questions on the same page, which is what a student
+    /// with four sub-tasks actually needs.
+    systems: Vec<Vec<Row>>,
+    /// Which system the cursor is in.
+    system: usize,
+    /// Which line of that system the cursor is in. Cursor paths are relative to
+    /// that row.
     line: usize,
     cursor: Cursor,
     selection: Option<Selection>,
@@ -56,7 +59,8 @@ impl MathField {
     /// An empty field with the cursor in the root.
     pub fn new() -> MathField {
         MathField {
-            lines: vec![Vec::new()],
+            systems: vec![vec![Vec::new()]],
+            system: 0,
             line: 0,
             cursor: Cursor::root(),
             selection: None,
@@ -68,7 +72,7 @@ impl MathField {
     /// Build a field from an existing tree, cursor at the start.
     pub fn from_row(root: Row) -> MathField {
         MathField {
-            lines: vec![root],
+            systems: vec![vec![root]],
             ..MathField::new()
         }
     }
@@ -81,7 +85,7 @@ impl MathField {
             lines
         };
         MathField {
-            lines,
+            systems: vec![lines],
             ..MathField::new()
         }
     }
@@ -90,16 +94,36 @@ impl MathField {
 
     /// The row the cursor is in.
     pub fn root(&self) -> &Row {
-        &self.lines[self.line]
+        &self.systems[self.system][self.line]
     }
 
     fn root_mut(&mut self) -> &mut Row {
-        &mut self.lines[self.line]
+        &mut self.systems[self.system][self.line]
     }
 
-    /// Every line, top to bottom.
+    /// The lines of the system the cursor is in, top to bottom.
     pub fn lines(&self) -> &[Row] {
-        &self.lines
+        &self.systems[self.system]
+    }
+
+    /// Every system in the document, in order.
+    pub fn systems(&self) -> &[Vec<Row>] {
+        &self.systems
+    }
+
+    /// Which system the cursor is in.
+    pub fn system(&self) -> usize {
+        self.system
+    }
+
+    /// How many systems the document holds (always at least one).
+    pub fn system_count(&self) -> usize {
+        self.systems.len()
+    }
+
+    /// True when the document holds more than one system.
+    pub fn is_multi_system(&self) -> bool {
+        self.systems.len() > 1
     }
 
     /// Which line the cursor is in.
@@ -107,14 +131,14 @@ impl MathField {
         self.line
     }
 
-    /// How many equations the field holds (always at least one).
+    /// How many equations the current system holds (always at least one).
     pub fn line_count(&self) -> usize {
-        self.lines.len()
+        self.systems[self.system].len()
     }
 
-    /// True when the field holds more than one equation.
+    /// True when the current system holds more than one equation.
     pub fn is_system(&self) -> bool {
-        self.lines.len() > 1
+        self.systems[self.system].len() > 1
     }
 
     pub fn cursor(&self) -> &Cursor {
@@ -134,14 +158,18 @@ impl MathField {
     /// True when any line contains an empty argument — the field is
     /// syntactically fine and algebraically incomplete (`\frac{1}{ }`).
     pub fn is_incomplete(&self) -> bool {
-        self.lines
+        self.systems()
             .iter()
+            .flatten()
             .any(|row| crate::tree::row_has_empty_slot(row))
     }
 
     /// True when the field holds nothing.
     pub fn is_blank(&self) -> bool {
-        self.lines.iter().all(Vec::is_empty) && self.command.is_none()
+        self.systems
+            .iter()
+            .all(|lines| lines.iter().all(Vec::is_empty))
+            && self.command.is_none()
     }
 
     /// Discard everything.
@@ -247,6 +275,14 @@ impl MathField {
             self.cursor = Cursor::at(Vec::new(), end);
             return true;
         }
+        // And at the top of a system, into the previous system's last line.
+        if self.cursor.path.is_empty() && self.line == 0 && self.system > 0 {
+            self.system -= 1;
+            self.line = self.systems[self.system].len() - 1;
+            let end = row_caret_len(self.root());
+            self.cursor = Cursor::at(Vec::new(), end);
+            return true;
+        }
         false
     }
 
@@ -259,8 +295,18 @@ impl MathField {
             self.cursor = c;
             return true;
         }
-        if self.cursor.path.is_empty() && self.line + 1 < self.lines.len() {
+        if self.cursor.path.is_empty() && self.line + 1 < self.systems[self.system].len() {
             self.line += 1;
+            self.cursor = Cursor::root();
+            return true;
+        }
+        // The last line of a system leads into the next system.
+        if self.cursor.path.is_empty()
+            && self.line + 1 == self.systems[self.system].len()
+            && self.system + 1 < self.systems.len()
+        {
+            self.system += 1;
+            self.line = 0;
             self.cursor = Cursor::root();
             return true;
         }
@@ -371,12 +417,32 @@ impl MathField {
         true
     }
 
+    /// Move the cursor to another equation, cursor at its start.
+    ///
+    /// Returns `false` when there is no such line, or when it is already the
+    /// active one, so a click handler can treat it as "nothing changed".
+    pub fn set_position(&mut self, system: usize, line: usize) -> bool {
+        let Some(lines) = self.systems.get(system) else {
+            return false;
+        };
+        if line >= lines.len() || (system == self.system && line == self.line) {
+            return false;
+        }
+        self.finish_command();
+        self.selection = None;
+        self.anchor = None;
+        self.system = system;
+        self.line = line;
+        self.cursor = Cursor::root();
+        true
+    }
+
     /// Move to another equation of the system, cursor at its start.
     ///
     /// Returns `false` when there is no such line, or when it is already the
     /// active one, so a click handler can treat it as "nothing changed".
     pub fn set_line(&mut self, line: usize) -> bool {
-        if line >= self.lines.len() || line == self.line {
+        if line >= self.systems[self.system].len() || line == self.line {
             return false;
         }
         self.finish_command();
@@ -940,6 +1006,24 @@ impl MathField {
         Ok(())
     }
 
+    /// Build a field from LaTeX, for *display*: a solver result, a history entry.
+    ///
+    /// This is the palette's snippet language with the extra conventions the
+    /// printer uses (`\,`, `\quad`, `\operatorname{…}`), which is enough to read
+    /// anything [`canlab_tex::to_latex`] writes. It is not a general LaTeX
+    /// parser: anything outside that subset is refused rather than guessed at.
+    pub fn from_latex(latex: &str) -> Result<MathField, crate::SnippetError> {
+        let row = crate::snippet::parse(latex)?;
+        Ok(MathField::from_row(row))
+    }
+
+    /// Build a field from several lines of LaTeX.
+    pub fn from_latex_lines(lines: &[String]) -> Result<MathField, crate::SnippetError> {
+        let rows: Result<Vec<Row>, crate::SnippetError> =
+            lines.iter().map(|line| crate::snippet::parse(line)).collect();
+        Ok(MathField::from_lines(rows?))
+    }
+
     /// Insert already-built nodes at the cursor and place the cursor in the first
     /// empty slot of the inserted structures.
     fn insert_constructed(&mut self, nodes: Vec<Node>, content_slot: Option<Slot>) {
@@ -1202,7 +1286,7 @@ impl MathField {
     pub fn new_line(&mut self) -> bool {
         self.finish_command();
         self.selection = None;
-        self.lines.insert(self.line + 1, Vec::new());
+        self.systems[self.system].insert(self.line + 1, Vec::new());
         self.line += 1;
         self.cursor = Cursor::root();
         true
@@ -1223,45 +1307,78 @@ impl MathField {
     /// Drop a line that is empty, when the cursor is on it and it is not the only
     /// one. Used by Backspace so a system can be shortened again.
     fn remove_empty_line(&mut self) -> bool {
-        if self.lines.len() < 2 || self.line == 0 || !self.root().is_empty() {
+        if !self.root().is_empty() {
             return false;
         }
-        self.lines.remove(self.line);
-        self.line -= 1;
-        let end = row_caret_len(self.root());
-        self.cursor = Cursor::at(Vec::new(), end);
+        // Another line in this system: fold it away.
+        if self.systems[self.system].len() > 1 && self.line > 0 {
+            self.systems[self.system].remove(self.line);
+            self.line -= 1;
+            let end = row_caret_len(self.root());
+            self.cursor = Cursor::at(Vec::new(), end);
+            return true;
+        }
+        // A whole empty system folds into the one above it.
+        if self.systems.len() > 1 && self.line == 0 && self.systems[self.system].len() == 1 {
+            self.systems.remove(self.system);
+            self.system -= 1;
+            self.line = self.systems[self.system].len() - 1;
+            let end = row_caret_len(self.root());
+            self.cursor = Cursor::at(Vec::new(), end);
+            return true;
+        }
+        false
+    }
+
+    /// Start a new, separate system below the current one.
+    ///
+    /// A page of sub-tasks is several systems, not one long one: they are solved
+    /// and plotted apart, so the document keeps them apart.
+    pub fn new_system(&mut self) -> bool {
+        self.finish_command();
+        self.selection = None;
+        self.anchor = None;
+        self.systems.push(vec![Vec::new()]);
+        self.system = self.systems.len() - 1;
+        self.line = 0;
+        self.cursor = Cursor::root();
         true
     }
 
     // ------------------------------------------------------------------- output
 
-    /// Abitti-flavoured LaTeX for the whole field. See [`crate::latex`].
+    /// Abitti-flavoured LaTeX for the whole document. See [`crate::latex`].
     ///
-    /// One line is just that line. Several lines are a system, and Abitti's own
-    /// vocabulary for a system is the `cases` environment.
+    /// One system of one line is just that line. A system of several lines is a
+    /// `cases` environment, which is Abitti's own vocabulary for a system, and
+    /// several systems are those blocks separated by `\quad`.
     pub fn to_latex(&self) -> String {
-        if self.lines.len() == 1 {
-            return crate::latex::emit(&self.lines[0]);
+        if self.systems.len() == 1 && self.systems[0].len() == 1 {
+            return crate::latex::emit(&self.systems[0][0]);
         }
-        let rows: Vec<String> = self.lines.iter().map(crate::latex::emit).collect();
-        format!("\\begin{{cases}} {} \\end{{cases}}", rows.join(" \\\\ "))
+        let blocks: Vec<String> = self.systems.iter().map(|lines| block(lines)).collect();
+        blocks.join("\\quad ")
     }
 
     /// Convert the current line to a `canlab-core` expression, or explain why not.
     ///
     /// A system has no single expression; use [`MathField::build_lines`] for one.
     pub fn build_expr(&self) -> Result<crate::Expr, crate::ToExprError> {
-        if self.lines.len() != 1 {
+        if self.systems.len() != 1 || self.systems[0].len() != 1 {
             return Err(crate::ToExprError::System);
         }
-        crate::expr::build(&self.lines[0])
+        crate::expr::build(&self.systems[0][0])
     }
 
-    /// Convert every line to an expression: the equations of a system.
+    /// Convert every line to an expression: the equations of the document.
     ///
     /// Fails with the first line's error, so the caller can point at it.
     pub fn build_lines(&self) -> Result<Vec<crate::Expr>, crate::ToExprError> {
-        self.lines.iter().map(|row| crate::expr::build(row)).collect()
+        self.systems
+            .iter()
+            .flatten()
+            .map(|row| crate::expr::build(row))
+            .collect()
     }
 
     /// Read every line as an *equation*: the two sides of its `=`.
@@ -1273,25 +1390,26 @@ impl MathField {
     pub fn build_equations(
         &self,
     ) -> Result<Vec<(crate::Expr, Option<crate::Expr>)>, crate::ToExprError> {
-        self.lines
+        self.systems
             .iter()
-            .map(|row| {
-                let mut lhs: Vec<Node> = Vec::new();
-                let mut rhs: Option<Vec<Node>> = None;
-                for node in row {
-                    match (&mut rhs, node) {
-                        (None, Node::Text(text)) if text == "=" => rhs = Some(Vec::new()),
-                        (None, node) => lhs.push(node.clone()),
-                        (Some(side), node) => side.push(node.clone()),
-                    }
-                }
-                let lhs = crate::expr::build(&lhs)?;
-                let rhs = match rhs {
-                    Some(side) => Some(crate::expr::build(&side)?),
-                    None => None,
-                };
-                Ok((lhs, rhs))
-            })
+            .flatten()
+            .filter(|row| row_caret_len(row) > 0)
+            .map(|row| equation(row))
+            .collect()
+    }
+
+    /// The equations of one system, so a caller can plot or solve them apart.
+    pub fn build_system_equations(
+        &self,
+        system: usize,
+    ) -> Result<Vec<(crate::Expr, Option<crate::Expr>)>, crate::ToExprError> {
+        let Some(lines) = self.systems.get(system) else {
+            return Err(crate::ToExprError::EmptySlot);
+        };
+        lines
+            .iter()
+            .filter(|row| row_caret_len(row) > 0)
+            .map(|row| equation(row))
             .collect()
     }
 
@@ -1373,6 +1491,34 @@ fn node_caret_len(node: &Node) -> usize {
 /// How many caret positions a row has (its offsets run `0..=row_caret_len`).
 pub fn row_caret_len(row: &Row) -> usize {
     row.iter().map(node_caret_len).sum()
+}
+
+/// One system as LaTeX: the line itself, or a `cases` block when it has several.
+fn block(lines: &[Row]) -> String {
+    if lines.len() == 1 {
+        return crate::latex::emit(&lines[0]);
+    }
+    let rows: Vec<String> = lines.iter().map(crate::latex::emit).collect();
+    format!("\\begin{{cases}} {} \\end{{cases}}", rows.join(" \\\\ "))
+}
+
+/// One line as an equation: everything before its `=` and everything after.
+fn equation(row: &Row) -> Result<(crate::Expr, Option<crate::Expr>), crate::ToExprError> {
+    let mut lhs: Vec<Node> = Vec::new();
+    let mut rhs: Option<Vec<Node>> = None;
+    for node in row {
+        match (&mut rhs, node) {
+            (None, Node::Text(text)) if text == "=" => rhs = Some(Vec::new()),
+            (None, node) => lhs.push(node.clone()),
+            (Some(side), node) => side.push(node.clone()),
+        }
+    }
+    let lhs = crate::expr::build(&lhs)?;
+    let rhs = match rhs {
+        Some(side) => Some(crate::expr::build(&side)?),
+        None => None,
+    };
+    Ok((lhs, rhs))
 }
 
 /// The caret offset immediately before node `index` of `row`.

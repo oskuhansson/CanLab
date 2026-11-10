@@ -134,12 +134,17 @@ impl MathView {
         {
             let at = Pos2::new(pointer.x - rect.min.x, pointer.y - rect.min.y);
             let band = style.base_size * 0.75;
-            if let Some(line) = line_at(&display, at) {
-                changed |= field.set_line(line);
+            if let Some(index) = line_at(&display, at)
+                && let Some(&(system, line)) = display.line_refs.get(index)
+            {
+                changed |= field.set_position(system, line);
             }
-            let carets = display
-                .line_carets
-                .get(field.line())
+            let current = display
+                .line_refs
+                .iter()
+                .position(|&(system, line)| system == field.system() && line == field.line());
+            let carets = current
+                .and_then(|index| display.line_carets.get(index))
                 .map_or(display.carets.as_slice(), |carets| carets.as_slice());
             if let Some(index) = nearest_in(carets, at, band)
                 && let Some(target) = field.positions().get(index).cloned()
@@ -169,6 +174,27 @@ impl MathView {
         if changed {
             response.mark_changed();
         }
+        response
+    }
+
+    /// Paint a field without making it editable: no caret, no clicks, no keys.
+    ///
+    /// This is what a *result* wants — the same typesetting as the editor, with
+    /// none of its interaction.
+    pub fn display(ui: &mut egui::Ui, field: &MathField, style: &Style) -> egui::Response {
+        let display = Self::layout(ui, field, style);
+        let desired = egui::vec2(
+            display.size.x.max(style.base_size),
+            display.size.y.max(style.base_size * 1.2),
+        );
+        let (rect, response) = ui.allocate_exact_size(desired, Sense::hover());
+        paint(
+            &ui.painter().with_clip_rect(rect),
+            &display,
+            rect.min,
+            ui.visuals(),
+            None,
+        );
         response
     }
 }

@@ -190,33 +190,51 @@ fn int_of(e: &Expr) -> Option<i128> {
     }
 }
 
+/// Read one run of plain characters as a product.
+///
+/// The field glues adjacent word characters into a single run — that is what
+/// makes `1/2x` put the whole `2x` in the denominator — so `2x` arrives here as
+/// one string even though it means two factors. The run is tokenised back into
+/// a number and a chain of symbols, which is what a student means by `2x`, `3xy`
+/// or `2.5x`.
 fn text_expr(s: &str) -> Result<Expr, ToExprError> {
     if s.is_empty() {
         return Err(ToExprError::EmptySlot);
     }
-    if s.chars().all(|c| c.is_ascii_digit()) {
-        return s
-            .parse::<i128>()
-            .map(|v| ExprNode::num(Number::int(v)))
-            .map_err(|_| ToExprError::UnexpectedText(s.to_string()));
+    let mut factors: Vec<Expr> = Vec::new();
+    let mut chars = s.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_ascii_digit() || c == '.' {
+            let mut number = String::new();
+            while let Some(&d) = chars.peek() {
+                if d.is_ascii_digit() || d == '.' {
+                    number.push(d);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            let value = if number.contains('.') {
+                number.parse::<f64>().map(Number::float).ok()
+            } else {
+                number.parse::<i128>().map(Number::int).ok()
+            };
+            let Some(value) = value else {
+                return Err(ToExprError::UnexpectedText(s.to_string()));
+            };
+            factors.push(ExprNode::num(value));
+        } else if c.is_alphabetic() {
+            chars.next();
+            factors.push(ExprNode::sym(SymbolId::intern(&c.to_string())));
+        } else {
+            return Err(ToExprError::UnexpectedText(s.to_string()));
+        }
     }
-    if s.contains('.') && s.chars().all(|c| c.is_ascii_digit() || c == '.') {
-        return s
-            .parse::<f64>()
-            .map(|v| ExprNode::num(Number::float(v)))
-            .map_err(|_| ToExprError::UnexpectedText(s.to_string()));
+    match factors.len() {
+        0 => Err(ToExprError::EmptySlot),
+        1 => Ok(factors.pop().expect("length checked")),
+        _ => Ok(mul(factors)),
     }
-    if s.chars().all(|c| c.is_alphabetic()) {
-        let mut syms: Vec<Expr> = s
-            .chars()
-            .map(|c| ExprNode::sym(SymbolId::intern(&c.to_string())))
-            .collect();
-        return Ok(match syms.len() {
-            1 => syms.pop().expect("length checked"),
-            _ => mul(syms),
-        });
-    }
-    Err(ToExprError::UnexpectedText(s.to_string()))
 }
 
 fn sym_expr(name: &str) -> Result<Expr, ToExprError> {

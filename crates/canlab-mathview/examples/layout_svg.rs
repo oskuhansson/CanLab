@@ -171,6 +171,13 @@ fn cases() -> Vec<(&'static str, MathField)> {
     system.new_line();
     system.type_str("2x-y=0");
 
+    let mut page = MathField::new();
+    page.type_str("x+y=3");
+    page.new_line();
+    page.type_str("2x-y=0");
+    page.new_system();
+    page.type_str("a+b=1");
+
     let mut slot = MathField::new();
     slot.type_str("\\frac{1}{");
 
@@ -183,6 +190,7 @@ fn cases() -> Vec<(&'static str, MathField)> {
         ("x+1)  — a stray closer wraps the block; the opening paren is a ghost", stray),
         ("accents typed from the keyboard", accents),
         ("a system: Enter starts the second equation", system),
+        ("a page: two systems, the first with two equations", page),
         ("\\frac{1}{  — an empty slot is a legal, reachable state", slot),
         ("palette snippet: \\int_{0}^{1}", snippet),
     ]

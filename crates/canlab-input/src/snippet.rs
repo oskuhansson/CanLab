@@ -181,14 +181,27 @@ impl Parser {
     }
 
     /// A run of plain characters.
+    ///
+    /// Word characters (`2x`, `ab`, `1.5`) run together, exactly as they do when
+    /// typed — the field's reader splits them back into factors. Operators get
+    /// their own node, which is what lets `+`, `-` and `=` mean something to the
+    /// reader instead of disappearing into a text blob.
     fn text(&mut self, out: &mut Row) {
         let mut run = String::new();
         while let Some(c) = self.peek() {
             if matches!(c, '\\' | '{' | '}' | '^' | '_' | 'X' | ']' | ' ' | '\t') {
                 break;
             }
-            run.push(c);
-            self.pos += 1;
+            if crate::tree::is_word_char(c) {
+                run.push(c);
+                self.pos += 1;
+            } else {
+                if !run.is_empty() {
+                    out.push(Node::text(std::mem::take(&mut run)));
+                }
+                out.push(Node::text(c.to_string()));
+                self.pos += 1;
+            }
         }
         if !run.is_empty() {
             out.push(Node::text(run));
@@ -197,6 +210,11 @@ impl Parser {
 
     fn command(&mut self, out: &mut Row) -> Result<(), SnippetError> {
         self.pos += 1; // the backslash
+        if matches!(self.peek(), Some(',') | Some(';') | Some(':') | Some('!') | Some('>')) {
+            // `\,`, `\;`, `\:`, `\!`, `\>`: spacing, nothing to draw.
+            self.pos += 1;
+            return Ok(());
+        }
         let name = self.letters();
         match name.as_str() {
             "frac" => {
@@ -255,6 +273,15 @@ impl Parser {
             }
             "left" => out.push(self.bracket()?),
             "text" | "mathrm" => {
+                let body = self.braced()?;
+                out.push(Node::text(plain(&body)));
+            }
+            // Spacing commands carry no glyph; dropping them keeps the rendered
+            // form readable without inventing space nodes. (`\,` and friends are
+            // consumed before a name is read at all.)
+            "quad" | "qquad" => {}
+            // `\operatorname{tanh}` is a function name, not maths.
+            "operatorname" => {
                 let body = self.braced()?;
                 out.push(Node::text(plain(&body)));
             }

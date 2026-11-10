@@ -78,7 +78,8 @@ struct CasApp {
     /// A human-readable reason the field cannot be read as an expression.
     /// Empty or half-typed fields are deliberately *not* errors.
     error: Option<String>,
-    curve: Option<Curve>,
+    /// The curves currently plotted: one for y = f(x), one per equation for a system.
+    curves: Vec<Curve>,
     y_range: (f64, f64),
     status: String,
     solve: SolveState,
@@ -105,7 +106,7 @@ impl CasApp {
             result_latex: String::new(),
             result_plain: String::new(),
             error: None,
-            curve: None,
+            curves: Vec::new(),
             y_range: (-1.0, 1.0),
             status: String::from("ready"),
             solve: SolveState::Idle,
@@ -132,7 +133,7 @@ impl CasApp {
     fn recompute(&mut self) {
         self.generation = self.generation.wrapping_add(1);
         self.error = None;
-        self.curve = None;
+        self.curves.clear();
         self.solve = SolveState::Idle;
 
         // Do not flash an error at someone who is halfway through a fraction
@@ -602,6 +603,63 @@ mod tests {
         for _ in 0..2 {
             draw_a_frame(&mut app, &ctx);
         }
+    }
+
+    #[test]
+    fn a_system_plots_one_curve_per_equation() {
+        // `x+y=3` is not a function of x, so this is the implicit path: each
+        // line of the system becomes the set of points where it holds.
+        let mut app = CasApp::new();
+        let mut field = MathField::new();
+        field.type_str("x+y=3");
+        field.new_line();
+        field.type_str("2x-y=0");
+        app.field = field;
+        app.recompute();
+        crate::panels::build_curve(&mut app);
+        assert_eq!(app.curves.len(), 2, "status: {}", app.status);
+        assert!(app.curves.iter().all(|curve| !curve.segments.is_empty()));
+    }
+
+    #[test]
+    fn several_systems_all_reach_the_plot() {
+        // Built from LaTeX rather than typed: after `^` the script absorbs
+        // everything until the cursor is moved out, exactly as in Abitti, so a
+        // typed `x^2+y^2=4` would be `x^{2+y^{2=4}}`.
+        let mut app = CasApp::new();
+        let mut field = MathField::from_latex("x^2+y^2=4").expect("a circle");
+        field.new_system();
+        field.type_str("y=x");
+        app.field = field;
+        app.recompute();
+        crate::panels::build_curve(&mut app);
+        assert_eq!(app.curves.len(), 2, "status: {}", app.status);
+    }
+
+    #[test]
+    fn a_system_built_from_latex_plots_every_line() {
+        let mut app = CasApp::new();
+        let field = MathField::from_latex_lines(&[
+            String::from("x+y=3"),
+            String::from("2x-y=0"),
+        ])
+        .expect("two lines");
+        app.field = field;
+        app.recompute();
+        crate::panels::build_curve(&mut app);
+        assert_eq!(app.curves.len(), 2, "status: {}", app.status);
+    }
+
+    #[test]
+    fn a_plain_function_still_plots_as_a_function() {
+        let mut app = CasApp::new();
+        let mut field = MathField::new();
+        field.type_str("x^2");
+        app.field = field;
+        app.recompute();
+        crate::panels::build_curve(&mut app);
+        assert_eq!(app.curves.len(), 1);
+        assert!(!app.curves[0].segments.is_empty());
     }
 
     #[test]
