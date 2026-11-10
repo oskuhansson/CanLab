@@ -195,18 +195,24 @@ fn handle_field_keys(app: &mut CasApp, ui: &mut Ui, response: &egui::Response) {
                     modifiers,
                     ..
                 } => {
-                    !modifiers.ctrl
-                        && !modifiers.command
-                        && matches!(
+                    let arrow = matches!(
+                        key,
+                        egui::Key::ArrowLeft
+                            | egui::Key::ArrowRight
+                            | egui::Key::ArrowUp
+                            | egui::Key::ArrowDown
+                    );
+                    let plain = !modifiers.ctrl && !modifiers.command;
+                    let editing = arrow
+                        || matches!(
                             key,
-                            egui::Key::Backspace
-                                | egui::Key::Delete
-                                | egui::Key::ArrowLeft
-                                | egui::Key::ArrowRight
-                                | egui::Key::ArrowUp
-                                | egui::Key::ArrowDown
-                                | egui::Key::Enter
-                        )
+                            egui::Key::Backspace | egui::Key::Delete | egui::Key::Enter
+                        );
+                    // `Ctrl-A` belongs to the field while it has focus; every
+                    // other command combination is left to the shell.
+                    (plain && editing)
+                        || (modifiers.shift && arrow)
+                        || (modifiers.command && matches!(key, egui::Key::A))
                 }
                 _ => false,
             };
@@ -226,8 +232,15 @@ fn handle_field_keys(app: &mut CasApp, ui: &mut Ui, response: &egui::Response) {
                 changed = true;
             }
             egui::Event::Key {
-                key, pressed: true, ..
+                key,
+                pressed: true,
+                modifiers,
+                ..
             } => match key {
+                egui::Key::A if modifiers.command => {
+                    app.field.select_all();
+                    changed = true;
+                }
                 egui::Key::Backspace => {
                     app.field.backspace();
                     changed = true;
@@ -236,6 +249,10 @@ fn handle_field_keys(app: &mut CasApp, ui: &mut Ui, response: &egui::Response) {
                     app.field.delete_forward();
                     changed = true;
                 }
+                egui::Key::ArrowLeft if modifiers.shift => app.field.extend_left(),
+                egui::Key::ArrowRight if modifiers.shift => app.field.extend_right(),
+                egui::Key::ArrowUp if modifiers.shift => app.field.extend_up(),
+                egui::Key::ArrowDown if modifiers.shift => app.field.extend_down(),
                 egui::Key::ArrowLeft => changed |= app.field.move_left(),
                 egui::Key::ArrowRight => changed |= app.field.move_right(),
                 egui::Key::ArrowUp => changed |= app.field.move_up(),

@@ -149,20 +149,27 @@ impl CasApp {
             self.expr = None;
             self.free_vars.clear();
             self.result_latex = self.field.to_latex();
-            match self.field.build_lines() {
-                Ok(lines) => {
+            match self.field.build_equations() {
+                Ok(equations) => {
                     let mut vars = Vec::new();
-                    for line in &lines {
-                        let mut line_vars = Vec::new();
-                        free_symbols(line, &mut line_vars);
-                        for var in line_vars {
-                            if !vars.contains(&var) {
-                                vars.push(var);
+                    for (lhs, rhs) in &equations {
+                        for side in std::iter::once(lhs).chain(rhs.iter()) {
+                            let mut side_vars = Vec::new();
+                            free_symbols(side, &mut side_vars);
+                            for var in side_vars {
+                                if !vars.contains(&var) {
+                                    vars.push(var);
+                                }
                             }
                         }
                     }
                     self.free_vars = vars;
-                    self.result_plain = format!("system of {} equations", lines.len());
+                    let named = equations.iter().filter(|(_, rhs)| rhs.is_some()).count();
+                    self.result_plain = match named {
+                        0 => format!("system of {} lines", equations.len()),
+                        n if n == equations.len() => format!("system of {n} equations"),
+                        n => format!("system: {n} of {} lines are equations", equations.len()),
+                    };
                 }
                 Err(error) => {
                     self.error = Some(format!(

@@ -102,10 +102,10 @@ result. `SolverError::NotImplemented` travels all the way to the screen.
   `egui::Context`, which is what would catch a panic that shows up as a blank
   window.
 
-Current state: **381 tests**, all green — `canlab-core` 28, `canlab-parse` 68,
-`canlab-tex` 43, `canlab-plot` 28, `canlab-solver` 61, `canlab-input` 75,
-`canlab-mathview` 32, `canlab-gui` 15, `canlab-cli` end-to-end 8, plus
-integration, parity and doc tests.
+Current state: **390 tests**, all green — `canlab-core` 28, `canlab-parse` 71,
+`canlab-tex` 43, `canlab-plot` 29, `canlab-solver` 61, `canlab-input` 97,
+`canlab-mathview` 38, `canlab-gui` 15, `canlab-cli` end-to-end 8 (per-crate runs
+include doctests).
 
 ```bash
 cargo test --workspace

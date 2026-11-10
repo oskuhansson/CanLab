@@ -134,6 +134,16 @@ impl MathView {
             .position(|cursor| cursor == field.cursor());
 
         let painter = ui.painter().with_clip_rect(rect);
+        // The selection is painted first, under the ink.
+        if let Some((x0, y0, x1, y1)) = selection_span(&display, field)
+            && x1 > x0
+        {
+            let highlight = egui::Rect::from_min_max(
+                egui::pos2(rect.min.x + x0, rect.min.y + y0),
+                egui::pos2(rect.min.x + x1, rect.min.y + y1),
+            );
+            painter.rect_filled(highlight, CornerRadius::same(2), ui.visuals().selection.bg_fill);
+        }
         paint(&painter, &display, rect.min, ui.visuals(), current);
 
         if changed {
@@ -141,6 +151,38 @@ impl MathView {
         }
         response
     }
+}
+
+/// The bounding box, in display coordinates, of everything the selection covers.
+///
+/// The caret list and [`MathField::positions`] share an order, so the two ends of
+/// the selection are indices into `display.carets`; the box is the union of the
+/// carets between them.
+fn selection_span(display: &DisplayList, field: &canlab_input::MathField) -> Option<(f32, f32, f32, f32)> {
+    let selection = field.selection()?;
+    let positions = field.positions();
+    let start = positions.iter().position(|cursor| *cursor == selection.start)?;
+    let end = positions.iter().position(|cursor| *cursor == selection.end)?;
+    let (first, last) = if start <= end {
+        (start, end)
+    } else {
+        (end, start)
+    };
+    let carets = display.carets.get(first..=last)?;
+    let mut x0 = f32::MAX;
+    let mut x1 = f32::MIN;
+    let mut y0 = f32::MAX;
+    let mut y1 = f32::MIN;
+    for caret in carets {
+        x0 = x0.min(caret.x);
+        x1 = x1.max(caret.x);
+        y0 = y0.min(caret.y);
+        y1 = y1.max(caret.y + caret.h);
+    }
+    if x0 > x1 {
+        return None;
+    }
+    Some((x0, y0, x1, y1))
 }
 
 /// Paint one display list with its top-left at `origin`.

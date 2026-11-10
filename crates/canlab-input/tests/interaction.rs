@@ -547,7 +547,112 @@ fn literal_braces_become_visible_delimiters() {
     assert_eq!(typed("x^{2}").to_latex(), "x^{\\left\\{2\\right\\}}");
 }
 
-// ------------------------------------------------------------- esc and enter
+#[test]
+fn shift_right_selects_a_run_and_slash_promotes_it_to_a_numerator() {
+    // The idiom this exists for: select something, press `/`, and it becomes the
+    // numerator. Until now the model could do it but the GUI had no way to make a
+    // selection.
+    let mut f = MathField::new();
+    f.type_str("x+1");
+    while f.move_left() {}
+    f.extend_right();
+    f.extend_right();
+    assert_eq!(
+        f.selection().map(|s| (s.start.offset, s.end.offset)),
+        Some((0, 2))
+    );
+    f.slash();
+    // `x+` is what was selected; the `1` was not.
+    assert_eq!(f.to_latex(), "\\frac{x+}{ }1");
+}
+
+#[test]
+fn select_all_then_slash_makes_the_whole_line_the_numerator() {
+    let mut f = typed("x+1");
+    f.select_all();
+    f.slash();
+    assert_eq!(f.to_latex(), "\\frac{x+1}{ }");
+}
+
+#[test]
+fn clearing_the_selection_keeps_the_tree() {
+    let mut f = typed("1/2");
+    f.select_all();
+    assert!(f.selection().is_some());
+    f.clear_selection();
+    assert!(f.selection().is_none());
+    assert_eq!(f.to_latex(), "\\frac{1}{2}");
+}
+
+#[test]
+fn plain_movement_drops_the_selection() {
+    let mut f = typed("x+1");
+    f.select_all();
+    assert!(f.selection().is_some());
+    f.move_left();
+    assert!(f.selection().is_none());
+}
+
+#[test]
+fn extending_across_slots_leaves_no_selection() {
+    // A selection is a range inside one row; the model says so rather than
+    // pretending it can span a fraction and a denominator.
+    let mut f = MathField::new();
+    f.type_str("1/");
+    assert!(f.cursor().path.len() == 1);
+    f.extend_up();
+    assert!(f.selection().is_none());
+}
+
+#[test]
+fn select_all_then_typing_replaces_the_line() {
+    let mut f = typed("2x+1");
+    f.select_all();
+    f.insert_char('9');
+    assert_eq!(f.to_latex(), "9");
+}
+
+#[test]
+fn a_system_keeps_each_line_to_itself() {
+    let mut f = MathField::new();
+    f.type_str("x=1");
+    f.new_line();
+    f.type_str("y=2");
+    assert_eq!(f.to_latex(), "\\begin{cases} x=1 \\\\ y=2 \\end{cases}");
+    assert_eq!(f.line_count(), 2);
+    assert!(f.is_system());
+    assert!(matches!(
+        f.build_expr(),
+        Err(canlab_input::ToExprError::System)
+    ));
+    // An equation line carries a relation, so it is read as two sides.
+    let equations = f.build_equations().expect("both lines are equations");
+    assert_eq!(equations.len(), 2);
+    assert!(equations.iter().all(|(_, rhs)| rhs.is_some()));
+}
+
+#[test]
+fn backspace_at_the_start_of_an_empty_line_folds_it_away() {
+    let mut f = typed("x=1");
+    f.new_line();
+    assert_eq!(f.line_count(), 2);
+    f.backspace();
+    assert_eq!(f.line_count(), 1);
+    assert_eq!(f.to_latex(), "x=1");
+}
+
+#[test]
+fn up_and_down_cross_between_equations() {
+    let mut f = typed("x=1");
+    f.new_line();
+    assert_eq!(f.line(), 1);
+    assert!(f.move_up());
+    assert_eq!(f.line(), 0);
+    assert!(f.move_down());
+    assert_eq!(f.line(), 1);
+}
+
+// ------------------------------------------------------------ esc and enter
 
 #[test]
 fn escape_leaves_every_structure_and_reports_it() {

@@ -38,6 +38,8 @@ pub struct MathField {
     line: usize,
     cursor: Cursor,
     selection: Option<Selection>,
+    /// The fixed end of a shift-selection, while the cursor is the moving end.
+    anchor: Option<Cursor>,
     /// A `\name` accumulation in progress. Observed: `\` opens a modal command
     /// block that is committed by the next non-letter, and an unterminated
     /// invalid name stays as raw text (`\alphax`).
@@ -58,6 +60,7 @@ impl MathField {
             line: 0,
             cursor: Cursor::root(),
             selection: None,
+            anchor: None,
             command: None,
         }
     }
@@ -190,6 +193,7 @@ impl MathField {
     pub fn move_left(&mut self) -> bool {
         self.finish_command();
         self.selection = None;
+        self.anchor = None;
         match self.current_index() {
             Some(0) | None => false,
             Some(i) => {
@@ -203,6 +207,7 @@ impl MathField {
     pub fn move_right(&mut self) -> bool {
         self.finish_command();
         self.selection = None;
+        self.anchor = None;
         match self.current_index() {
             None => false,
             Some(i) => {
@@ -230,6 +235,7 @@ impl MathField {
     pub fn move_up(&mut self) -> bool {
         self.finish_command();
         self.selection = None;
+        self.anchor = None;
         if let Some(c) = self.vertical_target(true) {
             self.cursor = c;
             return true;
@@ -248,6 +254,7 @@ impl MathField {
     pub fn move_down(&mut self) -> bool {
         self.finish_command();
         self.selection = None;
+        self.anchor = None;
         if let Some(c) = self.vertical_target(false) {
             self.cursor = c;
             return true;
@@ -291,11 +298,60 @@ impl MathField {
             end: Cursor::at(Vec::new(), end),
         });
         self.cursor = Cursor::at(Vec::new(), end);
+        // Shift-arrow after `Ctrl-A` shrinks the selection from the end, which is
+        // what an anchored selection means.
+        self.anchor = Some(Cursor::root());
     }
 
     /// Drop the selection without touching the tree.
     pub fn clear_selection(&mut self) {
         self.selection = None;
+        self.anchor = None;
+    }
+
+    /// Select from the current position one step left.
+    ///
+    /// This is `Shift-Left`: the first call fixes an anchor, later calls keep it
+    /// and move the free end. Plain movement clears both, so the anchor always
+    /// means "shift was held".
+    pub fn extend_left(&mut self) {
+        self.extend(|field| {
+            field.move_left();
+        });
+    }
+
+    /// Select one step right (`Shift-Right`). See [`MathField::extend_left`].
+    pub fn extend_right(&mut self) {
+        self.extend(|field| {
+            field.move_right();
+        });
+    }
+
+    /// Select one visual row up (`Shift-Up`). See [`MathField::extend_left`].
+    pub fn extend_up(&mut self) {
+        self.extend(|field| {
+            field.move_up();
+        });
+    }
+
+    /// Select one visual row down (`Shift-Down`). See [`MathField::extend_left`].
+    pub fn extend_down(&mut self) {
+        self.extend(|field| {
+            field.move_down();
+        });
+    }
+
+    fn extend(&mut self, step: impl FnOnce(&mut Self)) {
+        let anchor = self.anchor.clone().unwrap_or_else(|| self.cursor.clone());
+        step(self);
+        self.anchor = Some(anchor.clone());
+        // A selection is a range inside one row; crossing into another slot
+        // leaves it empty rather than pretending (the model has no cross-row
+        // selection, and `delete_selection` assumes one row).
+        self.selection = selection_between(&anchor, &self.cursor);
+        if self.selection.is_none() {
+            self.anchor = None;
+        }
     }
 
     /// Place the cursor at a position the caller obtained from
@@ -1208,6 +1264,37 @@ impl MathField {
         self.lines.iter().map(|row| crate::expr::build(row)).collect()
     }
 
+    /// Read every line as an *equation*: the two sides of its `=`.
+    ///
+    /// A system is written `x+y=3`, so each line has a relation in it, which
+    /// [`MathField::build_expr`] refuses by design — a relation is not a value.
+    /// The right-hand side is `None` for a line with no `=`, which is legal while
+    /// someone is still typing.
+    pub fn build_equations(
+        &self,
+    ) -> Result<Vec<(crate::Expr, Option<crate::Expr>)>, crate::ToExprError> {
+        self.lines
+            .iter()
+            .map(|row| {
+                let mut lhs: Vec<Node> = Vec::new();
+                let mut rhs: Option<Vec<Node>> = None;
+                for node in row {
+                    match (&mut rhs, node) {
+                        (None, Node::Text(text)) if text == "=" => rhs = Some(Vec::new()),
+                        (None, node) => lhs.push(node.clone()),
+                        (Some(side), node) => side.push(node.clone()),
+                    }
+                }
+                let lhs = crate::expr::build(&lhs)?;
+                let rhs = match rhs {
+                    Some(side) => Some(crate::expr::build(&side)?),
+                    None => None,
+                };
+                Ok((lhs, rhs))
+            })
+            .collect()
+    }
+
     /// Convert to a `canlab-core` expression when the field is complete enough.
     ///
     /// Returns `None` for a half-typed field (`\frac{1}{ }`), for a base-less
@@ -1291,6 +1378,23 @@ pub fn row_caret_len(row: &Row) -> usize {
 /// The caret offset immediately before node `index` of `row`.
 fn caret_before(row: &Row, index: usize) -> usize {
     row[..index.min(row.len())].iter().map(node_caret_len).sum()
+}
+
+/// The selection between two cursors, or `None` when they are in different rows
+/// or on the same spot.
+fn selection_between(a: &Cursor, b: &Cursor) -> Option<Selection> {
+    if a.path != b.path || a.offset == b.offset {
+        return None;
+    }
+    let (start, end) = if a.offset < b.offset {
+        (a.offset, b.offset)
+    } else {
+        (b.offset, a.offset)
+    };
+    Some(Selection {
+        start: Cursor::at(a.path.clone(), start),
+        end: Cursor::at(a.path.clone(), end),
+    })
 }
 
 /// Split a row at a caret offset.
