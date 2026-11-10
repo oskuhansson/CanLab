@@ -665,6 +665,29 @@ fn a_run_of_letters_and_digits_is_a_product() {
 }
 
 #[test]
+fn enter_commits_a_half_typed_command_instead_of_breaking_the_line() {
+    // `\bar` then Enter must be the accent, with the cursor in its argument —
+    // not an accent *and* a new line.
+    let mut f = MathField::new();
+    f.type_str("\\bar");
+    assert_eq!(f.pending_command(), Some("bar"));
+    assert!(f.commit_command());
+    assert_eq!(f.line_count(), 1);
+    assert_eq!(f.system_count(), 1);
+    assert_eq!(f.to_latex(), "\\bar{ }");
+    assert_eq!(f.cursor().path.len(), 1, "the cursor is inside the argument");
+    f.type_str("x");
+    assert_eq!(f.to_latex(), "\\bar{x}");
+}
+
+#[test]
+fn committing_with_nothing_pending_reports_so() {
+    let mut f = typed("x+1");
+    assert!(!f.commit_command());
+    assert_eq!(f.to_latex(), "x+1");
+}
+
+#[test]
 fn a_document_holds_several_separate_systems() {
     // Two questions on one page: they must not merge into one long system.
     let mut f = MathField::new();

@@ -268,14 +268,19 @@ fn handle_field_keys(app: &mut CasApp, ui: &mut Ui, response: &egui::Response) {
                 egui::Key::ArrowRight => changed |= app.field.move_right(),
                 egui::Key::ArrowUp => changed |= app.field.move_up(),
                 egui::Key::ArrowDown => changed |= app.field.move_down(),
-                // Enter starts the next equation of the system; Ctrl+Enter starts
-                // a new, separate system on the page.
-                egui::Key::Enter if modifiers.command => {
-                    app.field.new_system();
-                    changed = true;
-                }
+                // Enter means three things, in this order:
+                // 1. a half-typed `\name` is committed (`\bar` + Enter is the
+                //    accent, not a new line);
+                // 2. Ctrl+Enter starts a new, separate system;
+                // 3. otherwise the next equation of this system.
                 egui::Key::Enter => {
-                    app.field.new_line();
+                    if app.field.commit_command() {
+                        // The keystroke was consumed by the command.
+                    } else if modifiers.command {
+                        app.field.new_system();
+                    } else {
+                        app.field.new_line();
+                    }
                     changed = true;
                 }
                 _ => {}

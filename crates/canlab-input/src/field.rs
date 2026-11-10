@@ -155,6 +155,19 @@ impl MathField {
         self.command.as_deref()
     }
 
+    /// Commit an in-progress `\name` without doing anything else.
+    ///
+    /// Enter has to mean this when a command is half-typed: `\bar` followed by
+    /// Enter should give the accent, not a new line. Returns `true` when there was
+    /// a command to commit, so the caller knows Enter was consumed.
+    pub fn commit_command(&mut self) -> bool {
+        if self.command.is_none() {
+            return false;
+        }
+        self.finish_command();
+        true
+    }
+
     /// True when any line contains an empty argument — the field is
     /// syntactically fine and algebraically incomplete (`\frac{1}{ }`).
     pub fn is_incomplete(&self) -> bool {
