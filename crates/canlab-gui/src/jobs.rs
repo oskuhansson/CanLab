@@ -52,8 +52,9 @@ pub enum JobOutcome {
     Value(Expr),
     /// All solutions of an equation (solve).
     Solutions(Vec<Expr>),
-    /// The backend understood the request and declined. Not an error.
-    Declined,
+    /// The backend understood the request and declined, with a line saying what
+    /// it can do instead. Not an error.
+    Declined(String),
     /// A real failure: timeout, dead worker, broken protocol.
     Failed(String),
 }
@@ -159,16 +160,20 @@ fn run(solver: &dyn Solver, job: Job) -> JobResult {
         generation,
     } = job;
     let (kind, var, outcome) = match op {
-        JobOp::Simplify(expr) => (JobKind::Simplify, None, single(solver.simplify(&expr))),
+        JobOp::Simplify(expr) => (
+            JobKind::Simplify,
+            None,
+            single(solver.simplify(&expr), JobKind::Simplify),
+        ),
         JobOp::Integrate(expr, var) => (
             JobKind::Integrate,
             Some(var),
-            single(solver.integrate(&expr, var)),
+            single(solver.integrate(&expr, var), JobKind::Integrate),
         ),
         JobOp::Solve(expr, var) => {
             let outcome = match solver.solve(&expr, var) {
                 Ok(solutions) => JobOutcome::Solutions(solutions),
-                Err(err) => declined_or_failed(err),
+                Err(err) => declined_or_failed(err, JobKind::Solve),
             };
             (JobKind::Solve, Some(var), outcome)
         }
@@ -182,18 +187,37 @@ fn run(solver: &dyn Solver, job: Job) -> JobResult {
     }
 }
 
-fn single(result: Result<Expr, SolverError>) -> JobOutcome {
+fn single(result: Result<Expr, SolverError>, kind: JobKind) -> JobOutcome {
     match result {
         Ok(expr) => JobOutcome::Value(expr),
-        Err(err) => declined_or_failed(err),
+        Err(err) => declined_or_failed(err, kind),
     }
 }
 
-fn declined_or_failed(err: SolverError) -> JobOutcome {
+/// A backend declining is a real answer, and the panel has to be able to say
+/// *what* it declined and what the backend can do instead. "No solver backend"
+/// is the one thing it is not: the backend answered.
+fn declined_or_failed(err: SolverError, kind: JobKind) -> JobOutcome {
     if err.is_declined() {
-        JobOutcome::Declined
+        JobOutcome::Declined(repertoire(kind))
     } else {
         JobOutcome::Failed(err.to_string())
+    }
+}
+
+/// What this backend is for, in one line, phrased for a declined request.
+fn repertoire(kind: JobKind) -> String {
+    match kind {
+        JobKind::Solve => String::from(
+            "This backend solves one equation in one variable, of degree 1 or 2. \
+             A second variable, a higher power, or a function of the variable is beyond it.",
+        ),
+        JobKind::Integrate => String::from(
+            "This backend integrates sums of integer powers of one variable.",
+        ),
+        JobKind::Simplify => String::from(
+            "This backend has no rewriting rules; the expression is already in the only form it knows.",
+        ),
     }
 }
 
@@ -256,8 +280,8 @@ mod tests {
         );
         assert!(result.kind.is_solve());
         match result.outcome {
-            JobOutcome::Declined => {}
-            other => assert!(matches!(other, JobOutcome::Declined)),
+            JobOutcome::Declined(_) => {}
+            other => assert!(matches!(other, JobOutcome::Declined(_))),
         }
     }
 
@@ -265,7 +289,7 @@ mod tests {
         match outcome {
             JobOutcome::Value(_) => "a value",
             JobOutcome::Solutions(_) => "solutions",
-            JobOutcome::Declined => "declined",
+            JobOutcome::Declined(_) => "declined",
             JobOutcome::Failed(_) => "a failure",
         }
     }

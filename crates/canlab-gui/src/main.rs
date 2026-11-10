@@ -48,7 +48,7 @@ fn main() -> eframe::Result<()> {
 
 /// The latest Solve outcome, kept separate from the editor's displayed LaTeX
 /// so the Variables panel can tell "no answer" from "never asked".
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub enum SolveState {
     #[default]
     Idle,
@@ -56,7 +56,12 @@ pub enum SolveState {
         var: SymbolId,
         values: Vec<Expr>,
     },
-    Declined,
+    Declined {
+        /// What was asked, e.g. "Solve for x".
+        label: String,
+        /// What the backend can do instead.
+        why: String,
+    },
     Failed(String),
 }
 
@@ -440,10 +445,10 @@ impl CasApp {
                 self.solve = SolveState::Solved { var, values };
                 self.push_history(&label, self.result_latex.clone());
             }
-            JobOutcome::Declined => {
-                self.status = format!("{label}: no solver backend");
+            JobOutcome::Declined(why) => {
+                self.status = format!("{label}: declined");
                 if kind.is_solve() {
-                    self.solve = SolveState::Declined;
+                    self.solve = SolveState::Declined { label, why };
                 }
             }
             JobOutcome::Failed(message) => {
@@ -722,6 +727,54 @@ mod tests {
         app.recompute();
         for _ in 0..2 {
             draw_a_frame(&mut app, &ctx);
+        }
+    }
+
+    #[test]
+    fn solving_a_linear_equation_reaches_the_variables_panel() {
+        // The whole path: document -> editor -> worker thread -> panel state.
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex("2x+6=0").expect("a linear equation");
+        app.recompute();
+        app.start_solve();
+
+        let ctx = egui::Context::default();
+        for _ in 0..400 {
+            app.poll_jobs(&ctx);
+            if matches!(app.solve, SolveState::Solved { .. } | SolveState::Failed(_)) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        match &app.solve {
+            SolveState::Solved { values, .. } => {
+                assert_eq!(values.len(), 1);
+                assert_eq!(values[0].to_string(), "-3");
+            }
+            other => panic!("expected a solution, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_two_variable_equation_is_declined_with_a_reason() {
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex("x^2+y^2=1").expect("a circle");
+        app.recompute();
+        app.start_solve();
+
+        let ctx = egui::Context::default();
+        for _ in 0..400 {
+            app.poll_jobs(&ctx);
+            if !matches!(app.solve, SolveState::Idle) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        match &app.solve {
+            SolveState::Declined { why, .. } => {
+                assert!(why.contains("one variable"), "why: {why}");
+            }
+            other => panic!("expected a decline, got {other:?}"),
         }
     }
 

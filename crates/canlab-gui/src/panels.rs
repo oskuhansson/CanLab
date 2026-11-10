@@ -507,12 +507,21 @@ pub fn palette(app: &mut CasApp, ui: &mut Ui) {
 }
 
 pub fn variables(app: &mut CasApp, ui: &mut Ui) {
-    ui.label(
-        RichText::new("SOLVER")
-            .small()
-            .strong()
-            .color(ui.visuals().weak_text_color()),
-    );
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new("SOLVER")
+                .small()
+                .strong()
+                .color(ui.visuals().weak_text_color()),
+        );
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.label(
+                RichText::new("native · linear & quadratic")
+                    .small()
+                    .color(ui.visuals().weak_text_color()),
+            );
+        });
+    });
     ui.add_space(4.0);
     solver_row(app, ui);
     ui.add_space(10.0);
@@ -560,15 +569,20 @@ pub fn variables(app: &mut CasApp, ui: &mut Ui) {
                     .color(ui.visuals().weak_text_color()),
             );
         }
-        SolveState::Declined => {
+        SolveState::Declined { label, why } => {
             ui.label(
-                RichText::new("no solver backend")
+                RichText::new(label.as_str())
+                    .small()
+                    .color(ui.visuals().weak_text_color()),
+            );
+            ui.label(
+                RichText::new("declined")
                     .small()
                     .strong()
                     .color(ui.visuals().warn_fg_color),
             );
             ui.label(
-                RichText::new("The backend declined this request, so no values are shown.")
+                RichText::new(why.as_str())
                     .small()
                     .color(ui.visuals().weak_text_color()),
             );
