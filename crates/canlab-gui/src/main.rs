@@ -149,6 +149,16 @@ impl CasApp {
             paints: 0,
         };
         app.recompute();
+        // A debug aid worth keeping: `CANLAB_OPEN` loads a document at startup,
+        // its lines separated by `|`. It is what makes a screenshot of a specific
+        // case possible without typing into the window.
+        if let Ok(document) = std::env::var("CANLAB_OPEN") {
+            let lines: Vec<String> = document.split('|').map(str::to_string).collect();
+            if let Ok(field) = MathField::from_latex_lines(&lines) {
+                app.field = field;
+                app.recompute();
+            }
+        }
         app
     }
 

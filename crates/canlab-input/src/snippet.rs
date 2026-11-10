@@ -133,9 +133,24 @@ impl Parser {
         let mut out = Vec::new();
         while let Some(c) = self.peek() {
             match c {
-                '}' | ']' => break,
+                '}' | ']' | ')' => break,
                 ' ' | '\t' => {
                     self.pos += 1;
+                }
+                // A bare bracket is a group, exactly as typing one is. The
+                // printer writes `\left(…\right)`, but a hand-written or
+                // externally produced `(a+b)^2` has to read too.
+                '(' => {
+                    self.pos += 1;
+                    let body = self.row()?;
+                    self.expect(')')?;
+                    out.push(Node::ghost_group(Delim::Paren, body, Ghost::None));
+                }
+                '[' => {
+                    self.pos += 1;
+                    let body = self.row()?;
+                    self.expect(']')?;
+                    out.push(Node::ghost_group(Delim::Bracket, body, Ghost::None));
                 }
                 '\\' => {
                     if self.at_command("right") {
@@ -189,7 +204,7 @@ impl Parser {
     fn text(&mut self, out: &mut Row) {
         let mut run = String::new();
         while let Some(c) = self.peek() {
-            if matches!(c, '\\' | '{' | '}' | '^' | '_' | 'X' | ']' | ' ' | '\t') {
+            if matches!(c, '\\' | '{' | '}' | '^' | '_' | 'X' | ']' | ')' | '(' | '[' | ' ' | '\t') {
                 break;
             }
             if crate::tree::is_word_char(c) {

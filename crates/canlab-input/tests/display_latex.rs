@@ -81,3 +81,12 @@ fn a_list_of_solutions_reads_as_one_row() {
     let field = MathField::from_latex("1,\\quad 2").expect("a solution list is displayable");
     assert!(!field.to_latex().is_empty());
 }
+
+#[test]
+fn bare_parentheses_read_as_a_group() {
+    // The printer writes `\left(…\right)`, but a hand-written `(a+b)^2` and
+    // anything a solver hands back must read too.
+    let field = MathField::from_latex("x^2+(y-1)^2=1").expect("an equation with brackets");
+    assert!(field.to_latex().contains("\\left("), "got {:?}", field.to_latex());
+    assert!(MathField::from_latex("(a+b)^2").is_ok());
+}

@@ -58,7 +58,9 @@ fn editor_column(app: &mut CasApp, ui: &mut Ui) {
             format!(
                 "Document · {} system(s), {} line(s)",
                 app.field.system_count(),
-                app.field.build_equations().map(|e| e.len()).unwrap_or(0)
+                // Lines, not *readable* equations: a half-typed document still
+                // has lines, and reporting zero made it look empty.
+                app.field.line_count()
             )
         } else {
             String::from("Document")
