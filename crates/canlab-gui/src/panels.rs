@@ -639,9 +639,8 @@ pub fn variables(app: &mut CasApp, ui: &mut Ui) {
 }
 
 pub fn plot(app: &mut CasApp, ui: &mut Ui) {
-    plot_row(app, ui);
-    ui.add_space(6.0);
-
+    // The canvas is the whole panel; the controls float over it. Anything the
+    // controls take from the top is graph the user cannot see.
     let size = ui.available_size();
     let width = size.x.max(80.0);
     let height = size.y.max(90.0);
@@ -649,7 +648,6 @@ pub fn plot(app: &mut CasApp, ui: &mut Ui) {
     let painter = ui.painter_at(rect);
     let visuals = ui.visuals();
 
-    // No frame around the plot either: the axes and the grid are the frame.
     if app.curves.is_empty() {
         painter.text(
             rect.center(),
@@ -658,25 +656,39 @@ pub fn plot(app: &mut CasApp, ui: &mut Ui) {
             FontId::proportional(13.0),
             visuals.weak_text_color(),
         );
-        return;
+    } else {
+        // Axes once, then every curve on top of them in its own colour, so a
+        // system of two equations reads as two lines rather than one thick one.
+        // Everything is drawn in the equal-aspect box, so resizing the panel
+        // letterboxes the picture instead of reshaping it.
+        let plot_rect = equal_aspect(rect, (app.x_min, app.x_max), app.y_range);
+        paint_axes(&painter, plot_rect, (app.x_min, app.x_max), app.y_range);
+        for (index, curve) in app.curves.iter().enumerate() {
+            paint_curve(
+                &painter,
+                plot_rect,
+                curve,
+                (app.x_min, app.x_max),
+                app.y_range,
+                curve_color(index, app.accent),
+            );
+        }
     }
 
-    // Axes once, then every curve on top of them in its own colour, so a system
-    // of two equations reads as two lines rather than one thick one. Everything
-    // is drawn in the equal-aspect box, so resizing the panel letterboxes the
-    // picture instead of reshaping it.
-    let plot_rect = equal_aspect(rect, (app.x_min, app.x_max), app.y_range);
-    paint_axes(&painter, plot_rect, (app.x_min, app.x_max), app.y_range);
-    for (index, curve) in app.curves.iter().enumerate() {
-        paint_curve(
-            &painter,
-            plot_rect,
-            curve,
-            (app.x_min, app.x_max),
-            app.y_range,
-            curve_color(index, app.accent),
-        );
-    }
+    // The overlay: a translucent strip across the top, so the controls stay
+    // readable over the grid without owning any of the panel.
+    let strip = Rect::from_min_size(
+        rect.min + vec2(10.0, 10.0),
+        vec2((rect.width() - 20.0).max(120.0), 30.0),
+    );
+    painter.rect_filled(strip, 6.0, visuals.window_fill.gamma_multiply(0.88));
+    let mut child = ui.new_child(
+        UiBuilder::new()
+            .max_rect(strip.shrink2(vec2(8.0, 4.0)))
+            .layout(Layout::left_to_right(Align::Center)),
+    );
+    child.set_clip_rect(strip);
+    plot_row(app, &mut child);
 }
 
 /// A distinct colour per curve: the accent first, then a small wheel.
