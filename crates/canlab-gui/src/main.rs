@@ -91,6 +91,10 @@ struct CasApp {
     /// Which variable is drawn vertically. `None` for a one-variable document,
     /// where the curve is `y = f(x)` and only the horizontal axis is a variable.
     y_axis: Option<SymbolId>,
+    /// What the plot panel says about the last attempt: how many curves, on which
+    /// axes, or why nothing was drawn. Separate from `status`, which belongs to
+    /// the solver.
+    plot_note: String,
     y_range: (f64, f64),
     status: String,
     solve: SolveState,
@@ -121,6 +125,7 @@ impl CasApp {
             equations: Vec::new(),
             x_axis: None,
             y_axis: None,
+            plot_note: String::new(),
             y_range: (-1.0, 1.0),
             status: String::from("ready"),
             solve: SolveState::Idle,
@@ -145,6 +150,26 @@ impl CasApp {
     /// Rebuild the algebra expression from the structural field and refresh the
     /// displayed forms.
     fn recompute(&mut self) {
+        self.reparse();
+        // Plotting is not a button: the picture follows the document, so it is
+        // rebuilt whenever the document is rebuilt.
+        self.autoplot();
+    }
+
+    /// Redraw the plot from the current document, or clear it when there is
+    /// nothing drawable. Cheap enough to run on every keystroke: a 240×240
+    /// implicit trace is a few milliseconds.
+    fn autoplot(&mut self) {
+        if self.is_typing() || !self.can_plot() {
+            self.curves.clear();
+            self.plot_note.clear();
+            return;
+        }
+        panels::build_curve(self);
+    }
+
+    /// Rebuild the expression and everything derived from it.
+    fn reparse(&mut self) {
         self.generation = self.generation.wrapping_add(1);
         self.error = None;
         self.curves.clear();
@@ -701,6 +726,19 @@ mod tests {
     }
 
     #[test]
+    fn the_plot_follows_the_document_without_a_button() {
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex("x^2+y^2=1").expect("a circle");
+        app.recompute();
+        assert_eq!(app.curves.len(), 1, "note: {}", app.plot_note);
+
+        // Nothing to plot any more: the curves go away with the document.
+        app.field = MathField::new();
+        app.recompute();
+        assert!(app.curves.is_empty());
+    }
+
+    #[test]
     fn any_variable_can_be_an_axis() {
         // Nothing about the maths knows what the letters are called: `i² + j² = 1`
         // is the same circle as `x² + y² = 1` and must plot without renaming.
@@ -717,7 +755,7 @@ mod tests {
             Some(String::from("j"))
         );
         crate::panels::build_curve(&mut app);
-        assert_eq!(app.curves.len(), 1, "status: {}", app.status);
+        assert_eq!(app.curves.len(), 1, "status: {}", app.plot_note);
     }
 
     #[test]
@@ -728,7 +766,7 @@ mod tests {
         app.x_axis = Some(SymbolId::intern("j"));
         app.y_axis = Some(SymbolId::intern("i"));
         crate::panels::build_curve(&mut app);
-        assert_eq!(app.curves.len(), 1, "status: {}", app.status);
+        assert_eq!(app.curves.len(), 1, "status: {}", app.plot_note);
     }
 
     #[test]
@@ -741,9 +779,9 @@ mod tests {
         crate::panels::build_curve(&mut app);
         assert!(app.curves.is_empty());
         assert!(
-            app.status.contains("skipped") || app.status.contains("no curve"),
-            "status: {}",
-            app.status
+            app.plot_note.contains("skipped") || app.plot_note.contains("no curve"),
+            "plot note: {}",
+            app.plot_note
         );
     }
 
@@ -759,7 +797,7 @@ mod tests {
         app.field = field;
         app.recompute();
         crate::panels::build_curve(&mut app);
-        assert_eq!(app.curves.len(), 2, "status: {}", app.status);
+        assert_eq!(app.curves.len(), 2, "status: {}", app.plot_note);
         assert!(app.curves.iter().all(|curve| !curve.segments.is_empty()));
     }
 
@@ -775,7 +813,7 @@ mod tests {
         app.field = field;
         app.recompute();
         crate::panels::build_curve(&mut app);
-        assert_eq!(app.curves.len(), 2, "status: {}", app.status);
+        assert_eq!(app.curves.len(), 2, "status: {}", app.plot_note);
     }
 
     #[test]
@@ -789,7 +827,7 @@ mod tests {
         app.field = field;
         app.recompute();
         crate::panels::build_curve(&mut app);
-        assert_eq!(app.curves.len(), 2, "status: {}", app.status);
+        assert_eq!(app.curves.len(), 2, "status: {}", app.plot_note);
     }
 
     #[test]

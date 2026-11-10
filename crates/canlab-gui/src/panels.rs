@@ -9,7 +9,7 @@ use canlab_plot::implicit::{ImplicitOptions, sample_implicit};
 use canlab_plot::{Curve, SampleOptions, sample};
 use canlab_tex::to_latex;
 use eframe::egui::{
-    self, Align, Align2, Button, Color32, FontId, Frame, Label, Layout, Margin, Rect, RichText,
+    self, Align, Align2, Button, Color32, FontId, Label, Layout, Rect, RichText,
     Sense, Stroke, Ui, UiBuilder, pos2, vec2,
 };
 
@@ -141,16 +141,9 @@ fn math_field(app: &mut CasApp, ui: &mut Ui) -> egui::Response {
     let height = (display.size.y + 2.0 * FIELD_PADDING_Y).max(FIELD_MIN_HEIGHT);
     let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click());
 
-    let fill = ui.visuals().text_edit_bg_color();
-    let border = ui.visuals().widgets.inactive.bg_stroke.color;
-    ui.painter().rect_filled(rect, 8.0, fill);
-    ui.painter().rect_stroke(
-        rect,
-        8.0,
-        Stroke::new(1.0, border),
-        egui::StrokeKind::Inside,
-    );
-
+    // No box. The mathematics sits straight on the panel: a filled, bordered
+    // rectangle around an editor is chrome that costs space and says nothing the
+    // caret does not already say.
     let inner = rect.shrink2(vec2(FIELD_PADDING_X, FIELD_PADDING_Y));
     let mut child = ui.new_child(
         UiBuilder::new()
@@ -161,18 +154,10 @@ fn math_field(app: &mut CasApp, ui: &mut Ui) -> egui::Response {
     child.set_clip_rect(inner);
     let math = MathView::show(&mut child, &mut app.field, &style);
 
-    // Focus `MathView`'s own widget, not the decorative rectangle: it is the
-    // focusable widget, so Tab and clicks agree about where the caret lives.
+    // Focus `MathView`'s own widget: it is the focusable one, so Tab and clicks
+    // agree about where the caret lives.
     if response.clicked() || math.clicked() {
         math.request_focus();
-    }
-    if math.has_focus() {
-        ui.painter().rect_stroke(
-            rect,
-            8.0,
-            Stroke::new(1.5, ACCENT),
-            egui::StrokeKind::Inside,
-        );
     }
     math
 }
@@ -334,21 +319,8 @@ fn solver_row(app: &mut CasApp, ui: &mut Ui) {
 fn plot_row(app: &mut CasApp, ui: &mut Ui) {
     let mut axes_changed = false;
     ui.horizontal_wrapped(|ui| {
-        let plottable = app.can_plot();
-        let plot = Button::new(RichText::new("Plot").color(Color32::WHITE))
-            .fill(ACCENT)
-            .min_size(vec2(92.0, 28.0));
-        let response = ui.add_enabled(plottable, plot);
-        let response = if plottable {
-            response.on_hover_text("Plot the expression, or every equation in the document")
-        } else {
-            response.on_disabled_hover_text("Nothing to plot yet")
-        };
-        if response.clicked() {
-            app.plot();
-        }
-
-        ui.separator();
+        // No Plot button: the picture follows the document. What is worth
+        // showing here is what it is showing, and why.
         axes_changed |= axis_picker(app, ui, "x", Axis::Horizontal);
         axes_changed |= axis_picker(app, ui, "y", Axis::Vertical);
 
@@ -361,13 +333,19 @@ fn plot_row(app: &mut CasApp, ui: &mut Ui) {
         range_changed |= ui
             .add(egui::DragValue::new(&mut app.x_max).speed(0.5))
             .changed();
-        if range_changed && !app.curves.is_empty() {
+
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.label(
+                RichText::new(app.plot_note.as_str())
+                    .small()
+                    .color(ui.visuals().weak_text_color()),
+            );
+        });
+
+        if axes_changed || range_changed {
             app.plot();
         }
     });
-    if axes_changed && !app.curves.is_empty() {
-        app.plot();
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -410,38 +388,31 @@ fn axis_picker(app: &mut CasApp, ui: &mut Ui, label: &str, axis: Axis) -> bool {
     changed
 }
 
+/// The result, with its LaTeX source beside it in small type.
+///
+/// No frame: a bordered card around a result costs height and draws attention to
+/// the box rather than to the answer.
 fn result_card(app: &CasApp, ui: &mut Ui) {
-    let visuals = ui.visuals();
-    Frame::new()
-        .fill(visuals.faint_bg_color)
-        .stroke(Stroke::new(
-            1.0,
-            visuals.widgets.noninteractive.bg_stroke.color,
-        ))
-        .corner_radius(8)
-        .inner_margin(Margin::same(16))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("RESULT").small().strong());
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(
-                        RichText::new("display form")
-                            .small()
-                            .color(ui.visuals().weak_text_color()),
-                    );
-                });
-            });
-            ui.add_space(6.0);
-            if app.result_latex.is_empty() {
-                ui.label(
-                    RichText::new("Type an expression above; it is parsed as you type.")
-                        .color(ui.visuals().weak_text_color()),
-                );
-            } else {
-                result_body(app, ui);
-            }
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("RESULT").small().strong());
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.label(
+                RichText::new("display form")
+                    .small()
+                    .color(ui.visuals().weak_text_color()),
+            );
         });
+    });
+    ui.add_space(4.0);
+    if app.result_latex.is_empty() {
+        ui.label(
+            RichText::new("Type an expression above; it is parsed as you type.")
+                .small()
+                .color(ui.visuals().weak_text_color()),
+        );
+    } else {
+        result_body(app, ui);
+    }
 }
 
 /// The typeset result, with its LaTeX source beside it in small type.
@@ -646,19 +617,13 @@ pub fn plot(app: &mut CasApp, ui: &mut Ui) {
     let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
     let painter = ui.painter_at(rect);
     let visuals = ui.visuals();
-    painter.rect_filled(rect, 6.0, visuals.extreme_bg_color);
-    painter.rect_stroke(
-        rect,
-        6.0,
-        Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color),
-        egui::StrokeKind::Inside,
-    );
 
+    // No frame around the plot either: the axes and the grid are the frame.
     if app.curves.is_empty() {
         painter.text(
             rect.center(),
             Align2::CENTER_CENTER,
-            "No curve yet — press Plot in the editor.",
+            "Nothing to plot yet.",
             FontId::proportional(13.0),
             visuals.weak_text_color(),
         );
@@ -831,7 +796,7 @@ pub fn history(app: &CasApp, ui: &mut Ui) {
 pub fn build_curve(app: &mut CasApp) {
     app.curves.clear();
     if !app.x_max.is_finite() || !app.x_min.is_finite() || app.x_max <= app.x_min {
-        app.status = String::from("x range is empty");
+        app.plot_note = String::from("x range is empty");
         return;
     }
 
@@ -844,15 +809,15 @@ pub fn build_curve(app: &mut CasApp) {
     }
 
     let Some(expr) = app.expr.clone() else {
-        app.status = String::from("nothing to plot");
+        app.plot_note = String::from("nothing to plot");
         return;
     };
     if app.free_vars.len() != 1 {
-        app.status = format!("plot needs one variable, found {}", app.free_vars.len());
+        app.plot_note = format!("plot needs one variable, found {}", app.free_vars.len());
         return;
     }
     let Some(program) = canlab_core::Program::compile(&expr, &app.free_vars) else {
-        app.status = String::from("cannot evaluate numerically");
+        app.plot_note = String::from("cannot evaluate numerically");
         return;
     };
     let curve = sample(
@@ -866,7 +831,7 @@ pub fn build_curve(app: &mut CasApp) {
     app.y_range = vertical_extent(&curve).unwrap_or((-1.0, 1.0));
     let count = curve.segments.len();
     let suffix = if count == 1 { "" } else { "s" };
-    app.status = format!("{count} segment{suffix}");
+    app.plot_note = format!("{count} segment{suffix}");
     app.curves.push(curve);
 }
 
@@ -878,7 +843,7 @@ pub fn build_curve(app: &mut CasApp) {
 /// drawn on two axes, so it is skipped rather than guessed at.
 fn plot_equations(app: &mut CasApp, equations: &[(canlab_core::Expr, Option<canlab_core::Expr>)]) {
     let Some(horizontal) = app.x_axis else {
-        app.status = String::from("no variables to plot");
+        app.plot_note = String::from("no variables to plot");
         return;
     };
     let vertical = app.y_axis;
@@ -938,7 +903,7 @@ fn plot_equations(app: &mut CasApp, equations: &[(canlab_core::Expr, Option<canl
     }
 
     app.y_range = (y_min, y_max);
-    app.status = match (plotted, skipped) {
+    app.plot_note = match (plotted, skipped) {
         (0, _) => format!("no curve found in this window ({axes_label})"),
         (n, 0) => format!("{n} equation curve(s), {axes_label}"),
         (n, s) => format!("{n} equation curve(s), {s} skipped, {axes_label}"),
