@@ -1,156 +1,133 @@
 # Capability roadmap
 
-Written to be reviewed, not followed. Each item says what it unlocks, what it
-costs, and what it puts at risk. "Effort" is calendar time at 5–10 h/week.
+Written to be reviewed, not followed. Effort is given in **hours of work**, then
+as calendar time **at 20 h/week** — the rate this is now being built at.
+
+At 20 h/week the whole list below is about **four weeks**. The estimates are my
+judgement, not measurements, and the two "sharp edges" at the bottom are the ones
+most likely to overrun.
+
+| # | Item | Hours | Calendar (20 h/wk) | State |
+|---|---|---|---|---|
+| 1 | Function definitions and derivatives | 20 | 1 week | reader done, wiring left |
+| 2 | Undo and redo | 10 | 2–3 days | not started |
+| 3 | Parameters the user can set | 8 | 2 days | not started |
+| 4 | SymPy for real (packaging) | 16 | 4 days | worker written, never run |
+| 5 | Native elimination for 3+ unknowns | 10 | 2–3 days | 2×2 only |
+| 6 | Plot interaction | 16 | 4 days | not started |
+| 7 | Persistence | 6 | 1.5 days | not started |
+| 8 | Editor polish (paste, history, gutter) | 12 | 3 days | `from_latex` exists |
+| | **Total** | **98 h** | **~5 weeks** | |
 
 ## Where it stands
 
-Working and tested (443 tests): exact `i128` rationals, LaTeX parse and print,
-the Abitti structural editor, typeset layout, implicit plotting, a native solver
-for linear/quadratic equations and polynomial calculus, a dockable UI.
+Working and tested (459 tests): exact `i128` rationals, LaTeX parse and print,
+the Abitti structural editor, typeset layout, implicit plotting with intersection
+tracing, a native solver for linear/quadratic equations, polynomial calculus, a
+real symbolic differentiator (sums, product, power, chain, `u^v`, any order), and
+the reader half of function definitions. A dockable UI with dark/light and accent
+colours, and a 53-document acceptance corpus that generates its own review table.
 
 Honest gaps, in the order they hurt:
 
-1. **No function definitions.** `f(x) = x²` reads as the product `f·x`, and `f'`
-   has no meaning, so the whole line fails. This is the single biggest thing
-   between the app and how a student actually writes mathematics.
-2. **No undo.** Ctrl+Z does nothing in the editor. Every other editor has it;
-   its absence is felt on the first mistyped structure.
+1. **Definitions are not wired into the editor.** The reader resolves `f(3)`,
+   `f'(x)`, `f''(x)` and has tests for all of it, but the GUI never builds the
+   table, so typing `f(x) = x²` still reads as a product. This is half a feature.
+2. **No undo.** Ctrl+Z does nothing. Its absence is felt on the first mistyped
+   structure.
 3. **Parameters have no control.** A variable that is not on an axis silently
-   becomes `1` (`l = 1 assumed`). That is a placeholder, not a feature.
-4. **The solver is narrow by design.** Linear and quadratic in one variable,
-   integer powers, no systems beyond substitution and 2×2 elimination.
-5. **Nothing persists.** Closing the app loses the document, the theme and the
-   accent.
+   becomes `1` (`l = 1 assumed`).
+4. **The solver is narrow by design.** Linear and quadratic in one variable, no
+   systems beyond substitution and 2×2 elimination.
+5. **Nothing persists.** Closing the app loses the document, theme and accent.
 
 ---
 
-## P0 — Function definitions and derivatives
+## 1. Function definitions and derivatives — 20 h
 
-**Unlocks:** `f(x) = ax² + b` then `f(3)`, `f'(x)`, plotting `f`. Without it the
-document cannot express the most common exam task.
+**Reader: done** (7 tests). `f(x) = x² + 1` makes `f` a name; `f(3)` substitutes;
+`f'(5)` differentiates the body then substitutes; `f''`, `f'''` repeat the rule;
+recursion is refused at definition time; wrong arity is an error.
 
-**Design (the part to agree on):**
+**Remaining, ~12 h:**
 
-- A *definition* is a line whose left side is `name(parameters)` and whose right
-  side is an expression. It defines; it does not draw a curve of its own unless
-  asked.
-- Definitions are **document-wide and order-independent** (a line may use a
-  function defined below it), which is simpler to explain than forward-only and
-  avoids a class of "why doesn't this work" questions.
-- A call `f(a, b)` substitutes arguments into the body. Recursion is refused at
-  definition time (a name may not appear in its own body) — this is a calculator,
-  not a programming language.
-- `f'` is a call to the backend's `diff` on the body. `f''` likewise. Anything
-  higher is refused rather than half-supported.
-- The reader needs the definition table at parse time. That is the real work:
-  `expr::build` gains a `Definitions` argument, and the GUI builds it before
-  reading any line.
+- Harvest definitions from a document: a line whose left side is `name(params)`
+  defines, and does not draw a curve of its own.
+- `MathField::build_expr_with(&Definitions)` and `build_equations_with`, so the
+  GUI can pass the table everywhere it currently reads without one.
+- Show defined names in the Variables panel, and plot each definition's curve on
+  its own variable.
+- **Decide:** are definitions document-wide and order-independent (my choice) or
+  forward-only? Document-wide is easier to explain and avoids a class of "why
+  doesn't this work" questions, at the cost of allowing a definition to be used
+  above its line.
 
-**Cost:** ~2 weeks. Mostly `canlab-input` (reader + substitution + tests), plus
-`canlab-gui` for the definition table and the "which lines are definitions"
-display.
+**Risk:** definitions make every read depend on every other line, so one broken
+definition must not blank the document. Plan: read line by line and let a broken
+definition degrade to "`f` is undefined" only on the lines that use it.
 
-**Risk:** definitions make every read dependent on every other line, so an error
-in one definition must not blank the document. Plan: read line by line, and let a
-broken definition degrade to "`f` is undefined" on the lines that use it.
+## 2. Undo and redo — 10 h
 
-## P0 — Undo and redo
+The field is already `Clone`. Keep a ring of snapshots (say 100), pushing on each
+*structural* change and coalescing typing on a 400 ms timer so undo steps back a
+word rather than a keystroke. Contained to `canlab-gui`; no model change.
 
-**Unlocks:** editing without fear. A structural editor that cannot undo a
-backspace that swallowed a bracket is painful.
+**Risk:** one snapshot per keystroke on a long document — cap the ring and measure.
 
-**Design:** the field is already a value type (`MathField: Clone`). Keep a
-`Vec<MathField>` snapshot ring (say 100) and push a snapshot on each *structural*
-change, coalescing typing by a 400 ms timer so that undo steps back a word, not a
-keystroke.
+## 3. Parameters the user can set — 8 h
 
-**Cost:** ~3 days. Contained to `canlab-gui`; no model change.
-
-**Risk:** snapshots of a large document per keystroke — fine at this scale, but
-cap the ring and measure before trusting it.
-
-## P0 — Parameters with a value the user controls
-
-**Unlocks:** the `l` in `x² + y² = l²` becomes a slider instead of a silent 1.
-
-**Design:** every variable that is not on an axis gets a row in the plot overlay:
-name, drag value, default 1. The value feeds the same sampling path that
-currently hard-codes 1.0. Sliders are the last 10% — a drag value is enough.
-
-**Cost:** ~3 days. `canlab-gui` only.
-
-**Risk:** none to speak of; this replaces an acknowledged placeholder.
+Every variable that is not on an axis gets a row in the plot overlay: name and a
+drag value, default 1. That replaces the acknowledged `l = 1 assumed` placeholder.
+Sliders are the last 10 % — a drag value is enough.
 
 ---
 
-## P1 — Solver breadth
+## 4. SymPy for real — 16 h
 
-**Unlocks:** the tasks the native backend declines today.
+The worker exists, the protocol is tested in memory, and it has never run: there
+is no Python on this machine. This is a **packaging** problem, not a coding one —
+bundle an interpreter, or require one and document it. Prefer the latter for a
+hobby project; a bundled runtime is a distribution question.
 
-Two separate decisions:
+## 5. Native elimination for 3+ unknowns — 10 h
 
-- **Wire SymPy for real.** The worker exists and the protocol is tested in
-  memory, but there is no Python on this machine, so it has never run. This is a
-  *packaging* problem (bundle a Python, or require one) rather than a coding one.
-- **Widen the native backend.** Systems of three or more linear unknowns
-  (Gaussian elimination — the 2×2 special case is already there), and equations
-  that are linear in one variable but with symbolic coefficients.
+Gaussian elimination over the existing exact `Number` arithmetic. The 2×2 case is
+there; generalising it is bookkeeping, not new mathematics, and it removes the
+"three unknowns → declined" cliff for linear systems.
 
-**Cost:** SimPy wiring 1 week (mostly packaging); Gaussian ~4 days.
+## 6. Plot interaction — 16 h
 
-**Risk:** a bundled Python is a distribution question, not just code. For a hobby
-project, "install Python and SymPy yourself" is a legitimate answer.
+- Drag to pan, scroll to zoom (equal-aspect window is already the only state).
+- Newton-refine each intersection blob into a point instead of drawing the ε-ring,
+  whose size currently depends on how steep the surface is.
+- Show coordinates of an intersection on hover.
 
-## P1 — Plot interaction
+## 7. Persistence — 6 h
 
-**Unlocks:** reading a graph rather than looking at it.
+`eframe`'s persistence stores app state to disk; the document, theme and accent
+are plain data. Brings the first third-party dependency outside the GUI (`serde`).
 
-- Drag to pan, scroll to zoom (the equal-aspect window is already the only state).
-- Refine intersection markers with Newton from each traced blob instead of
-  drawing the ε-ring — the current marker size depends on how steep the surface is.
-- Show the numeric coordinates of an intersection on hover.
+**Risk:** a saved format is a promise. Version it from the first commit.
 
-**Cost:** ~1 week. Contained to `canlab-gui`; the tracer already returns points.
+## 8. Editor polish — 12 h
 
-## P1 — Persistence
-
-**Unlocks:** closing the app stops losing work.
-
-`eframe`'s persistence feature stores app state to disk; the document, theme and
-accent are all plain data. A `serde` dependency arrives with it — the first
-third-party crate outside the GUI.
-
-**Cost:** ~2 days.
-
-**Risk:** a saved document format is a promise. Version it from the first commit.
+- Paste LaTeX into the field and copy the document as LaTeX (`from_latex` reads
+  bare brackets, `/`, indexed roots and definitions now — this is mostly wiring).
+- Click a history entry to load it back into the editor.
+- Line numbers in the gutter, once documents are long enough to need them.
 
 ---
 
-## P2 — Editor polish
+## Known sharp edges (not in the estimate)
 
-- **LaTeX in and out**: paste LaTeX into the field (the reader now handles bare
-  brackets and `\left…\right`), and copy the document as LaTeX.
-- **History reload**: the history panel is display-only; `from_latex` now exists,
-  so an entry can be clicked back into the editor.
-- **Line numbers** in the editor gutter, once documents are long enough to need
-  them.
+- **Window resizing**: a window created maximised came up blank on this machine,
+  and the workaround is "size it at creation and don't resize". The real fix is a
+  surface reconfigure on resize; `wgpu`/`eframe` territory.
+- **Memory**: a full rebuild needs `-j 1` here; `-j 2` exhausts commit. Not code,
+  but it shapes how the project is developed.
 
-## P2 — Known sharp edges
+## What I would do next, regardless of the rate
 
-- **Window resizing**: a maximised window came up blank on this machine, and the
-  workaround is "size it at creation and don't resize". The real fix is a surface
-  reconfigure on resize; it is a `wgpu`/`eframe` problem, not ours, but it is
-  visible to the user.
-- **Memory**: a full rebuild needs `-j 1` here; `-j 2` runs the machine out of
-  commit. Not a code issue, but it shapes how the project is developed.
-- **`l` and other one-letter parameters collide with `l` the digit-like glyph**;
-  worth a lint that warns when a parameter shadows a common constant.
-
----
-
-## What I would do next, if only one thing
-
-**Function definitions.** Everything else is polish on a calculator; definitions
-are what make it a tool a student can use for a real task. Undo is a close second
-because it is cheap and its absence is felt every session.
+**Finish item 1.** Everything else is polish on a calculator; definitions are what
+let a student use it for a real task, and the reader half is already paid for.
+Undo is the cheap second because it is felt every session.
