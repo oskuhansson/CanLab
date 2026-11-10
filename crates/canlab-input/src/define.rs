@@ -17,7 +17,8 @@
 //! recursion, because that is certainly a mistake; a body that mentions *another*
 //! name (`f(x) = g + 1`) leaves `g` a variable, because that is an ordinary
 //! parameter. Applying a name is what makes it a dependency — `f(x) = g(x) + 1`
-//! waits for `g`, and a name applied with brackets is never read as a factor.
+//! waits for `g` when the document defines one, and is otherwise read as the
+//! product `g·x` like every other applied name the document does not define.
 
 use std::collections::BTreeMap;
 

@@ -1111,10 +1111,15 @@ impl MathField {
         if !matches || self.cursor.offset != len {
             return false;
         }
+        // `last.index` is a *node* index; the caret lives at a *character* offset.
+        // They coincide only for one-character nodes, which is why `f(x)` worked
+        // and `ab(c)` put the caret in the middle of the run instead of after the
+        // bracket.
+        let after = caret_before(self.row_at(&parent), last.index + 1);
         if let Some(Node::Group { ghost, .. }) = self.row_at_mut(&parent).get_mut(last.index) {
             *ghost = Ghost::None;
         }
-        self.cursor = Cursor::at(parent, last.index + 1);
+        self.cursor = Cursor::at(parent, after);
         true
     }
 

@@ -989,3 +989,27 @@ fn backspace_on_an_empty_trailing_line_removes_it() {
     assert_eq!(f.line_count(), 2);
     assert_eq!(f.to_latex(), "\\begin{cases} x=1 \\\\ y=2 \\end{cases}");
 }
+#[test]
+fn a_bracket_after_a_two_character_run_closes_at_the_right_place() {
+    // The caret after a closed bracket was computed from a *node* index, which is
+    // a character offset only for one-character nodes. Typing `ab(c)` therefore
+    // put the caret inside `ab`, and the next keystroke scrambled the line: a
+    // multi-letter function name could not be typed at all.
+    let mut f = typed("ab(c)");
+    assert_eq!(f.to_latex(), "ab\\left(c\\right)");
+    f.type_str("=1");
+    assert_eq!(f.to_latex(), "ab\\left(c\\right)=1");
+    assert_eq!(f.cursor().path.len(), 0, "the caret is at the top level");
+    // `ab` + the bracket + `=` + `1`: five caret positions, so the end is five.
+    assert_eq!(f.cursor().offset, 5, "after the whole line");
+}
+
+#[test]
+fn typing_a_two_letter_definition_with_arguments_works() {
+    // The same bug through the shape it actually broke: a named function applied
+    // to arguments, typed rather than loaded. Typed without spaces so the LaTeX
+    // is the tight form.
+    let mut f = typed("ab(c)=1");
+    assert_eq!(f.to_latex(), "ab\\left(c\\right)=1");
+    assert!(f.is_definition_row(f.root()), "{:?}", f.root());
+}
