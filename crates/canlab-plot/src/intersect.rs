@@ -11,10 +11,12 @@
 //! where both are zero — quadratically, so half a dozen iterations is enough even
 //! from a guess a grid cell away.
 //!
-//! Tolerances here are relative to the problem's scale: residuals to the starting
-//! values, steps and duplicate distances to the coordinates, and a Jacobian to the
-//! products that form its determinant. Multiplying both equations by the same
-//! constant therefore leaves the crossing unchanged.
+//! Tolerances here are relative to the problem's scale: convergence is judged by
+//! the position a residual implies (`|f| / |∇f|`) against the coordinates, steps
+//! and duplicate distances are relative to the coordinates, and a Jacobian is
+//! singular only when its determinant is small compared with the products that
+//! form it. Multiplying both equations or the coordinates by a constant therefore
+//! leaves the crossing unchanged.
 //!
 //! # Why it is a separate module
 //!
@@ -41,10 +43,12 @@ const MAX_ITERATIONS: usize = 24;
 /// crossing. At x = 10⁶ the threshold is 10⁻⁷, so a step that size counts as
 /// no progress rather than as a real move.
 const STEP_EPSILON: f64 = 1.0e-13;
-/// Residual tolerance for calling a point a solution, relative to the function
-/// values at the starting guess. The circle `x² + y² = 10¹²` subtracts numbers
-/// of order 10¹² near its edge, where one ulp is about 2e-4: an absolute 10⁻⁹
-/// asks for more precision than f64 has at that magnitude.
+/// Convergence tolerance, relative to the problem's scale. The cheap path uses
+/// it on residuals compared with the starting values; the positional test uses
+/// it on `|f| / |∇f|` compared with the coordinates. The circle
+/// `x² + y² = 10¹²` subtracts numbers of order 10¹² near its edge, where one ulp
+/// is about 2e-4: an absolute 10⁻⁹ asks for more precision than f64 has at that
+/// magnitude.
 const RESIDUAL: f64 = 1.0e-9;
 /// A Jacobian is singular when its determinant is negligible compared with the
 /// two products that form it. An absolute cutoff is a units error: multiplying
@@ -56,6 +60,61 @@ const SINGULAR_EPSILON: f64 = 1.0e-12;
 /// x = 10⁶ the duplicate radius is 10⁻³; at x = 1 it stays 10⁻⁹. Scaling by the
 /// coordinates is what lets one root be merged at both scales.
 const DUPLICATE_EPSILON: f64 = 1.0e-9;
+
+/// The central-difference Jacobian at `(x, y)`, as `(df/dx, df/dy, dg/dx, dg/dy)`.
+fn jacobian<F, G>(f: &F, g: &G, x: f64, y: f64) -> (f64, f64, f64, f64)
+where
+    F: Fn(f64, f64) -> f64,
+    G: Fn(f64, f64) -> f64,
+{
+    // Scale the step with the coordinates: a curve at x = 10⁶ needs a bigger
+    // difference than one at x = 1 or the derivative is pure cancellation.
+    let h = 1.0e-6 * x.abs().max(y.abs()).max(1.0);
+    (
+        (f(x + h, y) - f(x - h, y)) / (2.0 * h),
+        (f(x, y + h) - f(x, y - h)) / (2.0 * h),
+        (g(x + h, y) - g(x - h, y)) / (2.0 * h),
+        (g(x, y + h) - g(x, y - h)) / (2.0 * h),
+    )
+}
+
+/// The Jacobian determinant, or `None` when the Jacobian is singular at the
+/// scale of its own terms.
+fn invertible_determinant(dxx: f64, dxy: f64, dgx: f64, dgy: f64) -> Option<f64> {
+    let first_product = dxx * dgy;
+    let second_product = dxy * dgx;
+    let determinant = first_product - second_product;
+    let product_scale = first_product.abs() + second_product.abs();
+    // Compare the determinant with the terms it came from, not with an
+    // absolute number: the determinant has those terms' units. A zero Jacobian
+    // has no scale at all and is the degenerate singular case.
+    if !determinant.is_finite()
+        || product_scale == 0.0
+        || determinant.abs() <= SINGULAR_EPSILON * product_scale
+    {
+        None
+    } else {
+        Some(determinant)
+    }
+}
+
+/// Whether both residuals imply a root close enough to count as this point.
+///
+/// `|f| / |∇f|` is the first-order distance from the point to `f = 0`. Comparing
+/// that distance with the coordinate scale makes the test independent of both
+/// the function's units and the coordinate's units. A zero gradient gives no
+/// distance at all, so it is refused rather than read as a zero distance.
+fn near_root(fx: f64, gx: f64, dxx: f64, dxy: f64, dgx: f64, dgy: f64, x: f64, y: f64) -> bool {
+    let coordinate_scale = 1.0_f64.max(x.abs()).max(y.abs());
+    let f_gradient = dxx.abs() + dxy.abs();
+    let g_gradient = dgx.abs() + dgy.abs();
+    f_gradient.is_finite()
+        && f_gradient > 0.0
+        && g_gradient.is_finite()
+        && g_gradient > 0.0
+        && fx.abs() <= RESIDUAL * f_gradient * coordinate_scale
+        && gx.abs() <= RESIDUAL * g_gradient * coordinate_scale
+}
 
 /// Newton's method for `f(x, y) = 0` and `g(x, y) = 0`.
 ///
@@ -87,10 +146,6 @@ where
         return None;
     }
     let residual_scale = f_start.abs().max(g_start.abs());
-    if residual_scale == 0.0 {
-        // Both equations are exactly zero here, so this is a root already.
-        return Some(Intersection { x, y });
-    }
     let residual_tolerance = RESIDUAL * residual_scale;
 
     for _ in 0..MAX_ITERATIONS {
@@ -103,27 +158,17 @@ where
             return Some(Intersection { x, y });
         }
 
-        // Scale the step with the coordinates: a curve at x = 10⁶ needs a bigger
-        // difference than one at x = 1 or the derivative is pure cancellation.
-        let h = 1.0e-6 * x.abs().max(y.abs()).max(1.0);
-        let dxx = (f(x + h, y) - f(x - h, y)) / (2.0 * h);
-        let dxy = (f(x, y + h) - f(x, y - h)) / (2.0 * h);
-        let dgx = (g(x + h, y) - g(x - h, y)) / (2.0 * h);
-        let dgy = (g(x, y + h) - g(x, y - h)) / (2.0 * h);
-
-        let first_product = dxx * dgy;
-        let second_product = dxy * dgx;
-        let determinant = first_product - second_product;
-        let product_scale = first_product.abs() + second_product.abs();
-        // Compare the determinant with the terms it came from, not with an
-        // absolute number: the determinant has those terms' units. A zero
-        // Jacobian has no scale at all and is the degenerate singular case.
-        if !determinant.is_finite()
-            || product_scale == 0.0
-            || determinant.abs() <= SINGULAR_EPSILON * product_scale
-        {
+        let (dxx, dxy, dgx, dgy) = jacobian(&f, &g, x, y);
+        let Some(determinant) = invertible_determinant(dxx, dxy, dgx, dgy) else {
             // Parallel tangents: a tangency, a cusp, or no crossing at all.
             return None;
+        };
+
+        // Newton at an exact root of a large-valued function sees the f64 noise
+        // floor, not zero. Judge the point by where that residual says it is,
+        // not by the residual alone.
+        if near_root(fx, gx, dxx, dxy, dgx, dgy, x, y) {
+            return Some(Intersection { x, y });
         }
 
         // Solve `J · δ = -(f, g)` for the step and take it.
@@ -132,25 +177,24 @@ where
         x += step_x;
         y += step_y;
 
-        // A step of 10⁻⁷ is tiny at x = 10⁶ but large at x = 1. Compare it with
-        // the coordinate scale so "no progress" means the same at both. The
-        // point it stopped at may be the root: check it here rather than refuse
-        // it for having arrived with a small step.
+        // A step of 10⁻⁷ is tiny at x = 10⁶ but large at x = 1. Stop moving,
+        // but do not refuse yet: the point arrived at is checked below.
         let step_tolerance = STEP_EPSILON * 1.0_f64.max(x.abs()).max(y.abs());
         if step_x.abs() < step_tolerance && step_y.abs() < step_tolerance {
-            let (fx, gx) = (f(x, y), g(x, y));
-            let arrived = fx.is_finite()
-                && gx.is_finite()
-                && fx.abs() < residual_tolerance
-                && gx.abs() < residual_tolerance;
-            return arrived.then_some(Intersection { x, y });
+            break;
         }
     }
 
-    // Converged slowly but did converge: accept only if it really is a root.
+    // The loop stopped moving or ran out of iterations. Check the point on the
+    // same positional terms as the loop; a small step is not a refusal by
+    // itself, and a residual alone is not an acceptance.
     let (fx, gx) = (f(x, y), g(x, y));
-    (fx.abs() < residual_tolerance * 1.0e3 && gx.abs() < residual_tolerance * 1.0e3)
-        .then_some(Intersection { x, y })
+    if !fx.is_finite() || !gx.is_finite() {
+        return None;
+    }
+    let (dxx, dxy, dgx, dgy) = jacobian(&f, &g, x, y);
+    invertible_determinant(dxx, dxy, dgx, dgy)?;
+    near_root(fx, gx, dxx, dxy, dgx, dgy, x, y).then_some(Intersection { x, y })
 }
 
 /// Group nearby sample points into one guess per crossing.
@@ -319,6 +363,31 @@ mod tests {
     }
 
     #[test]
+    fn a_tangency_at_its_touch_point_is_not_reported_as_a_crossing() {
+        // Starting exactly at (0, 1) makes both residuals zero, but the
+        // Jacobian is still singular. Zero residuals do not make a tangency a
+        // crossing.
+        let circle = |x: f64, y: f64| x * x + y * y - 1.0;
+        let tangent = |_x: f64, _y: f64| 0.0;
+        let refined = refine(circle, tangent, (0.0, 1.0));
+        assert!(refined.is_none(), "got {refined:?}");
+    }
+
+    #[test]
+    fn a_zero_gradient_is_not_convergence() {
+        // The zero function has a zero gradient everywhere. At (5, 0) the
+        // circle residual is 24, so this is not a solution; a zero gradient
+        // gives no distance to the zero set and must not be read as one.
+        let circle = |x: f64, y: f64| x * x + y * y - 1.0;
+        let refined = refine(circle, |_x: f64, _y: f64| 0.0, (5.0, 0.0));
+        assert!(refined.is_none(), "got {refined:?}");
+
+        // The same rule inside the positional test itself: a zero gradient is
+        // not a zero implied distance.
+        assert!(!near_root(0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 5.0, 0.0));
+    }
+
+    #[test]
     fn a_zero_jacobian_is_still_singular() {
         // Both functions are non-zero constants: every derivative is zero and
         // the two products are both zero. There is no scale to compare with, so
@@ -379,17 +448,73 @@ mod tests {
     }
 
     #[test]
-    fn a_small_step_at_a_large_coordinate_is_not_a_refusal_by_itself() {
-        // The guess is 5e-8 from the root at (10⁶, 10⁶). At that coordinate the
-        // step is below the relative step tolerance (10⁻⁷), but it lands on the
-        // root; refusing it only because the step is small would discard a real
-        // answer.
+    fn an_exact_root_of_a_large_valued_function_is_accepted() {
+        // At the root of x² + y² = 10¹² the computed residual is the f64 noise
+        // floor, about 2e-4, not zero. Judging that residual alone refuses a
+        // point that is as exact as its coordinates allow.
+        let radius = 1.0e6;
+        let circle = |x: f64, y: f64| x * x + y * y - radius * radius;
+        let line = |x: f64, y: f64| y - x;
+        let root = radius / std::f64::consts::SQRT_2;
+
+        let point = refine(circle, line, (root, root)).expect("exact root converges");
+        assert!((point.x - root).abs() < 1e-6, "{point:?}");
+        assert!((point.y - root).abs() < 1e-6, "{point:?}");
+    }
+
+    #[test]
+    fn an_exact_root_at_unit_scale_is_accepted() {
+        let circle = |x: f64, y: f64| x * x + y * y - 1.0;
+        let line = |x: f64, y: f64| y - x;
+        let root = std::f64::consts::FRAC_1_SQRT_2;
+
+        let point = refine(circle, line, (root, root)).expect("exact root converges");
+        assert!((point.x - root).abs() < 1e-9, "{point:?}");
+        assert!((point.y - root).abs() < 1e-9, "{point:?}");
+    }
+
+    #[test]
+    fn a_large_crossing_is_unchanged_by_the_function_scale() {
+        let radius = 1.0e6;
+        let circle = |x: f64, y: f64| x * x + y * y - radius * radius;
+        let line = |x: f64, y: f64| y - x;
+        let root = radius / std::f64::consts::SQRT_2;
+        let offset = std::f64::consts::FRAC_1_SQRT_2;
+        let guess = (root + offset, root + offset);
+        let expected = refine(circle, line, guess).expect("unscaled converges");
+
+        // One unit from the crossing is far enough that the positional test has
+        // to walk there, and scaling both functions must not move the result.
+        for scale in [1.0e-8, 1.0e8] {
+            let point = refine(
+                |x, y| scale * circle(x, y),
+                |x, y| scale * line(x, y),
+                guess,
+            )
+            .unwrap_or_else(|| panic!("scale {scale:e}"));
+            assert!(
+                (point.x - expected.x).abs() <= 1.0e-9 * expected.x.abs(),
+                "scale {scale:e}: {point:?} vs {expected:?}"
+            );
+            assert!(
+                (point.y - expected.y).abs() <= 1.0e-9 * expected.y.abs(),
+                "scale {scale:e}: {point:?} vs {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_near_root_at_a_large_coordinate_is_accepted_by_its_position() {
+        // The guess is 5e-8 from the root at (10⁶, 10⁶). Its residual is 5e-8,
+        // which the residual-only test rejects, but the implied distance is
+        // 5e-8, well below the positional tolerance (10⁻³) at this coordinate.
+        // It is a real answer, not a refused one.
         let root = 1.0e6;
         let first = |_x: f64, y: f64| y - root;
         let second = |x: f64, _y: f64| x - root;
         let point = refine(first, second, (root + 5.0e-8, root)).expect("converges");
-        assert!((point.x - root).abs() < 1e-9, "{point:?}");
-        assert!((point.y - root).abs() < 1e-9, "{point:?}");
+        assert!((point.x - root).abs() <= 1e-3, "{point:?}");
+        assert!((point.y - root).abs() <= 1e-3, "{point:?}");
     }
 
     #[test]
@@ -416,10 +541,13 @@ mod tests {
         ];
         let found = locate(circle, line, &near, 5.0);
         assert_eq!(found.len(), 2, "{found:?}");
-        assert!((found[0].x + root).abs() < 1e-6, "{found:?}");
-        assert!((found[0].y + root).abs() < 1e-6, "{found:?}");
-        assert!((found[1].x - root).abs() < 1e-6, "{found:?}");
-        assert!((found[1].y - root).abs() < 1e-6, "{found:?}");
+        // The positional tolerance is 10⁻⁹ of the coordinate, not an absolute
+        // 10⁻⁶: at this scale it is the relative accuracy that matters.
+        let tolerance = 1.0e-9 * root;
+        assert!((found[0].x + root).abs() <= tolerance, "{found:?}");
+        assert!((found[0].y + root).abs() <= tolerance, "{found:?}");
+        assert!((found[1].x - root).abs() <= tolerance, "{found:?}");
+        assert!((found[1].y - root).abs() <= tolerance, "{found:?}");
     }
 
     #[test]
