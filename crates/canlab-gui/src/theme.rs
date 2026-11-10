@@ -37,7 +37,32 @@ pub struct Palette {
 ///
 /// Called from the Settings menu. The visuals are rebuilt from mode rather than
 /// patched, so switching palette twice in a row cannot accumulate colour.
+
+/// The accent in force, for the painting code that has no CasApp to ask.
+///
+/// The dock chrome draws inside layout.rs, which is handed rectangles, not the
+/// app. A single shared value keeps every accent - panel dots, dividers, caret,
+/// selection, plot - the same colour instead of half of them following Settings.
+static ACCENT_RGB: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0x00e8_7d0d);
+
+/// The accent every widget should paint with right now.
+pub fn accent() -> Color32 {
+    let packed = ACCENT_RGB.load(std::sync::atomic::Ordering::Relaxed);
+    Color32::from_rgb(
+        (packed >> 16) as u8,
+        (packed >> 8) as u8,
+        packed as u8,
+    )
+}
+
+fn remember_accent(colour: Color32) {
+    let packed = (u32::from(colour.r()) << 16) | (u32::from(colour.g()) << 8) | u32::from(colour.b());
+    ACCENT_RGB.store(packed, std::sync::atomic::Ordering::Relaxed);
+}
+
 pub fn apply_accent(ctx: &egui::Context, mode: Mode, accent: Color32) {
+    remember_accent(accent);
     let mut visuals = mode.visuals();
     visuals.widgets.active.bg_fill = accent;
     visuals.widgets.active.weak_bg_fill = accent;

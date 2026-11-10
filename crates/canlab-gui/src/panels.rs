@@ -544,7 +544,7 @@ pub fn variables(app: &mut CasApp, ui: &mut Ui) {
         for var in &app.free_vars {
             ui.horizontal(|ui| {
                 let (dot, _) = ui.allocate_exact_size(vec2(6.0, 6.0), Sense::hover());
-                ui.painter().circle_filled(dot.center(), 2.5, app.accent);
+                ui.painter().circle_filled(dot.center(), 2.5, crate::theme::accent());
                 ui.label(RichText::new(var.as_str()).monospace().size(15.0).strong());
             });
         }
@@ -670,7 +670,7 @@ pub fn plot(app: &mut CasApp, ui: &mut Ui) {
                 curve,
                 (app.x_min, app.x_max),
                 app.y_range,
-                curve_color(index, app.accent),
+                curve_color(index, crate::theme::accent()),
             );
         }
     }

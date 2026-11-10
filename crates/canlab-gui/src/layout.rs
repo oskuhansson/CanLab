@@ -311,7 +311,7 @@ impl Layout {
                         ),
                     };
                     ui.painter()
-                        .rect_filled(line, CornerRadius::same(1), theme::ACCENT);
+                        .rect_filled(line, CornerRadius::same(1), theme::accent());
                 }
                 *fraction = share;
             }
@@ -453,7 +453,7 @@ fn show_leaf(
     header.spacing_mut().button_padding = vec2(4.0, 2.0);
     header.horizontal(|ui| {
         let (dot, _) = ui.allocate_exact_size(vec2(7.0, 7.0), Sense::hover());
-        ui.painter().circle_filled(dot.center(), 3.0, theme::ACCENT);
+        ui.painter().circle_filled(dot.center(), 3.0, theme::accent());
         ui.label(RichText::new(kind.label().to_uppercase()).small().strong());
         ui.with_layout(UiLayout::right_to_left(Align::Center), |ui| {
             if ui.small_button("×").on_hover_text("Close panel").clicked() {
