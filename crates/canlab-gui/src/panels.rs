@@ -476,10 +476,17 @@ enum Axis {
 /// the other axis, so the same variable never ends up on both. Two axes on one
 /// variable made the sampler evaluate it twice, and `q² + q² = 1` drew two
 /// vertical lines instead of a curve.
+///
+/// A pick made on an empty axis, when the other axis holds the only variable, is
+/// a no-op: there is no replaced choice to move across, and moving the variable
+/// off the only axis it is on would silently drop the horizontal one.
 fn choose_axis(app: &mut CasApp, axis: Axis, variable: canlab_core::SymbolId) {
     match axis {
         Axis::Horizontal => {
             let replaced = app.x_axis;
+            if replaced.is_none() && app.y_axis == Some(variable) {
+                return;
+            }
             app.x_axis = Some(variable);
             if app.y_axis == Some(variable) {
                 app.y_axis = replaced;
@@ -487,6 +494,9 @@ fn choose_axis(app: &mut CasApp, axis: Axis, variable: canlab_core::SymbolId) {
         }
         Axis::Vertical => {
             let replaced = app.y_axis;
+            if replaced.is_none() && app.x_axis == Some(variable) {
+                return;
+            }
             app.y_axis = Some(variable);
             if app.x_axis == Some(variable) {
                 app.x_axis = replaced;
@@ -1793,6 +1803,27 @@ mod tests {
             axes_of(&app),
             (Some(String::from("p")), Some(String::from("r")))
         );
+    }
+
+    #[test]
+    fn a_vertical_pick_without_a_y_axis_keeps_x() {
+        // One variable means the vertical axis is empty, so there is nothing to
+        // swap with. Moving x across anyway left the plot without a horizontal
+        // variable until the next reparse.
+        let mut app = crate::CasApp::new();
+        app.field = canlab_input::MathField::from_latex("x=1").expect("one variable");
+        app.recompute();
+        let x = canlab_core::SymbolId::intern("x");
+        assert_eq!(app.x_axis, Some(x));
+        assert_eq!(app.y_axis, None);
+
+        choose_axis(&mut app, Axis::Vertical, x);
+        assert_eq!(app.x_axis, Some(x), "the horizontal axis was dropped");
+        assert_eq!(app.y_axis, None, "there is no second variable to swap with");
+
+        // The plot still has a horizontal variable to trace against.
+        build_curve(&mut app);
+        assert!(!app.curves.is_empty(), "plot note: {}", app.plot_note);
     }
 
     #[test]
