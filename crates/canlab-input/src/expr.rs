@@ -50,6 +50,11 @@ impl std::error::Error for ToExprError {}
 
 /// Translate a row, or explain why not.
 pub fn build(row: &Row) -> Result<Expr, ToExprError> {
+    build_with(row, &crate::define::Definitions::default())
+}
+
+/// [uild], with the document's function definitions available.
+pub fn build_with(row: &Row, definitions: &crate::define::Definitions) -> Result<Expr, ToExprError> {
     // Spaces are layout, not algebra.
     let nodes: Vec<&Node> = row
         .iter()
@@ -71,7 +76,7 @@ pub fn build(row: &Row) -> Result<Expr, ToExprError> {
                     // in `x+-1`. Toggling is what makes `x--y` read as `x + y`.
                     negative ^= sign_negative;
                 } else {
-                    terms.push(signed(&current, negative)?);
+                    terms.push(signed(&current, negative, definitions)?);
                     current.clear();
                     negative = sign_negative;
                 }
@@ -79,7 +84,7 @@ pub fn build(row: &Row) -> Result<Expr, ToExprError> {
             _ => current.push(node.clone()),
         }
     }
-    terms.push(signed(&current, negative)?);
+    terms.push(signed(&current, negative, definitions)?);
     Ok(sum(terms))
 }
 
@@ -97,7 +102,7 @@ pub fn is_unit_marker(node: &Node) -> bool {
     matches!(node, Node::Text(marker) if matches!(marker.as_str(), "°" | "%" | "‰"))
 }
 
-fn product(row: &Row) -> Result<Expr, ToExprError> {
+fn product(row: &Row, definitions: &crate::define::Definitions) -> Result<Expr, ToExprError> {
     let nodes: Vec<&Node> = row.iter().filter(|n| !is_space_node(n)).collect();
     if nodes.is_empty() {
         return Err(ToExprError::EmptySlot);
@@ -105,6 +110,62 @@ fn product(row: &Row) -> Result<Expr, ToExprError> {
     let mut factors: Vec<Expr> = Vec::new();
     let mut i = 0;
     while i < nodes.len() {
+        // A *defined* function: `f(3)`, `f'(x)`, `f''(x)`.
+        //
+        // The primes are their own text runs (an apostrophe is not a word
+        // character), so they are counted before the argument list is read, and
+        // the derivative is taken on the body before substituting: `f'` is a
+        // function in its own right.
+        if let Node::Text(text) = nodes[i]
+            && let Some(function) = definitions.get(text)
+        {
+            let mut order = 0u32;
+            let mut j = i + 1;
+            while let Some(Node::Text(mark)) = nodes.get(j) {
+                let primes = mark
+                    .chars()
+                    .filter(|character| *character == '\'' || *character == '\u{2032}')
+                    .count();
+                if primes == 0 {
+                    break;
+                }
+                order += primes as u32;
+                j += 1;
+            }
+            if let Some(Node::Group { body, .. }) = nodes.get(j) {
+                let arguments = split_arguments(body, definitions)?;
+                if arguments.len() != function.params.len() {
+                    return Err(ToExprError::UnsupportedCommand(format!(
+                        "{text} takes {} argument(s)",
+                        function.params.len()
+                    )));
+                }
+                let mut body = function.body.clone();
+                if order > 0 {
+                    let Some(variable) = function.params.first().copied() else {
+                        return Err(ToExprError::UnsupportedCommand(text.clone()));
+                    };
+                    body = canlab_core::differentiate_n(&body, variable, order).ok_or_else(|| {
+                        ToExprError::UnsupportedCommand(format!(
+                            "the derivative of {text} (order {order})"
+                        ))
+                    })?;
+                }
+                factors.push(crate::define::substitute(
+                    &body,
+                    &function.params,
+                    &arguments,
+                ));
+                i = j + 1;
+                if let Some(Node::Sym(s)) = nodes.get(i)
+                    && s == "\\cdot"
+                {
+                    i += 1;
+                }
+                continue;
+            }
+        }
+
         // A function token consumes the next atom as its argument. MathQuill does
         // not group them (`\sin x` is two siblings), but `Fn(sin, [x])` is the
         // only useful reading for a CAS. **[INFERRED]**
@@ -136,7 +197,7 @@ fn product(row: &Row) -> Result<Expr, ToExprError> {
                         if next >= nodes.len() {
                             return Err(ToExprError::UnsupportedCommand(name.clone()));
                         }
-                        atom(nodes[next])?
+                        atom(nodes[next], definitions)?
                     }
                 };
                 let mut j = if from_subscript { next } else { next + 1 };
@@ -167,7 +228,7 @@ fn product(row: &Row) -> Result<Expr, ToExprError> {
                 continue;
             }
         }
-        let mut e = atom(nodes[i])?;
+        let mut e = atom(nodes[i], definitions)?;
         i += 1;
         while i < nodes.len() {
             match nodes[i] {
@@ -193,8 +254,12 @@ fn product(row: &Row) -> Result<Expr, ToExprError> {
     }
 }
 
-fn signed(row: &Row, negative: bool) -> Result<Expr, ToExprError> {
-    let e = product(row)?;
+fn signed(
+    row: &Row,
+    negative: bool,
+    definitions: &crate::define::Definitions,
+) -> Result<Expr, ToExprError> {
+    let e = product(row, definitions)?;
     if negative {
         Ok(mul([ExprNode::int(-1), e]))
     } else {
@@ -202,6 +267,27 @@ fn signed(row: &Row, negative: bool) -> Result<Expr, ToExprError> {
     }
 }
 
+/// Split a call's argument list on its commas.
+fn split_arguments(
+    row: &Row,
+    definitions: &crate::define::Definitions,
+) -> Result<Vec<Expr>, ToExprError> {
+    let mut arguments: Vec<Expr> = Vec::new();
+    let mut current: Row = Vec::new();
+    for node in row {
+        match node {
+            Node::Text(text) if text == "," => {
+                arguments.push(build_with(&current, definitions)?);
+                current.clear();
+            }
+            _ => current.push(node.clone()),
+        }
+    }
+    if !current.is_empty() || !arguments.is_empty() {
+        arguments.push(build_with(&current, definitions)?);
+    }
+    Ok(arguments)
+}
 fn sum(mut terms: Vec<Expr>) -> Expr {
     match terms.len() {
         0 => ExprNode::int(0),
@@ -210,7 +296,7 @@ fn sum(mut terms: Vec<Expr>) -> Expr {
     }
 }
 
-fn atom(node: &Node) -> Result<Expr, ToExprError> {
+fn atom(node: &Node, definitions: &crate::define::Definitions) -> Result<Expr, ToExprError> {
     match node {
         Node::Text(s) => text_expr(s),
         Node::Sym(name) => sym_expr(name),
@@ -227,7 +313,10 @@ fn atom(node: &Node) -> Result<Expr, ToExprError> {
                 _ => mul([n, pow(d, ExprNode::int(-1))]),
             })
         }
-        Node::Sqrt { index: None, body } => Ok(pow(build(body)?, ExprNode::num(Number::ratio(1, 2)))),
+        Node::Sqrt { index: None, body } => Ok(pow(
+            build_with(body, definitions)?,
+            ExprNode::num(Number::ratio(1, 2)),
+        )),
         // `\sqrt[n]{x}` is `x^(1/n)` — a cube root is school mathematics, and
         // refusing it was a limitation, not a policy.
         Node::Sqrt {
@@ -237,7 +326,7 @@ fn atom(node: &Node) -> Result<Expr, ToExprError> {
             build(body)?,
             pow(build(index)?, ExprNode::int(-1)),
         )),
-        Node::Group { body, .. } => build(body),
+        Node::Group { body, .. } => build_with(body, definitions),
         Node::Accent { .. } => Err(ToExprError::UnsupportedConstruct("an accent")),
         Node::Binom { .. } => Err(ToExprError::UnsupportedConstruct("\\binom")),
         Node::Sup(_) => Err(ToExprError::DanglingSuperscript),
