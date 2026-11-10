@@ -645,12 +645,15 @@ pub fn plot(app: &mut CasApp, ui: &mut Ui) {
     }
 
     // Axes once, then every curve on top of them in its own colour, so a system
-    // of two equations reads as two lines rather than one thick one.
-    paint_axes(&painter, rect, (app.x_min, app.x_max), app.y_range);
+    // of two equations reads as two lines rather than one thick one. Everything
+    // is drawn in the equal-aspect box, so resizing the panel letterboxes the
+    // picture instead of reshaping it.
+    let plot_rect = equal_aspect(rect, (app.x_min, app.x_max), app.y_range);
+    paint_axes(&painter, plot_rect, (app.x_min, app.x_max), app.y_range);
     for (index, curve) in app.curves.iter().enumerate() {
         paint_curve(
             &painter,
-            rect,
+            plot_rect,
             curve,
             (app.x_min, app.x_max),
             app.y_range,
@@ -672,6 +675,25 @@ fn curve_color(index: usize) -> Color32 {
     WHEEL[index % WHEEL.len()]
 }
 
+/// The square-ish area the data window actually gets.
+///
+/// One unit on x must be the same length as one unit on y, or a circle comes out
+/// as an ellipse and the shape of a curve depends on how wide the panel happens
+/// to be. The requested window is fitted into the panel and centred, and the
+/// letterbox that leaves over is empty panel — not stretched axes.
+fn equal_aspect(rect: Rect, x_range: (f64, f64), y_range: (f64, f64)) -> Rect {
+    let (x0, x1) = x_range;
+    let (y0, y1) = y_range;
+    if !(x1 > x0 && y1 > y0) || rect.width() <= 0.0 || rect.height() <= 0.0 {
+        return rect;
+    }
+    let units_x = (x1 - x0) as f32;
+    let units_y = (y1 - y0) as f32;
+    let pixels_per_unit = (rect.width() / units_x).min(rect.height() / units_y);
+    Rect::from_center_size(rect.center(), vec2(units_x * pixels_per_unit, units_y * pixels_per_unit))
+}
+
+/// Draw the grid, the axes and the window label into `rect`.
 fn paint_axes(painter: &egui::Painter, rect: Rect, x_range: (f64, f64), y_range: (f64, f64)) {
     let visuals = painter.ctx().global_style().visuals.clone();
     let axis_color = visuals.widgets.noninteractive.bg_stroke.color;
@@ -968,6 +990,25 @@ fn vertical_extent(curve: &Curve) -> Option<(f64, f64)> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn the_plot_keeps_one_scale_for_both_axes() {
+        // A square data window in a wide panel stays square: the picture is
+        // letterboxed, not stretched.
+        let panel = Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 200.0));
+        let square = equal_aspect(panel, (-10.0, 10.0), (-10.0, 10.0));
+        assert!((square.width() - square.height()).abs() < 0.01);
+        assert!((square.width() - 200.0).abs() < 0.01, "fitted to the short side");
+        assert!((square.center() - panel.center()).length() < 0.01);
+
+        // A window that is twice as wide as it is tall fills the width.
+        let wide = equal_aspect(panel, (-20.0, 20.0), (-5.0, 5.0));
+        assert!((wide.width() - 400.0).abs() < 0.01);
+        assert!((wide.height() - 100.0).abs() < 0.01);
+        assert!((wide.center() - panel.center()).length() < 0.01);
+    }
+
     #[test]
     fn every_palette_key_either_lands_or_says_why_not() {
         // The four entries the model deliberately lacks. Everything else — all
