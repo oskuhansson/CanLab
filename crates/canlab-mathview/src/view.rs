@@ -104,6 +104,26 @@ impl MathView {
         let (rect, mut response) = ui.allocate_exact_size(desired, Sense::click());
         response = response.on_hover_cursor(egui::CursorIcon::Text);
 
+        // Claim the arrow keys for the caret.
+        //
+        // egui turns bare arrow keys into *focus navigation* in
+        // `Focus::begin_pass`, which runs before any widget draws and reads the
+        // raw input, so removing the events while handling them is far too late.
+        // The supported way to stop it is a focus lock filter: a focused widget
+        // whose filter matches an event keeps it, and focus stays put.
+        if response.has_focus() {
+            ui.memory_mut(|memory| {
+                memory.set_focus_lock_filter(
+                    response.id,
+                    egui::EventFilter {
+                        horizontal_arrows: true,
+                        vertical_arrows: true,
+                        ..Default::default()
+                    },
+                );
+            });
+        }
+
         // Clicking maps a pixel back to one of the field's own positions. In a
         // system it first picks the equation that was clicked, then the caret
         // inside it; the caret list and `positions()` share an order, so the index
