@@ -364,6 +364,7 @@ fn declined_or_failed(err: SolverError, kind: JobKind, backend: Backend) -> JobO
 mod tests {
     use super::*;
     use canlab_core::{int, pow, sym};
+    use canlab_solver::MockSolver;
 
     fn job(op: JobOp) -> Job {
         Job {
@@ -423,6 +424,54 @@ mod tests {
         match result.outcome {
             JobOutcome::Declined(_) => {}
             other => assert!(matches!(other, JobOutcome::Declined(_))),
+        }
+    }
+
+    #[test]
+    fn a_declining_backend_falls_back_to_native_system_elimination() {
+        // MockSolver leaves `solve_system` at the trait default, so it stands in
+        // for a backend that cannot do systems. Naming a non-native backend must
+        // make the worker retry on NativeSolver, not report the decline.
+        let equations = vec![
+            canlab_core::add(vec![sym("x"), sym("y"), int(-3)]),
+            canlab_core::add(vec![
+                canlab_core::mul(vec![int(2), sym("x")]),
+                canlab_core::mul(vec![int(-1), sym("y")]),
+            ]),
+        ];
+        let vars = vec![SymbolId::intern("x"), SymbolId::intern("y")];
+
+        let fallback = run(
+            &MockSolver,
+            Backend::Sympy,
+            job(JobOp::SolveSystem(equations.clone(), vars.clone())),
+        );
+        assert_x_is_one_and_y_is_two(fallback);
+
+        // The ordinary native path returns the same answer, without a retry.
+        let native = run(
+            &NativeSolver,
+            Backend::Native,
+            job(JobOp::SolveSystem(equations, vars)),
+        );
+        assert_x_is_one_and_y_is_two(native);
+    }
+
+    /// Check a system answer against `x = 1, y = 2`, in any assignment order.
+    fn assert_x_is_one_and_y_is_two(result: JobResult) {
+        match result.outcome {
+            JobOutcome::Assignments(assignments) => {
+                assert_eq!(assignments.len(), 2, "{assignments:?}");
+                for (variable, value) in &assignments {
+                    let expected = match variable.as_str().as_str() {
+                        "x" => "1",
+                        "y" => "2",
+                        other => panic!("unexpected variable {other}"),
+                    };
+                    assert_eq!(value.to_string(), expected, "{variable:?}");
+                }
+            }
+            other => panic!("expected assignments, got {}", describe(&other)),
         }
     }
 

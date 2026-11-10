@@ -1542,6 +1542,45 @@ mod tests {
     }
 
     #[test]
+    fn a_three_unknown_system_solves_every_variable() {
+        // Three unknowns is the smallest system that exercises the native
+        // backend's Gaussian elimination rather than the two-variable shortcut.
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex_lines(&[
+            String::from("x+y+z=6"),
+            String::from("x-y=0"),
+            String::from("y-z=0"),
+        ])
+        .expect("a three-line system");
+        app.recompute();
+        assert_eq!(app.equations.len(), 3);
+        app.start_solve();
+
+        let ctx = egui::Context::default();
+        for _ in 0..400 {
+            app.poll_jobs(&ctx);
+            if !matches!(app.solve, SolveState::Idle) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        match &app.solve {
+            SolveState::System { assignments } => {
+                assert_eq!(assignments.len(), 3, "{assignments:?}");
+                for (variable, value) in assignments {
+                    assert_eq!(
+                        value.to_string(),
+                        "2",
+                        "{} should be 2",
+                        variable.as_str()
+                    );
+                }
+            }
+            other => panic!("expected a system answer, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn solving_a_linear_equation_reaches_the_variables_panel() {
         // The whole path: document -> editor -> worker thread -> panel state.
         let mut app = CasApp::new();
