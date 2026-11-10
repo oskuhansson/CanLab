@@ -944,3 +944,48 @@ fn inserting_a_template_into_a_denominator_stays_in_the_denominator() {
     assert_eq!(f.to_latex(), "\\frac{1}{2\\sqrt{ }}");
     assert_eq!(slot_path(&f), vec![Slot::Den, Slot::Body]);
 }
+
+
+// ---------------------------------------------------- empty lines and systems
+
+#[test]
+fn backspace_at_the_top_of_the_first_system_does_nothing() {
+    // `remove_empty_line` folds an empty system into the one above it, and it used
+    // to do that even when there was no system above it: `self.system -= 1`
+    // underflowed and panicked. Reachable from the editor as Ctrl+Enter, up,
+    // backspace on a cleared document.
+    let mut f = MathField::new();
+    f.new_system();
+    assert_eq!(f.system_count(), 2);
+    assert!(f.move_up(), "the cursor walks up into the first system");
+    assert_eq!(f.system(), 0);
+    // The document is empty, so there is nothing to take back and nothing to fold.
+    f.backspace();
+    assert!(f.rows().all(|row| row.is_empty()), "nothing was edited");
+    assert_eq!(f.system_count(), 2, "the empty system is still there");
+}
+
+#[test]
+fn backspace_still_folds_an_empty_second_system_into_the_first() {
+    // The guard must not disable the fold itself.
+    let mut f = MathField::new();
+    f.type_str("x");
+    f.new_system();
+    assert_eq!(f.system_count(), 2);
+    f.backspace();
+    assert_eq!(f.system_count(), 1, "an empty second system is folded away");
+    assert_eq!(f.to_latex(), "x");
+}
+
+#[test]
+fn backspace_on_an_empty_trailing_line_removes_it() {
+    let mut f = MathField::new();
+    f.type_str("x=1");
+    f.new_line();
+    f.type_str("y=2");
+    f.new_line();
+    assert_eq!(f.line_count(), 3);
+    f.backspace();
+    assert_eq!(f.line_count(), 2);
+    assert_eq!(f.to_latex(), "\\begin{cases} x=1 \\\\ y=2 \\end{cases}");
+}
