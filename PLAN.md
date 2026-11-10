@@ -8,18 +8,18 @@
 
 ## 0. Status: what shipped
 
-The workspace is a working, tested, running application. **366 tests green.**
+The workspace is a working, tested, running application. **390 tests green.**
 
 | Crate | What it does | Tests |
 |---|---|---|
 | `canlab-core` | `Expr` (Arc, n-ary), exact `i128` rationals, canonicalization, compiled `f64` eval | 28 |
-| `canlab-parse` | LaTeX lexer + Pratt parser, Abitti/MathQuill vocabulary | 68 |
+| `canlab-parse` | LaTeX lexer + Pratt parser, Abitti/MathQuill vocabulary | 71 |
 | `canlab-tex` | precedence-correct LaTeX printer | 43 |
-| `canlab-plot` | adaptive sampler with pole/domain breaks, SVG export | 28 |
+| `canlab-plot` | adaptive sampler with pole/domain breaks, SVG export | 29 |
 | `canlab-solver` | `Solver` trait, hand-written JSON AST, in-memory protocol session, SymPy worker | 61 |
-| `canlab-input` | the structural math field: caret in the tree, empty slots, MathQuill key semantics | 75 |
-| `canlab-mathview` | layout and painting of the field (fractions, scripts, radicals, carets) | 32 |
-| `canlab-gui` | the window: dockable panels, background jobs, dark/light themes | 12 |
+| `canlab-input` | the structural math field: caret in the tree, empty slots, MathQuill key semantics, systems | 97 |
+| `canlab-mathview` | layout and painting of the field (fractions, scripts, radicals, accents, carets) | 38 |
+| `canlab-gui` | the window: dockable panels, background jobs, dark/light themes | 15 |
 | `canlab-cli` | `canlab` binary + REPL, end-to-end tests | 8 |
 
 The build is planned to land in this order, and did: expression core, parser,
