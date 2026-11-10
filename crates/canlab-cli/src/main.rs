@@ -17,7 +17,7 @@ use std::process::ExitCode;
 use canlab_core::{Expr, ExprNode, Hold, Program, SymbolId, expr::node};
 use canlab_parse::parse_latex;
 use canlab_plot::{SampleOptions, SvgOptions, sample, to_svg};
-use canlab_solver::{MockSolver, Solver};
+use canlab_solver::{NativeSolver, Solver};
 use canlab_tex::to_latex;
 
 const USAGE: &str = "\
@@ -28,15 +28,17 @@ USAGE:
     canlab eval   <latex>           parse and canonicalize, print plain text + LaTeX
     canlab tex    <latex>           print LaTeX only
     canlab plot   <latex> [opts]    render a plot to SVG
-    canlab int    <latex> [opts]    integrate (needs a solver backend)
+    canlab int    <latex> [opts]    integrate (uses SymPy when it is installed)
+    canlab solver [--probe]         report the SymPy backend, or test it
 
 OPTIONS:
     -o, --out <file>             output file for plot (default: plot.svg)
         --xmin <f> --xmax <f>    plot domain (default: -10 10)
     -v, --var <name>             variable for integration (default: guess)
+        --probe                  really start the worker and make it answer
 
 REPL COMMANDS:
-    :help  :quit  :tex  :plot  :int
+    :help  :quit  :tex  :plot  :int  :solver
 ";
 
 fn main() -> ExitCode {
@@ -60,6 +62,7 @@ fn main() -> ExitCode {
         "tex" => tex_command(&args[1..]),
         "plot" => plot_command(&args[1..]),
         "int" | "integrate" => integrate_command(&args[1..]),
+        "solver" => solver_command(&args[1..]),
         other => Err(format!("unknown command `{other}`\n\n{USAGE}")),
     };
 
@@ -192,10 +195,10 @@ fn integrate_command(args: &[String]) -> Result<(), String> {
         }
     };
 
-    // No Python on this machine, so the default backend is the mock: it can do
-    // `integrate x^n` and honestly declines everything else. Swapping in
-    // `SympyWorker::spawn("python3", ...)` is a one-line change behind the trait.
-    let solver = MockSolver;
+    // The best backend the machine offers: SymPy when it is installed, the native
+    // one otherwise. Declining is still a normal answer, and the unevaluated
+    // integral is printed either way.
+    let solver = backend();
     match solver.integrate(&expr, var) {
         Ok(result) => {
             println!("{}", to_latex(&result));
@@ -209,6 +212,34 @@ fn integrate_command(args: &[String]) -> Result<(), String> {
             }))
         )),
     }
+}
+
+// ---------------------------------------------------------------------------
+// The backend
+// ---------------------------------------------------------------------------
+
+/// The strongest backend this machine can run.
+///
+/// SymPy is the real thing but it needs a Python installation; the native backend
+/// needs nothing and covers school algebra. Choosing here rather than at each call
+/// site means the REPL, `int` and the GUI all make the same choice.
+fn backend() -> Box<dyn Solver> {
+    match canlab_solver::sympy::open() {
+        Ok(worker) => Box::new(worker),
+        Err(_) => Box::new(NativeSolver),
+    }
+}
+
+/// `canlab solver` — what the SymPy backend situation is, and optionally a real
+/// round trip through the worker.
+fn solver_command(args: &[String]) -> Result<(), String> {
+    if args.iter().any(|arg| arg == "--probe") {
+        return canlab_solver::probe().map(|message| println!("{message}"));
+    }
+    println!("{}", canlab_solver::discovery().describe());
+    println!("The native backend is always available: linear and quadratic equations,");
+    println!("polynomial calculus, Gaussian elimination for linear systems.");
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -244,6 +275,7 @@ fn repl() -> Result<(), String> {
                 "tex" => report(tex_command(&[argument.to_string()])),
                 "plot" => report(plot_command(&[argument.to_string()])),
                 "int" | "integrate" => report(integrate_command(&[argument.to_string()])),
+                "solver" => report(solver_command(&[argument.to_string()])),
                 other => eprintln!("unknown command `:{other}` (try :help)"),
             }
             continue;

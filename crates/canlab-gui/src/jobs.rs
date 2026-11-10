@@ -9,11 +9,85 @@
 //! The worker deliberately does not know about egui: it turns a [`Job`] into a
 //! plain [`JobResult`], and the app decides how that result looks.
 
-use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::{Arc, Mutex};
 
 use canlab_core::{Expr, SymbolId};
 use canlab_solver::{NativeSolver, Solver, SolverError};
+
+/// Which backend the worker thread is talking to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Backend {
+    /// The in-process backend: exact rationals, linear and quadratic equations,
+    /// polynomial calculus, Gaussian elimination for linear systems.
+    Native,
+    /// SymPy in a child process: the real thing, when Python is installed.
+    Sympy,
+}
+
+impl Backend {
+    /// What the Variables panel says it is.
+    pub fn label(self) -> &'static str {
+        match self {
+            Backend::Native => "native · exact rationals",
+            Backend::Sympy => "sympy · full symbolic",
+        }
+    }
+
+    /// What this backend can do, phrased for a request it declined.
+    fn repertoire(self, kind: JobKind) -> String {
+        match (self, kind) {
+            (Backend::Sympy, _) => String::from(
+                "SymPy declined this. The expression is probably outside elementary \
+                 closed forms, or needs assumptions this backend cannot guess.",
+            ),
+            (Backend::Native, JobKind::Solve) => String::from(
+                "This backend solves one equation in one variable, of degree 1 or 2, and \
+                 linear systems of any size. A higher power, a function of the variable, \
+                 or a non-linear system is beyond it.",
+            ),
+            (Backend::Native, JobKind::Integrate) => String::from(
+                "This backend integrates sums of integer powers of one variable.",
+            ),
+            (Backend::Native, JobKind::Simplify) => String::from(
+                "This backend has no rewriting rules; the expression is already in the only \
+                 form it knows.",
+            ),
+        }
+    }
+}
+
+/// What the worker thread decided to use, and why it did not use SymPy.
+///
+/// The decision is made *on the worker thread*, because finding a Python means
+/// starting processes and that is not something a frame may wait for.
+#[derive(Clone, Debug, Default)]
+pub struct BackendStatus {
+    /// `None` until the thread has chosen.
+    pub backend: Option<Backend>,
+    /// Why SymPy is not in use, when it was asked for and is missing.
+    pub note: Option<String>,
+}
+
+/// Choose the backend: SymPy when it is there, native otherwise.
+///
+/// `CANLAB_SOLVER=native` forces the native backend even if Python is installed,
+/// which is what a user comparing the two would want.
+fn choose_backend() -> (Arc<dyn Solver>, Backend, Option<String>) {
+    let forced_native = std::env::var("CANLAB_SOLVER")
+        .map(|value| value.eq_ignore_ascii_case("native"))
+        .unwrap_or(false);
+    // Tests pin the backend: a discovery pass starts processes, and a test that
+    // depended on whether the developer has Python installed would be a test of
+    // the machine rather than of the app. `canlab-solver` itself tests discovery.
+    if forced_native || cfg!(test) {
+        return (Arc::new(NativeSolver), Backend::Native, None);
+    }
+    match canlab_solver::sympy::open() {
+        Ok(worker) => (Arc::new(worker), Backend::Sympy, None),
+        Err(why) => (Arc::new(NativeSolver), Backend::Native, Some(why)),
+    }
+}
 
 /// What kind of operation produced a result. The app uses it to decide whether
 /// a solve result belongs in the Variables panel.
@@ -78,6 +152,8 @@ pub struct Jobs {
     rx: Receiver<JobResult>,
     in_flight: usize,
     running: Option<String>,
+    /// Filled in by the worker thread once it has chosen a backend.
+    status: Arc<Mutex<BackendStatus>>,
 }
 
 impl Jobs {
@@ -86,12 +162,23 @@ impl Jobs {
     pub fn spawn() -> Self {
         let (tx, job_rx) = mpsc::channel::<Job>();
         let (result_tx, rx) = mpsc::channel::<JobResult>();
+        let status = Arc::new(Mutex::new(BackendStatus::default()));
+        let shared = Arc::clone(&status);
         let spawned = std::thread::Builder::new()
             .name(String::from("canlab-solver"))
             .spawn(move || {
-                let solver: Arc<dyn Solver> = Arc::new(NativeSolver);
+                // Choosing may start a process (finding Python), which is exactly
+                // why it happens here and not in a frame.
+                let (solver, backend, note) = choose_backend();
+                {
+                    let mut guard = shared
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    guard.backend = Some(backend);
+                    guard.note = note;
+                }
                 while let Ok(job) = job_rx.recv() {
-                    if result_tx.send(run(&*solver, job)).is_err() {
+                    if result_tx.send(run(&*solver, backend, job)).is_err() {
                         break;
                     }
                 }
@@ -102,6 +189,23 @@ impl Jobs {
             rx,
             in_flight: 0,
             running: None,
+            status,
+        }
+    }
+
+    /// What the worker is using, and why it is not using SymPy (if it is not).
+    pub fn backend(&self) -> BackendStatus {
+        self.status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// A one-line description of the backend for a panel header.
+    pub fn backend_label(&self) -> String {
+        match self.backend().backend {
+            Some(backend) => backend.label().to_string(),
+            None => String::from("starting…"),
         }
     }
 
@@ -157,7 +261,7 @@ impl Jobs {
     }
 }
 
-fn run(solver: &dyn Solver, job: Job) -> JobResult {
+fn run(solver: &dyn Solver, backend: Backend, job: Job) -> JobResult {
     let Job {
         label,
         op,
@@ -167,24 +271,24 @@ fn run(solver: &dyn Solver, job: Job) -> JobResult {
         JobOp::Simplify(expr) => (
             JobKind::Simplify,
             None,
-            single(solver.simplify(&expr), JobKind::Simplify),
+            single(solver.simplify(&expr), JobKind::Simplify, backend),
         ),
         JobOp::Integrate(expr, var) => (
             JobKind::Integrate,
             Some(var),
-            single(solver.integrate(&expr, var), JobKind::Integrate),
+            single(solver.integrate(&expr, var), JobKind::Integrate, backend),
         ),
         JobOp::Solve(expr, var) => {
             let outcome = match solver.solve(&expr, var) {
                 Ok(solutions) => JobOutcome::Solutions(solutions),
-                Err(err) => declined_or_failed(err, JobKind::Solve),
+                Err(err) => declined_or_failed(err, JobKind::Solve, backend),
             };
             (JobKind::Solve, Some(var), outcome)
         }
         JobOp::SolveSystem(equations, vars) => {
             let outcome = match solver.solve_system(&equations, &vars) {
                 Ok(assignments) => JobOutcome::Assignments(assignments),
-                Err(err) => declined_or_failed(err, JobKind::Solve),
+                Err(err) => declined_or_failed(err, JobKind::Solve, backend),
             };
             (JobKind::Solve, vars.first().copied(), outcome)
         }
@@ -198,39 +302,25 @@ fn run(solver: &dyn Solver, job: Job) -> JobResult {
     }
 }
 
-fn single(result: Result<Expr, SolverError>, kind: JobKind) -> JobOutcome {
+fn single(result: Result<Expr, SolverError>, kind: JobKind, backend: Backend) -> JobOutcome {
     match result {
         Ok(expr) => JobOutcome::Value(expr),
-        Err(err) => declined_or_failed(err, kind),
+        Err(err) => declined_or_failed(err, kind, backend),
     }
 }
 
 /// A backend declining is a real answer, and the panel has to be able to say
 /// *what* it declined and what the backend can do instead. "No solver backend"
 /// is the one thing it is not: the backend answered.
-fn declined_or_failed(err: SolverError, kind: JobKind) -> JobOutcome {
+fn declined_or_failed(err: SolverError, kind: JobKind, backend: Backend) -> JobOutcome {
     if err.is_declined() {
-        JobOutcome::Declined(repertoire(kind))
+        JobOutcome::Declined(backend.repertoire(kind))
     } else {
         JobOutcome::Failed(err.to_string())
     }
 }
 
-/// What this backend is for, in one line, phrased for a declined request.
-fn repertoire(kind: JobKind) -> String {
-    match kind {
-        JobKind::Solve => String::from(
-            "This backend solves one equation in one variable, of degree 1 or 2. \
-             A second variable, a higher power, or a function of the variable is beyond it.",
-        ),
-        JobKind::Integrate => String::from(
-            "This backend integrates sums of integer powers of one variable.",
-        ),
-        JobKind::Simplify => String::from(
-            "This backend has no rewriting rules; the expression is already in the only form it knows.",
-        ),
-    }
-}
+
 
 #[cfg(test)]
 mod tests {
@@ -249,6 +339,7 @@ mod tests {
     fn integrating_x_squared_returns_the_antiderivative() {
         let result = run(
             &NativeSolver,
+            Backend::Native,
             job(JobOp::Integrate(
                 pow(sym("x"), int(2)),
                 SymbolId::intern("x"),
@@ -271,7 +362,7 @@ mod tests {
             canlab_core::mul(vec![int(2), sym("x")]),
             int(-6),
         ]);
-        let result = run(&NativeSolver, job(JobOp::Solve(equation, SymbolId::intern("x"))));
+        let result = run(&NativeSolver, Backend::Native, job(JobOp::Solve(equation, SymbolId::intern("x"))));
         match result.outcome {
             JobOutcome::Solutions(values) => {
                 assert_eq!(values.len(), 1);
@@ -287,6 +378,7 @@ mod tests {
         // real answer: the UI must show "declined", not an error.
         let result = run(
             &NativeSolver,
+            Backend::Native,
             job(JobOp::Solve(pow(sym("x"), int(3)), SymbolId::intern("x"))),
         );
         assert!(result.kind.is_solve());

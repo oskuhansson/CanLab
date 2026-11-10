@@ -80,3 +80,119 @@ fn the_wrong_number_of_arguments_is_an_error_not_a_product() {
     let message = read(&definitions, "f(1,2)").unwrap_err();
     assert!(message.contains("takes 1"), "got {message}");
 }
+
+// ------------------------------------------------------------ document harvest
+
+/// Read a whole document, definitions and all.
+fn document(lines: &[&str]) -> MathField {
+    let owned: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
+    MathField::from_latex_lines(&owned).unwrap_or_else(|error| panic!("{error}"))
+}
+
+#[test]
+fn a_document_defines_and_uses_its_own_function() {
+    let field = document(&["f(x) = x^2+1", "f(3)"]);
+    let harvest = field.harvest();
+    assert!(harvest.problems.is_empty(), "{:?}", harvest.problems);
+    assert_eq!(harvest.definitions.len(), 1);
+    assert!(harvest.definitions.get("f").is_some());
+
+    // The call is resolved because the table came from the same document.
+    let lines = field.build_lines_with(&harvest.definitions).expect("readable");
+    assert_eq!(lines.len(), 1, "the definition line is not a value");
+    assert_eq!(lines[0].to_string(), "10");
+
+    // And without the table it is a product, which is what it looks like.
+    assert_ne!(read(&Definitions::default(), "f(3)").unwrap(), "10");
+}
+
+#[test]
+fn a_definition_may_come_after_the_line_that_uses_it() {
+    // Document-wide, not forward-only: the same document read top-down would
+    // still be a product on line 1.
+    let field = document(&["f(3)", "f(x) = x^2+1"]);
+    let harvest = field.harvest();
+    assert!(harvest.problems.is_empty(), "{:?}", harvest.problems);
+    let lines = field.build_lines_with(&harvest.definitions).expect("readable");
+    assert_eq!(lines[0].to_string(), "10");
+}
+
+#[test]
+fn a_definition_line_is_not_an_equation() {
+    // `f(x) = x² + 1` has an `=` in it but is not a set of points; plotting it
+    // as one would draw the curve `f·x - x² - 1 = 0`, which means nothing.
+    let field = document(&["f(x) = x^2+1", "x + y = 3"]);
+    let equations = field.build_equations().expect("readable");
+    assert_eq!(equations.len(), 1, "only the equation");
+    assert!(equations[0].1.is_some());
+    let rows: Vec<&canlab_input::Row> = field.rows().collect();
+    assert_eq!(rows.len(), 2);
+    assert!(field.is_definition_row(rows[0]));
+    assert!(!field.is_definition_row(rows[1]));
+}
+
+#[test]
+fn one_broken_definition_does_not_take_the_others_with_it() {
+    // `g(x) =` has no body. `f` must still be `f`.
+    let field = document(&["f(x) = x^2", "g(x) =", "f(2)"]);
+    let harvest = field.harvest();
+    assert!(harvest.definitions.get("f").is_some());
+    assert!(harvest.definitions.get("g").is_none());
+    assert_eq!(harvest.problems.len(), 1);
+    assert_eq!(harvest.problems[0].0, "g");
+    let lines = field.build_lines_with(&harvest.definitions).expect("readable");
+    assert_eq!(lines[0].to_string(), "4");
+}
+
+#[test]
+fn a_recursive_definition_is_refused_by_the_document() {
+    let field = document(&["f(x) = f(x)+1"]);
+    let harvest = field.harvest();
+    assert!(harvest.definitions.get("f").is_none());
+    assert_eq!(harvest.problems.len(), 1);
+    assert!(
+        matches!(&harvest.problems[0].1, canlab_input::DefineError::Recursive(name) if name == "f"),
+        "{:?}",
+        harvest.problems
+    );
+}
+
+#[test]
+fn a_two_parameter_definition_is_recognised_and_called() {
+    let field = document(&["g(a,b) = a*b", "g(3,4)"]);
+    let harvest = field.harvest();
+    assert!(harvest.problems.is_empty(), "{:?}", harvest.problems);
+    assert_eq!(harvest.definitions.get("g").expect("g").params.len(), 2);
+    let lines = field.build_lines_with(&harvest.definitions).expect("readable");
+    assert_eq!(lines[0].to_string(), "12");
+}
+
+#[test]
+fn a_derivative_of_a_document_definition_reads() {
+    let field = document(&["f(x) = x^2", "f'(3)"]);
+    let harvest = field.harvest();
+    let lines = field.build_lines_with(&harvest.definitions).expect("readable");
+    assert_eq!(lines[0].to_string(), "6");
+}
+
+#[test]
+fn an_equation_is_not_mistaken_for_a_definition() {
+    for line in ["x^2+y^2=1", "2x+6=0", "a(x+1)=0", "x = 3"] {
+        let field = MathField::from_latex(line).unwrap_or_else(|error| panic!("{line}: {error}"));
+        assert!(
+            !field.is_definition_row(field.root()),
+            "{line} was read as a definition"
+        );
+        assert_eq!(field.harvest().definitions.len(), 0, "{line}");
+    }
+}
+
+#[test]
+fn a_lone_definition_is_not_an_expression() {
+    let field = MathField::from_latex("f(x) = x^2+1").expect("a definition");
+    assert_eq!(
+        field.build_expr_with(&field.definitions()),
+        Err(canlab_input::ToExprError::Definition)
+    );
+}
+

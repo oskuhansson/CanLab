@@ -49,7 +49,7 @@ pub use mock::MockSolver;
 pub use native::NativeSolver;
 pub use system::{solve_system, substitute, variables_of};
 pub use session::Session;
-pub use sympy::SympyWorker;
+pub use sympy::{Discovery, Interpreter, SympyWorker, discover, discovery, probe};
 
 /// Everything that can go wrong on the way to a backend — plus the one thing
 /// that is not wrong at all.

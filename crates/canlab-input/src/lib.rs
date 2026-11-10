@@ -47,9 +47,9 @@ mod tree;
 
 pub use cursor::{Cursor, PathStep, Selection};
 pub mod define;
-pub use define::{DefineError, Definitions, Function};
-pub use expr::{ToExprError, build_with};
-pub use field::{EscapeOutcome, MathField};
+pub use define::{Candidate, DefineError, Definitions, Function, harvest};
+pub use expr::{ToExprError, build, build_with};
+pub use field::{EscapeOutcome, Harvest, MathField};
 pub mod snippet;
 pub use snippet::SnippetError;
 pub use template::{Template, TemplateError};

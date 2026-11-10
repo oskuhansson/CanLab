@@ -14,6 +14,10 @@ caught:
 - **value** - what the result card shows, which is what it means;
 - **number** - what it evaluates to.
 
+A document is several lines separated by `|`. Definitions are document-wide: a
+line may call a function defined below it, which is why `g(x) = f(x) + 1` above
+`f(x) = x²` is a row of its own.
+
 | Document | Why | Expected | Actual |
 |---|---|---|---|
 | `1+2*3` | precedence | `7` | `7` |
@@ -67,34 +71,15 @@ caught:
 | `(x+1)^2` | bare parentheses are a group | `\left(1 + x\right)^{2}` | `\left(1 + x\right)^{2}` |
 | `\frac{x}{x}` | policy: never cancelled silently | reads | reads, `1` |
 | `x/0` | division by zero has no value | refused | refused |
-
-## What the corpus has found so far
-
-Each of these was a real defect or a wrong belief, caught by writing the
-expectation down before checking the behaviour:
-
-1. **Four of my own expectations were wrong.** `to_latex()` returns the *typed*
-   form, not the simplified one - `2x+3x` prints as typed, and only the result
-   card prints `5x`. Hence the separate `value` layer above.
-2. **`-1x^{2}`** - a unit coefficient printed as a factor. Now `-x^2`.
-3. **`e^{\left(-x^{2}\right)}`** - an exponent parenthesised although the braces
-   already group. Now `e^{-x^{2}}`.
-4. **`2^10` read as `2^1 * 0`.** The snippet reader took a single character after
-   `^`; it now takes the whole run, so `x^23` is x^23 and `x^2y` is x^(2y).
-5. **`1/2x` read as literal text.** `/` is the fraction key when typing and now is
-   one when reading, so a pasted `1/2` renders as a fraction.
-6. **`\sqrt[3]{8}` was refused.** An indexed root is `x^(1/n)`; refusing a cube
-   root was a limitation, not a policy.
-7. **`x/0` became a NaN constant** and silently poisoned everything downstream.
-   Division by zero is now refused.
-
-## Deliberate refusals
-
-`\bar{x}`, `\vec{v}`, `x_1`, `x=1` and `f'` are refused, and each is a decision
-rather than a gap:
-
-- an accent and a vector arrow are *decorations*, not scalars;
-- a subscript on a variable has no algebraic meaning here (a subscript on a
-  *function* does: it is the logarithm base);
-- a relation is not a value - solve takes equations, it does not evaluate them;
-- `f'` needs function definitions, which is roadmap P0.
+| `f(x) = x^2+1` | a definition defines a name | `f` | `f` |
+| `f(x) = x^2+1|f(3)` | a call substitutes | 10 | 10 |
+| `f(x) = x^2+1|f(0)` | and the constant term is kept | 1 | 1 |
+| `f(x) = x^2|f'(3)` | f' differentiates the body first | 6 | 6 |
+| `f(x) = x^2|f''(2)` | f'' does it twice | 2 | 2 |
+| `f(x) = x^3|f'''(2)` | and f''' three times | 6 | 6 |
+| `g(a,b) = a*b|g(3,4)` | two parameters, in order | 12 | 12 |
+| `g(x) = f(x)+1|f(x) = x^2|g(1)` | a definition may use one below it | 2 | 2 |
+| `f(x) = f(x)+1` | recursion is refused at definition time | `` | `` |
+| `x^2+y^2=1` | an equation is not a definition | `` | `` |
+| `a(x+1) = 0` | a product is not a definition | `` | `` |
+| `f(x) = x^2|2*f(3)` | a call is a factor like any other | 18 | 18 |

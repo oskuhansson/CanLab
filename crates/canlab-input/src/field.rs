@@ -121,6 +121,14 @@ impl MathField {
         self.systems.len()
     }
 
+    /// Every line of the document, in reading order.
+    ///
+    /// A read-only view for callers that need to look at lines without being the
+    /// cursor: the definitions harvest, the gutter, a whole-document test.
+    pub fn rows(&self) -> impl Iterator<Item = &Row> {
+        self.systems.iter().flatten()
+    }
+
     /// True when the document holds more than one system.
     pub fn is_multi_system(&self) -> bool {
         self.systems.len() > 1
@@ -1032,9 +1040,27 @@ impl MathField {
 
     /// Build a field from several lines of LaTeX.
     pub fn from_latex_lines(lines: &[String]) -> Result<MathField, crate::SnippetError> {
-        let rows: Result<Vec<Row>, crate::SnippetError> =
-            lines.iter().map(|line| crate::snippet::parse(line)).collect();
-        Ok(MathField::from_lines(rows?))
+        Ok(MathField::from_lines(rows(lines)?))
+    }
+
+    /// Build a field from several *systems*, each a list of LaTeX lines.
+    ///
+    /// This is the shape a saved document has: a page can hold several separate
+    /// questions, and flattening them into one system would silently make them
+    /// one question on the way back in.
+    pub fn from_systems(systems: &[Vec<String>]) -> Result<MathField, crate::SnippetError> {
+        let mut parsed: Vec<Vec<Row>> = Vec::new();
+        for system in systems {
+            let rows = rows(system)?;
+            parsed.push(if rows.is_empty() { vec![Vec::new()] } else { rows });
+        }
+        if parsed.is_empty() {
+            parsed.push(vec![Vec::new()]);
+        }
+        Ok(MathField {
+            systems: parsed,
+            ..MathField::new()
+        })
     }
 
     /// Insert already-built nodes at the cursor and place the cursor in the first
@@ -1373,24 +1399,73 @@ impl MathField {
         blocks.join("\\quad ")
     }
 
+    /// The document as LaTeX, one string per line, grouped by system.
+    ///
+    /// [`MathField::from_systems`] reads exactly this shape back, which is what
+    /// makes a saved document round-trip without losing where one question ends
+    /// and the next begins.
+    pub fn systems_latex(&self) -> Vec<Vec<String>> {
+        self.systems
+            .iter()
+            .map(|lines| lines.iter().map(crate::latex::emit).collect())
+            .collect()
+    }
+
+    /// True when any line has a top-level `=` in it.
+    ///
+    /// This is asked of the *shape* rather than of a successful build: while a
+    /// line is half-typed, "this is an equation" is still the right reading of it.
+    pub fn has_relation(&self) -> bool {
+        self.systems.iter().flatten().any(|row| {
+            !self.is_definition_row(row)
+                && row
+                    .iter()
+                    .any(|node| matches!(node, Node::Text(text) if text == "="))
+        })
+    }
+
     /// Convert the current line to a `canlab-core` expression, or explain why not.
     ///
     /// A system has no single expression; use [`MathField::build_lines`] for one.
     pub fn build_expr(&self) -> Result<crate::Expr, crate::ToExprError> {
+        self.build_expr_with(&crate::define::Definitions::default())
+    }
+
+    /// [build_expr], with the document's function definitions available.
+    ///
+    /// Without the table, `f(3)` reads as the product `f·3`; with it, the call is
+    /// resolved. That is the whole reason this variant exists.
+    pub fn build_expr_with(
+        &self,
+        definitions: &crate::define::Definitions,
+    ) -> Result<crate::Expr, crate::ToExprError> {
         if self.systems.len() != 1 || self.systems[0].len() != 1 {
             return Err(crate::ToExprError::System);
         }
-        crate::expr::build(&self.systems[0][0])
+        let row = &self.systems[0][0];
+        if self.is_definition_row(row) {
+            return Err(crate::ToExprError::Definition);
+        }
+        crate::expr::build_with(row, definitions)
     }
 
     /// Convert every line to an expression: the equations of the document.
     ///
     /// Fails with the first line's error, so the caller can point at it.
     pub fn build_lines(&self) -> Result<Vec<crate::Expr>, crate::ToExprError> {
+        self.build_lines_with(&crate::define::Definitions::default())
+    }
+
+    /// [build_lines], with the document's function definitions available.
+    pub fn build_lines_with(
+        &self,
+        definitions: &crate::define::Definitions,
+    ) -> Result<Vec<crate::Expr>, crate::ToExprError> {
         self.systems
             .iter()
             .flatten()
-            .map(|row| crate::expr::build(row))
+            .filter(|row| !self.is_definition_row(row))
+            .map(|row| crate::expr::build_with(row, definitions))
             .collect()
     }
 
@@ -1400,14 +1475,26 @@ impl MathField {
     /// [`MathField::build_expr`] refuses by design — a relation is not a value.
     /// The right-hand side is `None` for a line with no `=`, which is legal while
     /// someone is still typing.
+    ///
+    /// A line that *defines* a function is not an equation, so it is left out: it
+    /// describes a name, not a set of points.
     pub fn build_equations(
         &self,
+    ) -> Result<Vec<(crate::Expr, Option<crate::Expr>)>, crate::ToExprError> {
+        self.build_equations_with(&crate::define::Definitions::default())
+    }
+
+    /// [build_equations], with the document's function definitions available.
+    pub fn build_equations_with(
+        &self,
+        definitions: &crate::define::Definitions,
     ) -> Result<Vec<(crate::Expr, Option<crate::Expr>)>, crate::ToExprError> {
         self.systems
             .iter()
             .flatten()
             .filter(|row| row_caret_len(row) > 0)
-            .map(|row| equation(row))
+            .filter(|row| !self.is_definition_row(row))
+            .map(|row| equation(row, definitions))
             .collect()
     }
 
@@ -1416,14 +1503,70 @@ impl MathField {
         &self,
         system: usize,
     ) -> Result<Vec<(crate::Expr, Option<crate::Expr>)>, crate::ToExprError> {
+        self.build_system_equations_with(system, &crate::define::Definitions::default())
+    }
+
+    /// [build_system_equations], with the document's function definitions available.
+    pub fn build_system_equations_with(
+        &self,
+        system: usize,
+        definitions: &crate::define::Definitions,
+    ) -> Result<Vec<(crate::Expr, Option<crate::Expr>)>, crate::ToExprError> {
         let Some(lines) = self.systems.get(system) else {
             return Err(crate::ToExprError::EmptySlot);
         };
         lines
             .iter()
             .filter(|row| row_caret_len(row) > 0)
-            .map(|row| equation(row))
+            .filter(|row| !self.is_definition_row(row))
+            .map(|row| equation(row, definitions))
             .collect()
+    }
+
+    // -------------------------------------------------------------- definitions
+
+    /// Is this row a *definition* (`f(x) = …`) rather than an equation?
+    pub fn is_definition_row(&self, row: &Row) -> bool {
+        crate::define::Candidate::of(row).is_some()
+    }
+
+    /// The functions this document defines, as a table the reader can resolve
+    /// calls against.
+    pub fn definitions(&self) -> crate::define::Definitions {
+        self.harvest().definitions
+    }
+
+    /// Every definition the document makes, plus the ones it could not make.
+    ///
+    /// Definitions are document-wide: a line may use a function defined below it.
+    /// A broken definition is reported and skipped, so one bad line cannot take
+    /// the rest of the document's names with it.
+    pub fn harvest(&self) -> Harvest {
+        let candidates: Vec<crate::define::Candidate> = self
+            .systems
+            .iter()
+            .flatten()
+            .filter_map(crate::define::Candidate::of)
+            .collect();
+        let (definitions, problems) = crate::define::harvest(&candidates);
+        Harvest {
+            definitions,
+            problems: problems
+                .into_iter()
+                .map(|(index, error)| {
+                    let name = candidates
+                        .get(index)
+                        .map(|candidate| candidate.name.clone())
+                        .unwrap_or_default();
+                    (name, error)
+                })
+                .collect(),
+        }
+    }
+
+    /// True when the document defines any function at all.
+    pub fn has_definitions(&self) -> bool {
+        !self.harvest().definitions.is_empty()
     }
 
     /// Convert to a `canlab-core` expression when the field is complete enough.
@@ -1442,8 +1585,19 @@ impl MathField {
     }
 }
 
-// --------------------------------------------------------------------- helpers
+/// What a document defines, and what it tried to define but could not.
+///
+/// The two travel together because a caller almost always wants both: the table
+/// to read with, and the reason `g` is not in it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Harvest {
+    /// The functions the document defines.
+    pub definitions: crate::define::Definitions,
+    /// Definitions that were refused, by name, with the reason.
+    pub problems: Vec<(String, crate::define::DefineError)>,
+}
 
+// --------------------------------------------------------------------- helpers
 fn row_at_ro<'a>(row: &'a Row, path: &[PathStep]) -> &'a Row {
     match path.split_first() {
         None => row,
@@ -1516,7 +1670,10 @@ fn block(lines: &[Row]) -> String {
 }
 
 /// One line as an equation: everything before its `=` and everything after.
-fn equation(row: &Row) -> Result<(crate::Expr, Option<crate::Expr>), crate::ToExprError> {
+fn equation(
+    row: &Row,
+    definitions: &crate::define::Definitions,
+) -> Result<(crate::Expr, Option<crate::Expr>), crate::ToExprError> {
     let mut lhs: Vec<Node> = Vec::new();
     let mut rhs: Option<Vec<Node>> = None;
     for node in row {
@@ -1526,12 +1683,20 @@ fn equation(row: &Row) -> Result<(crate::Expr, Option<crate::Expr>), crate::ToEx
             (Some(side), node) => side.push(node.clone()),
         }
     }
-    let lhs = crate::expr::build(&lhs)?;
+    let lhs = crate::expr::build_with(&lhs, definitions)?;
     let rhs = match rhs {
-        Some(side) => Some(crate::expr::build(&side)?),
+        Some(side) => Some(crate::expr::build_with(&side, definitions)?),
         None => None,
     };
     Ok((lhs, rhs))
+}
+
+/// Parse a list of LaTeX lines into rows.
+fn rows(lines: &[String]) -> Result<Vec<Row>, crate::SnippetError> {
+    lines
+        .iter()
+        .map(|line| crate::snippet::parse(line))
+        .collect()
 }
 
 /// The caret offset immediately before node `index` of `row`.

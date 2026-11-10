@@ -30,9 +30,9 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use canlab_core::{Expr, SymbolId};
 
@@ -45,6 +45,13 @@ use crate::{Solver, SolverError};
 /// Thirty seconds is long enough for a hard integral and short enough that a
 /// hung backend does not look like a frozen application.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long `--version` may take before an interpreter is written off.
+///
+/// Long enough for a cold start on a loaded machine, short enough that a Store
+/// alias — which takes seconds to fail — does not stall a search that has already
+/// found nothing.
+const PROBE_TIMEOUT: Duration = Duration::from_millis(400);
 
 /// One queued request for the session thread.
 struct Job {
@@ -104,9 +111,9 @@ struct Pipe {
 }
 
 impl Pipe {
-    fn start(program: &str, script: &Path) -> io::Result<Self> {
-        let mut child = Command::new(program)
-            .arg(script)
+    fn start(interpreter: &Interpreter, script: &Path) -> io::Result<Self> {
+        let mut child = interpreter
+            .command(script)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // A worker that logs to a pipe nobody drains blocks for ever once
@@ -195,7 +202,7 @@ fn missing_pipe(which: &str) -> io::Error {
 /// All requests are serialised through an internal mutex: the protocol is one
 /// question at a time, and `Solver` hands out `&self`.
 pub struct SympyWorker {
-    program: String,
+    interpreter: Interpreter,
     script: PathBuf,
     timeout: Duration,
     /// `None` after a timeout or a crash, until [`SympyWorker::restart`].
@@ -209,13 +216,24 @@ impl SympyWorker {
     /// request with [`SolverError::Backend`], which is the same path a crash
     /// takes and therefore the one path worth keeping exercised.
     pub fn spawn(program: &str, script: &Path) -> io::Result<Self> {
-        let pipe = Pipe::start(program, script)?;
+        Self::with_interpreter(Interpreter::new(program), script)
+    }
+
+    /// Start a worker through `interpreter`, which may need launcher arguments
+    /// (`py -3`).
+    pub fn with_interpreter(interpreter: Interpreter, script: &Path) -> io::Result<Self> {
+        let pipe = Pipe::start(&interpreter, script)?;
         Ok(Self {
-            program: program.to_string(),
+            interpreter,
             script: script.to_path_buf(),
             timeout: DEFAULT_TIMEOUT,
             pipe: Mutex::new(Some(pipe)),
         })
+    }
+
+    /// The interpreter this worker was started with.
+    pub fn interpreter(&self) -> &Interpreter {
+        &self.interpreter
     }
 
     /// Replace the per-request deadline.
@@ -231,7 +249,7 @@ impl SympyWorker {
     pub fn restart(&mut self) -> io::Result<()> {
         let mut guard = self.lock();
         *guard = None;
-        let pipe = Pipe::start(&self.program, &self.script)?;
+        let pipe = Pipe::start(&self.interpreter, &self.script)?;
         *guard = Some(pipe);
         Ok(())
     }
@@ -358,6 +376,263 @@ fn payload_series(e: &Expr, var: SymbolId, at: &Expr, order: usize) -> String {
     )
 }
 
+// ---------------------------------------------------------------------------
+// Packaging: finding an interpreter and the worker
+//
+// A SymPy backend is a Python installation plus one script. Nothing here can
+// conjure an interpreter into existence, so the honest job is to look in the
+// places it is likely to be, say precisely what is missing when it is missing,
+// and let the caller fall back to the native backend.
+// ---------------------------------------------------------------------------
+
+/// A Python interpreter: a program, plus any arguments its launcher needs.
+///
+/// The arguments are not decoration. On Windows the reliable way to reach a
+/// Python 3 is `py -3`, which is one program *and one argument*, and a discovery
+/// layer that cannot express that finds no interpreter on a machine that has one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Interpreter {
+    /// The executable to run: `python3`, `python`, `py`.
+    pub program: String,
+    /// Arguments before the script: `-3` for the Windows launcher.
+    pub args: Vec<String>,
+}
+
+impl Interpreter {
+    /// A plain program with no launcher arguments.
+    pub fn new(program: impl Into<String>) -> Interpreter {
+        Interpreter {
+            program: program.into(),
+            args: Vec::new(),
+        }
+    }
+
+    /// A launcher that needs an argument, e.g. `py -3`.
+    pub fn with_args(program: impl Into<String>, args: &[&str]) -> Interpreter {
+        Interpreter {
+            program: program.into(),
+            args: args.iter().map(|arg| (*arg).to_string()).collect(),
+        }
+    }
+
+    /// `program args… script`.
+    fn command(&self, script: &Path) -> Command {
+        let mut command = Command::new(&self.program);
+        command.args(&self.args).arg(script);
+        command
+    }
+
+    /// True when the interpreter runs at all.
+    ///
+    /// Spawning it is the only portable test — `which` is not a thing on Windows,
+    /// and a file that exists may still not be executable. The wait is bounded
+    /// because on Windows `python.exe` is often the Microsoft Store alias, which
+    /// takes seconds and then exits with an error; that is a "no" however long it
+    /// takes to say so.
+    pub fn responds(&self) -> bool {
+        let spawned = Command::new(&self.program)
+            .args(&self.args)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        let Ok(mut child) = spawned else {
+            return false;
+        };
+        let deadline = Instant::now() + PROBE_TIMEOUT;
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => return status.success(),
+                Ok(None) if Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return false;
+                }
+                Ok(None) => thread::sleep(Duration::from_millis(15)),
+                Err(_) => return false,
+            }
+        }
+    }
+
+    /// The command line, for a message a user can copy and paste.
+    pub fn display(&self) -> String {
+        std::iter::once(self.program.clone())
+            .chain(self.args.iter().cloned())
+            .collect::<Vec<String>>()
+            .join(" ")
+    }
+}
+
+/// What the search for a SymPy backend found.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Discovery {
+    /// Both halves are present: this can be started.
+    Ready {
+        /// The interpreter that answered.
+        interpreter: Interpreter,
+        /// The worker script that exists.
+        script: PathBuf,
+    },
+    /// No interpreter answered.
+    NoInterpreter {
+        /// What was tried, in order.
+        tried: Vec<String>,
+    },
+    /// Python works, but `worker.py` was not found.
+    NoWorker {
+        /// The interpreter that answered.
+        interpreter: Interpreter,
+        /// Where the script was looked for.
+        looked: Vec<PathBuf>,
+    },
+}
+
+impl Discovery {
+    /// One line saying what is available, or exactly what is missing.
+    pub fn describe(&self) -> String {
+        match self {
+            Discovery::Ready { interpreter, script } => format!(
+                "SymPy backend available: `{} {}`",
+                interpreter.display(),
+                script.display()
+            ),
+            Discovery::NoInterpreter { tried } => format!(
+                "no Python interpreter answered (tried {}). Install Python 3 and SymPy, \
+                 or point CANLAB_PYTHON at an interpreter.",
+                tried.join(", ")
+            ),
+            Discovery::NoWorker {
+                interpreter,
+                looked,
+            } => format!(
+                "`{}` works, but worker.py was not found (looked in {}). \
+                 Point CANLAB_WORKER at it.",
+                interpreter.display(),
+                looked
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            ),
+        }
+    }
+
+    /// The interpreter and script, when both are there.
+    pub fn ready(self) -> Option<(Interpreter, PathBuf)> {
+        match self {
+            Discovery::Ready { interpreter, script } => Some((interpreter, script)),
+            _ => None,
+        }
+    }
+}
+
+/// Interpreters to try, in order. `CANLAB_PYTHON` wins when it is set.
+fn interpreters() -> Vec<Interpreter> {
+    let mut candidates = Vec::new();
+    if let Ok(specification) = std::env::var("CANLAB_PYTHON") {
+        let mut parts = specification.split_whitespace();
+        if let Some(program) = parts.next() {
+            candidates.push(Interpreter {
+                program: program.to_string(),
+                args: parts.map(str::to_string).collect(),
+            });
+        }
+    }
+    // The Windows launcher first: it is a real program, where `python3.exe` in
+    // `WindowsApps` is often a Microsoft Store stub that takes seconds to fail.
+    candidates.push(Interpreter::with_args("py", &["-3"]));
+    candidates.push(Interpreter::new("python"));
+    candidates.push(Interpreter::new("python3"));
+    candidates.push(Interpreter::new("py"));
+    candidates
+}
+
+/// Places `worker.py` might be, most specific first.
+fn scripts() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Ok(path) = std::env::var("CANLAB_WORKER") {
+        if !path.trim().is_empty() {
+            candidates.push(PathBuf::from(path));
+        }
+    }
+    // Beside the executable and up its ancestors: `target/debug/canlab-gui.exe`
+    // finds the repository root a few levels up.
+    if let Ok(executable) = std::env::current_exe() {
+        let mut directory = executable.parent().map(Path::to_path_buf);
+        while let Some(current) = directory {
+            candidates.push(current.join("python").join("worker.py"));
+            candidates.push(current.join("worker.py"));
+            directory = current.parent().map(Path::to_path_buf);
+        }
+    }
+    // The source tree, for `cargo run` and for the tests.
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python/worker.py"));
+    candidates.push(PathBuf::from("crates/canlab-solver/python/worker.py"));
+    candidates
+}
+
+/// Look for the two halves of a SymPy backend.
+pub fn discover() -> Discovery {
+    let candidates = interpreters();
+    let mut tried = Vec::new();
+    for interpreter in candidates {
+        tried.push(interpreter.display());
+        if !interpreter.responds() {
+            continue;
+        }
+        let looked = scripts();
+        if let Some(script) = looked.iter().find(|path| path.is_file()) {
+            return Discovery::Ready {
+                interpreter,
+                script: script.clone(),
+            };
+        }
+        return Discovery::NoWorker { interpreter, looked };
+    }
+    Discovery::NoInterpreter { tried }
+}
+
+/// The result of [`discover`], looked up once.
+///
+/// Probing an interpreter costs a process spawn, and a missing `python3` on
+/// Windows can be a Store stub that takes seconds to say no. One look per
+/// process is enough: the environment does not change while the app runs.
+pub fn discovery() -> &'static Discovery {
+    static CACHE: OnceLock<Discovery> = OnceLock::new();
+    CACHE.get_or_init(discover)
+}
+
+/// Start the SymPy backend the environment offers, or say what is missing.
+pub fn open() -> Result<SympyWorker, String> {
+    match discovery() {
+        Discovery::Ready { interpreter, script } => {
+            SympyWorker::with_interpreter(interpreter.clone(), script).map_err(|error| {
+                format!(
+                    "could not start `{} {}`: {error}",
+                    interpreter.display(),
+                    script.display()
+                )
+            })
+        }
+        other => Err(other.describe()),
+    }
+}
+
+/// Start the backend and make it answer one trivial question.
+///
+/// This is the difference between "the files are there" and "it works": it runs
+/// the worker, which imports SymPy, and round-trips a request through the real
+/// protocol. `canlab solver` prints the result.
+pub fn probe() -> Result<String, String> {
+    let description = discovery().describe();
+    let worker = open()?;
+    match worker.simplify(&canlab_core::int(0)) {
+        Ok(value) => Ok(format!("{description} — answered `{value}`")),
+        Err(error) => Err(format!("{description}, but the worker failed: {error}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,7 +643,7 @@ mod tests {
         /// A worker in the state it reaches after a fatal error: no pipe.
         fn dead() -> Self {
             Self {
-                program: "canlab-solver-no-such-interpreter".to_string(),
+                interpreter: Interpreter::new("canlab-solver-no-such-interpreter"),
                 script: PathBuf::from("worker.py"),
                 timeout: Duration::from_millis(20),
                 pipe: Mutex::new(None),
@@ -378,7 +653,7 @@ mod tests {
         /// A worker whose "process" is a canned transcript.
         fn scripted(responses: &'static str, request_log: SharedBuffer) -> Self {
             Self {
-                program: "python3".to_string(),
+                interpreter: Interpreter::new("python3"),
                 script: PathBuf::from("worker.py"),
                 timeout: Duration::from_secs(5),
                 pipe: Mutex::new(Some(Pipe::in_memory(
@@ -632,5 +907,74 @@ mod tests {
                 "{answer:?}"
             );
         }
+    }
+
+    #[test]
+    fn an_interpreter_keeps_its_launcher_arguments() {
+        // `py -3` is one program and one argument; a discovery layer that drops
+        // the argument launches a Python that may not be there.
+        let launcher = Interpreter::with_args("py", &["-3"]);
+        assert_eq!(launcher.display(), "py -3");
+        assert_eq!(launcher.args, vec![String::from("-3")]);
+        assert_eq!(Interpreter::new("python3").display(), "python3");
+    }
+
+    #[test]
+    fn discovery_either_finds_both_halves_or_says_what_is_missing() {
+        match discover() {
+            Discovery::Ready { interpreter, script } => {
+                assert!(!interpreter.program.is_empty());
+                assert!(
+                    script.is_file(),
+                    "a ready discovery must point at a real file: {}",
+                    script.display()
+                );
+            }
+            Discovery::NoInterpreter { tried } => {
+                assert!(!tried.is_empty(), "the search must have tried something");
+                assert!(tried.iter().any(|name| name.contains("python") || name == "py"));
+            }
+            Discovery::NoWorker { interpreter, looked } => {
+                assert!(!interpreter.program.is_empty());
+                assert!(!looked.is_empty());
+                assert!(looked.iter().all(|path| path.ends_with("worker.py")));
+            }
+        }
+    }
+
+    #[test]
+    fn the_missing_half_is_named_precisely() {
+        let no_python = Discovery::NoInterpreter {
+            tried: vec![String::from("python3"), String::from("py -3")],
+        };
+        let said = no_python.describe();
+        assert!(said.contains("python3"), "{said}");
+        assert!(said.contains("CANLAB_PYTHON"), "{said}");
+
+        let no_script = Discovery::NoWorker {
+            interpreter: Interpreter::new("python3"),
+            looked: vec![PathBuf::from("/nowhere/worker.py")],
+        };
+        let said = no_script.describe();
+        assert!(said.contains("python3"), "{said}");
+        assert!(said.contains("worker.py"), "{said}");
+        assert!(said.contains("CANLAB_WORKER"), "{said}");
+
+        let ready = Discovery::Ready {
+            interpreter: Interpreter::with_args("py", &["-3"]),
+            script: PathBuf::from("/somewhere/worker.py"),
+        };
+        assert!(ready.describe().contains("py -3"));
+        assert!(ready.clone().ready().is_some());
+        assert!(no_python.ready().is_none());
+    }
+
+    #[test]
+    fn the_worker_script_is_looked_for_in_the_source_tree() {
+        // A `cargo run` has no installed layout to look in, so the checkout has to
+        // be a candidate or the backend would be invisible during development.
+        let candidates = scripts();
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("python/worker.py");
+        assert!(candidates.contains(&manifest), "{candidates:?}");
     }
 }

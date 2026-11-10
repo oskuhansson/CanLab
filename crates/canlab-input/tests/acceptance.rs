@@ -32,6 +32,11 @@ enum Expect {
     Reads,
     /// The document is refused — it is not an algebraic expression.
     Refused,
+    /// The document defines exactly these function names (sorted, comma separated).
+    Defined(&'static str),
+    /// The document reads with its own definitions, and its last line evaluates
+    /// to this number.
+    DefinedValue(f64),
 }
 
 struct Case {
@@ -120,6 +125,33 @@ fn cases() -> Vec<Case> {
         case("(x+1)^2", "bare parentheses are a group", Expect::Simplified("\\left(1 + x\\right)^{2}")),
         case("\\frac{x}{x}", "policy: never cancelled silently", Expect::Reads),
         case("x/0", "division by zero has no value", Expect::Refused),
+        // --------------------------------------------------------- definitions
+        // A definition is a *name*, not a curve: `f(x) = x² + 1` on its own line
+        // is not an equation and is not an expression.
+        case("f(x) = x^2+1", "a definition defines a name", Expect::Defined("f")),
+        case("f(x) = x^2+1|f(3)", "a call substitutes", Expect::DefinedValue(10.0)),
+        case("f(x) = x^2+1|f(0)", "and the constant term is kept", Expect::DefinedValue(1.0)),
+        case("f(x) = x^2|f'(3)", "f' differentiates the body first", Expect::DefinedValue(6.0)),
+        case("f(x) = x^2|f''(2)", "f'' does it twice", Expect::DefinedValue(2.0)),
+        case("f(x) = x^3|f'''(2)", "and f''' three times", Expect::DefinedValue(6.0)),
+        case("g(a,b) = a*b|g(3,4)", "two parameters, in order", Expect::DefinedValue(12.0)),
+        case(
+            "g(x) = f(x)+1|f(x) = x^2|g(1)",
+            "a definition may use one below it",
+            Expect::DefinedValue(2.0),
+        ),
+        case(
+            "f(x) = f(x)+1",
+            "recursion is refused at definition time",
+            Expect::Defined(""),
+        ),
+        case("x^2+y^2=1", "an equation is not a definition", Expect::Defined("")),
+        case("a(x+1) = 0", "a product is not a definition", Expect::Defined("")),
+        case(
+            "f(x) = x^2|2*f(3)",
+            "a call is a factor like any other",
+            Expect::DefinedValue(18.0),
+        ),
     ]
 }
 
@@ -205,5 +237,29 @@ fn check(field: &MathField, expect: &Expect) -> (String, String, bool) {
             None => (String::from("refused"), String::from("refused"), true),
             Some(got) => (String::from("refused"), format!("read as `{got}`"), false),
         },
+        Expect::Defined(want) => {
+            let definitions = field.harvest().definitions;
+            let mut names: Vec<String> = definitions.names().map(str::to_string).collect();
+            names.sort();
+            let got = names.join(", ");
+            let ok = got == *want;
+            (format!("`{want}`"), format!("`{got}`"), ok)
+        }
+        Expect::DefinedValue(want) => {
+            let definitions = field.harvest().definitions;
+            let lines = match field.build_lines_with(&definitions) {
+                Ok(lines) => lines,
+                Err(error) => return (format!("{want}"), format!("refused: {error}"), false),
+            };
+            let Some(expression) = lines.last() else {
+                return (format!("{want}"), String::from("no expression"), false);
+            };
+            let Some(program) = canlab_core::Program::compile(expression, &[]) else {
+                return (format!("{want}"), String::from("not evaluable"), false);
+            };
+            let got = program.eval(&[]);
+            let ok = (got - want).abs() <= 1e-9 * want.abs().max(1.0);
+            (format!("{want}"), format!("{got}"), ok)
+        }
     }
 }

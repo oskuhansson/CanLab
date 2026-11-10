@@ -19,17 +19,32 @@ one.
 | `canlab-core` | `Expr` tree, exact `Number`, canonicalization, compiled `f64` evaluation |
 | `canlab-tex` | `Expr` → LaTeX |
 | `canlab-parse` | LaTeX → `Expr` (lexer + Pratt parser) + the Abitti palette as data |
-| `canlab-input` | the **structural math field**: a caret that lives in the tree, empty slots, MathQuill key semantics |
+| `canlab-input` | the **structural math field**: a caret that lives in the tree, empty slots, MathQuill key semantics, document-wide definitions |
 | `canlab-mathview` | layout and painting for the field (fractions, scripts, radicals, placeholders, carets) |
-| `canlab-solver` | `Solver` trait, tagged-JSON wire format, SymPy worker subprocess |
-| `canlab-plot` | Adaptive sampling with pole/domain breaks, SVG export |
-| `canlab-gui` | the desktop shell: centred editor, dockable panels, background jobs, dark mode |
-| `canlab-cli` | `canlab` binary: one-shot subcommands and a REPL |
+| `canlab-solver` | `Solver` trait, tagged-JSON wire format, native exact solver, SymPy discovery and worker subprocess |
+| `canlab-plot` | adaptive sampling with pole/domain breaks, Newton-refined intersections, SVG export |
+| `canlab-gui` | the desktop shell: centred editor, dockable panels, seven palettes, undo, sessions, background jobs |
+| `canlab-cli` | `canlab` binary: one-shot subcommands, `solver --probe`, and a REPL |
 
 Two dependency arrows matter. Everything depends on `canlab-core`, and
 `canlab-core` depends on nothing. The GUI depends on the field and the view, but
 the field and the view know nothing about the GUI — which is what would make a
 different shell (Bevy, say) a one-crate port rather than a rewrite.
+
+---
+
+## What it does
+
+| Capability | Behaviour |
+|---|---|
+| Definitions | `f(x) = x² + 1` defines a name for the whole document, resolved in dependency order; `f(3)` substitutes, `f'(x)` and `f''(x)` differentiate, cycles are refused. |
+| Undo and redo | A 100-snapshot ring with 400 ms typing coalescing; Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y, and buttons in the editor header. |
+| Parameters | A variable that is not on an axis gets a drag control in the plot overlay, default 1. Automatic axis choice prefers the familiar axis names. |
+| Systems | Linear systems beyond 2×2 by exact Gaussian elimination: a point, no solution, or a declined underdetermined system, never one point from a family. |
+| Plot | Drag to pan, scroll to zoom about the pointer; intersections are Newton-refined, drawn as dots and named on hover; the view fits them. |
+| Sessions | The document, palette, plot window, axes and parameter values are saved 1.2 s after the last change, in a versioned text format. |
+| Editor | Ctrl+C copies the document as LaTeX, Ctrl+V pastes; history entries load back; the gutter marks the caret's line. |
+| Palettes | Seven whole schemes, each with its own surfaces, text and six curve colours; a palette pins light or dark, so there is no separate theme switch. |
 
 ---
 
@@ -59,14 +74,31 @@ cargo run -p canlab-cli -- eval "2x + 3x"
 cargo run -p canlab-cli -- tex  "\frac{1}{2} + \frac{1}{3}"
 cargo run -p canlab-cli -- plot "\sin x" -o sin.svg --xmin 0 --xmax 6.28
 cargo run -p canlab-cli -- int  "x^2" -v x
+cargo run -p canlab-cli -- solver          # what SymPy was found, or what is missing
+cargo run -p canlab-cli -- solver --probe  # start the worker and round-trip a request
 cargo run -p canlab-cli        # REPL
 ```
 
-The GUI opens maximised with the editor centred: the LaTeX field is the point of
-the screen, the solver runs on a worker thread behind it, and the panels dock
+The GUI opens at 1180×760 with the editor centred: the LaTeX field is the point
+of the screen, the solver runs on a worker thread behind it, and the panels dock
 around the edges. Each panel has its own menu for splitting and closing, the
-seams between them drag, the **Workspace** menu swaps a whole preset layout, and
-the **Theme** button switches dark and light.
+seams between them drag, and the **Workspace** menu swaps a whole preset layout.
+The **Settings** menu lists the seven palettes — Midnight, Graphite, Nord,
+Solarized Dark, Contrast, Solstice and Solarized Light — each button painted in
+its own colours. Solstice and Solarized Light are light; the rest are dark. There
+is no separate theme toggle.
+
+These choose a backend, a layout or a file without changing the code:
+
+| Variable | Effect |
+|---|---|
+| `CANLAB_PALETTE` | palette for this run, for example `CANLAB_PALETTE=Nord` |
+| `CANLAB_SOLVER` | `native` forces the native backend even when SymPy is found |
+| `CANLAB_SESSION` | session file path, or `none` to turn saving and loading off |
+| `CANLAB_OPEN` | document to open, lines separated by a vertical bar |
+| `CANLAB_WORKSPACE` | preset layout: `editing`, `solving` or `plotting` |
+| `CANLAB_PYTHON`, `CANLAB_WORKER` | interpreter and `worker.py` location; see [docs/sympy.md](docs/sympy.md) |
+| `CANLAB_SHOT` | write one frame to a BMP; needs a `--features glow` build |
 
 ---
 
@@ -77,10 +109,13 @@ checked and degrades to a float on overflow rather than wrapping or panicking.
 `2^100` is therefore approximate; everyday algebra is exact. Swapping in a
 bigint later is contained to `number.rs`.
 
-**The solver is a mock by default.** There is no Python on this machine, so the
-SymPy worker (`canlab-solver/python/worker.py`) is written but not exercised
-here. What *is* tested is the wire format and the protocol session, in memory.
-The `Solver` trait is the seam: swapping in the real backend changes one file.
+**The solver has two backends, and only one of them has run here.** The native
+backend is always available: exact linear and quadratic equations, polynomial
+calculus, and Gaussian elimination for systems. SymPy is used when it is found:
+`CANLAB_SOLVER=native` forces native. Discovery and the worker protocol are
+tested in memory, but there is no Python on this machine, so the worker has
+never imported SymPy here. `canlab solver --probe` is the check, and
+[docs/sympy.md](docs/sympy.md) is the packaging note.
 
 **A declined solve is a real answer.** When the backend cannot do something it
 says so, and the UI shows the expression unevaluated rather than inventing a
@@ -98,14 +133,13 @@ result. `SolverError::NotImplemented` travels all the way to the screen.
   every case was typed into the live editor at <https://math-demo.abitti.fi/> with
   Playwright and the expected LaTeX is what that editor answered. If the model and
   the corpus disagree, the model is wrong.
-- `canlab-gui` has a headless frame test: it paints a whole frame with a real
-  `egui::Context`, which is what would catch a panic that shows up as a blank
-  window.
+- `canlab-input/tests/acceptance.rs` is a corpus of student documents and their
+  expected typed form, value or number. It prints the Markdown table kept in
+  `docs/acceptance.md`, so the document and the test cannot drift.
+- `canlab-gui` paints whole frames headlessly with a real `egui::Context`, which
+  is what would catch a panic that shows up as a blank window.
 
-Current state: **390 tests**, all green — `canlab-core` 28, `canlab-parse` 71,
-`canlab-tex` 43, `canlab-plot` 29, `canlab-solver` 61, `canlab-input` 97,
-`canlab-mathview` 38, `canlab-gui` 15, `canlab-cli` end-to-end 8 (per-crate runs
-include doctests).
+Current state: **over 500 tests**, all green.
 
 ```bash
 cargo test --workspace
@@ -124,6 +158,21 @@ python crates/canlab-mathview/tools/render_layout.py layout.json layout.png
 `layout.svg` opens in a browser; the Python renderer needs Pillow and draws the
 same items to a PNG, including every caret position and the faint half of a ghost
 bracket.
+
+### Capturing the window
+
+The window itself can be captured through the renderer:
+
+```bash
+CANLAB_SHOT=shot.bmp CANLAB_OPEN="x^2+y^2=1" CANLAB_WORKSPACE=plotting \
+  cargo run -p canlab-gui --features glow
+```
+
+`CANLAB_SHOT` asks egui for the frame after it has settled and writes an
+uncompressed 24-bit BMP. The `glow` feature switches to the GL renderer because
+the default wgpu backend cannot read its framebuffer; it exists for this hook.
+`CANLAB_OPEN` and `CANLAB_WORKSPACE` make the shot reproducible without typing
+into the window.
 
 The end-to-end milestone the whole thing is aimed at:
 

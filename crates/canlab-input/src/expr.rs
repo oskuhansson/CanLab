@@ -30,6 +30,8 @@ pub enum ToExprError {
     UnexpectedText(String),
     /// The field holds several lines, i.e. a system, which is not one expression.
     System,
+    /// A line that defines a function (`f(x) = x² + 1`) is not a value.
+    Definition,
 }
 
 impl std::fmt::Display for ToExprError {
@@ -42,6 +44,7 @@ impl std::fmt::Display for ToExprError {
             ToExprError::UnsupportedCommand(c) => write!(f, "{c} has no expression form"),
             ToExprError::UnexpectedText(s) => write!(f, "cannot read {s:?} as an operand"),
             ToExprError::System => write!(f, "a system is not a single expression"),
+            ToExprError::Definition => write!(f, "a definition is not a value"),
         }
     }
 }
@@ -53,7 +56,7 @@ pub fn build(row: &Row) -> Result<Expr, ToExprError> {
     build_with(row, &crate::define::Definitions::default())
 }
 
-/// [uild], with the document's function definitions available.
+/// [`build`], with the document's function definitions available.
 pub fn build_with(row: &Row, definitions: &crate::define::Definitions) -> Result<Expr, ToExprError> {
     // Spaces are layout, not algebra.
     let nodes: Vec<&Node> = row
@@ -183,10 +186,10 @@ fn product(row: &Row, definitions: &crate::define::Definitions) -> Result<Expr, 
                 let mut argument_in_subscript: Option<Expr> = None;
                 if let Some(Node::Sub(base_row)) = nodes.get(next) {
                     if base_row.len() > 1 {
-                        base = Some(build(&base_row[..1].to_vec())?);
-                        argument_in_subscript = Some(build(&base_row[1..].to_vec())?);
+                        base = Some(build_with(&base_row[..1].to_vec(), definitions)?);
+                        argument_in_subscript = Some(build_with(&base_row[1..].to_vec(), definitions)?);
                     } else {
-                        base = Some(build(&base_row.to_vec())?);
+                        base = Some(build_with(&base_row.to_vec(), definitions)?);
                     }
                     next += 1;
                 }
@@ -204,7 +207,7 @@ fn product(row: &Row, definitions: &crate::define::Definitions) -> Result<Expr, 
                 while j < nodes.len() {
                     match nodes[j] {
                         Node::Sup(sub) => {
-                            arg = pow(arg, build(sub)?);
+                            arg = pow(arg, build_with(sub, definitions)?);
                             j += 1;
                         }
                         _ => break,
@@ -233,7 +236,7 @@ fn product(row: &Row, definitions: &crate::define::Definitions) -> Result<Expr, 
         while i < nodes.len() {
             match nodes[i] {
                 Node::Sup(sub) => {
-                    e = pow(e, build(sub)?);
+                    e = pow(e, build_with(sub, definitions)?);
                     i += 1;
                 }
                 Node::Sub(_) => return Err(ToExprError::Subscript),
@@ -301,8 +304,8 @@ fn atom(node: &Node, definitions: &crate::define::Definitions) -> Result<Expr, T
         Node::Text(s) => text_expr(s),
         Node::Sym(name) => sym_expr(name),
         Node::Frac { num, den } => {
-            let n = build(num)?;
-            let d = build(den)?;
+            let n = build_with(num, definitions)?;
+            let d = build_with(den, definitions)?;
             // Division by zero is not a value. Without this it becomes a NaN
             // constant, which then poisons everything downstream silently.
             if matches!(&*d, ExprNode::Num(number) if number.is_zero()) {
@@ -323,8 +326,8 @@ fn atom(node: &Node, definitions: &crate::define::Definitions) -> Result<Expr, T
             index: Some(index),
             body,
         } => Ok(pow(
-            build(body)?,
-            pow(build(index)?, ExprNode::int(-1)),
+            build_with(body, definitions)?,
+            pow(build_with(index, definitions)?, ExprNode::int(-1)),
         )),
         Node::Group { body, .. } => build_with(body, definitions),
         Node::Accent { .. } => Err(ToExprError::UnsupportedConstruct("an accent")),

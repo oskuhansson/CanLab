@@ -1,133 +1,67 @@
 # Capability roadmap
 
-Written to be reviewed, not followed. Effort is given in **hours of work**, then
-as calendar time **at 20 h/week** — the rate this is now being built at.
+This began as a plan: eight items, an estimate in hours for each, and the order
+to do them in. All eight are now in the code, with tests where the machine allows
+them. The hours below are what each item was judged at before it was built —
+judgement, not measurement.
 
-At 20 h/week the whole list below is about **four weeks**. The estimates are my
-judgement, not measurements, and the two "sharp edges" at the bottom are the ones
-most likely to overrun.
+The remaining work is in [What is left](#what-is-left), estimated in the same
+units. There is no total.
 
-| # | Item | Hours | Calendar (20 h/wk) | State |
-|---|---|---|---|---|
-| 1 | Function definitions and derivatives | 20 | 1 week | reader done, wiring left |
-| 2 | Undo and redo | 10 | 2–3 days | not started |
-| 3 | Parameters the user can set | 8 | 2 days | not started |
-| 4 | SymPy for real (packaging) | 16 | 4 days | worker written, never run |
-| 5 | Native elimination for 3+ unknowns | 10 | 2–3 days | 2×2 only |
-| 6 | Plot interaction | 16 | 4 days | not started |
-| 7 | Persistence | 6 | 1.5 days | not started |
-| 8 | Editor polish (paste, history, gutter) | 12 | 3 days | `from_latex` exists |
-| | **Total** | **98 h** | **~5 weeks** | |
+| # | Item | Hours | What shipped |
+|---|---|---|---|
+| 1 | Function definitions and derivatives | 20 | `f(x) = x² + 1` defines a name for the whole document. Lines resolve in dependency order, so a definition can be used above its line; cycles are refused. `f(3)` substitutes, `f'(x)` and `f''(x)` differentiate the body. Definitions are listed in the Variables panel, are skipped when equations are collected, and plot as `y = f(x)`. |
+| 2 | Undo and redo | 10 | A ring of 100 `MathField` snapshots, with typing coalesced over 400 ms and structural edits taking their own step. Ctrl+Z, Ctrl+Shift+Z and Ctrl+Y, plus buttons in the editor header. |
+| 3 | Parameters the user can set | 8 | A variable off both axes gets a value and a drag control in the plot overlay, default 1. Automatic axis choice looks for the familiar names — `x`/`i`/`t`/`u`/`s` horizontally, `y`/`j`/`v` vertically — and no longer invents a vertical axis from an arbitrary letter, so that variable stays a parameter until the user picks it. The `l = 1 assumed` note is gone. |
+| 4 | SymPy for real (packaging) | 16 | `canlab solver` reports discovery; `canlab solver --probe` starts the worker and round-trips a request. Discovery tries `CANLAB_PYTHON`, then `py -3`, `python`, `python3`, `py`, with a 400 ms probe per candidate, and finds the worker through `CANLAB_WORKER`, beside the executable, or in the checkout. The GUI picks SymPy when it is there and labels the panel; `CANLAB_SOLVER=native` forces the native backend. The worker has still not run on this machine. See [sympy.md](sympy.md). |
+| 5 | Native elimination for 3+ unknowns | 10 | Gaussian elimination over the exact rationals, with no special case for 2×2; tested to 4×4. A unique point is returned, a contradiction is reported as no solutions, and an underdetermined system is declined rather than narrowed to one point. |
+| 6 | Plot interaction | 16 | Drag to pan and scroll to zoom about the pointer, on the equal-aspect view. Intersections of two curves are refined by Newton's method into points, drawn as dots, and the one under the pointer shows `(x, y)` to four decimals. The view fits the intersections when there are any. |
+| 7 | Persistence | 6 | A versioned text session, written 1.2 s after the last change to `%APPDATA%/canlab/session.canlab`, `$HOME/.config/canlab/session.canlab`, or the path in `CANLAB_SESSION`. It stores the document (systems and lines), palette, plot window, axes and parameter values. A file from a newer version is refused rather than half-read; `CANLAB_SESSION=none` turns saving off. |
+| 8 | Editor polish (paste, history, gutter) | 12 | Ctrl+C copies the document as LaTeX. Ctrl+V inserts a single expression at the caret, or replaces the page with a whole document. History entries load back into the editor on click, and a gutter marks the caret's line in the accent colour. |
+
+Two things arrived that were not on the list. The old dark/light setting and
+accent colour became seven whole schemes — Midnight, Graphite, Nord, Solarized
+Dark, Contrast, Solstice and Solarized Light — each with its own surfaces, text,
+accent and six-colour curve wheel. A palette pins light or dark, so there is no
+separate theme toggle. And `CANLAB_SHOT` writes one frame through the renderer;
+it needs a `glow` build, which is why that feature exists.
 
 ## Where it stands
 
-Working and tested (459 tests): exact `i128` rationals, LaTeX parse and print,
-the Abitti structural editor, typeset layout, implicit plotting with intersection
-tracing, a native solver for linear/quadratic equations, polynomial calculus, a
-real symbolic differentiator (sums, product, power, chain, `u^v`, any order), and
-the reader half of function definitions. A dockable UI with dark/light and accent
-colours, and a 53-document acceptance corpus that generates its own review table.
+Everything in the table is wired into the GUI, not just the reader. The workspace
+has over 500 tests; the GUI suite paints whole frames headlessly, and a
+63-document acceptance corpus asserts its own results and prints the Markdown
+table kept in `docs/acceptance.md`.
 
-Honest gaps, in the order they hurt:
+One part has still never run end to end on this machine: the SymPy worker,
+because there is no Python here. That is in the list below.
 
-1. **Definitions are not wired into the editor.** The reader resolves `f(3)`,
-   `f'(x)`, `f''(x)` and has tests for all of it, but the GUI never builds the
-   table, so typing `f(x) = x²` still reads as a product. This is half a feature.
-2. **No undo.** Ctrl+Z does nothing. Its absence is felt on the first mistyped
-   structure.
-3. **Parameters have no control.** A variable that is not on an axis silently
-   becomes `1` (`l = 1 assumed`).
-4. **The solver is narrow by design.** Linear and quadratic in one variable, no
-   systems beyond substitution and 2×2 elimination.
-5. **Nothing persists.** Closing the app loses the document, theme and accent.
+## What is left
 
----
+Six things are worth naming. The order is roughly the order they hurt a user, not
+the order they are easiest to fix.
 
-## 1. Function definitions and derivatives — 20 h
+| # | Item | Hours | What is wrong, and what done means |
+|---|---|---|---|
+| 1 | A mixed document's `cases` brace | 3 | `to_latex` braces every multi-line system, so a definition typed *into a later line of an existing system* still ends up inside that system's brace. The common path is handled: Enter after a definition starts a new system, so a definition is not braced with the equations that follow it. Done means the printer separates definitions from equations wherever they sit, and the document still round-trips. |
+| 2 | `2f(3)` after a number | 6 | The editor glues `2` and `f` into one word run, and a run is read as a product, so a defined `f` is not seen as a call. `2*f(3)` works. Done means a run is split at a defined name before a bracket, without breaking `2x` or `xy`. |
+| 3 | Plot resampling during pan and zoom | 8 | Every drag or scroll event rebuilds the whole 240×240 implicit trace. One curve is fine; a large system is visibly slow. Done means the gesture stays responsive, most likely by sampling coarser while moving and refining when it stops. |
+| 4 | Window resize on the wgpu build | 12 | The window is created at 1180×760; resizing it on this machine leaves the surface wrong. The `glow` build is for screenshots, not a shipping answer. Done means a resize is a surface reconfigure that neither blanks nor stretches the frame. This is the least certain estimate of the six. |
+| 5 | SymPy, actually run | 4 | Discovery, the protocol and the fallback are tested, but with no Python on this machine the worker has never imported SymPy here. Done means `canlab solver --probe` passes on a machine with Python and the GUI reports SymPy. Whatever the first real request turns up is extra. |
+| 6 | A plot-level test for a broken definition | 3 | The definition reader tests what it refuses, but no test builds a document whose definition is fine until the plot tries to compile or sample it. Done means a test asserts the plot's note and that the rest of the document still draws. |
 
-**Reader: done** (7 tests). `f(x) = x² + 1` makes `f` a name; `f(3)` substitutes;
-`f'(5)` differentiates the body then substitutes; `f''`, `f'''` repeat the rule;
-recursion is refused at definition time; wrong arity is an error.
+## Known sharp edges
 
-**Remaining, ~12 h:**
-
-- Harvest definitions from a document: a line whose left side is `name(params)`
-  defines, and does not draw a curve of its own.
-- `MathField::build_expr_with(&Definitions)` and `build_equations_with`, so the
-  GUI can pass the table everywhere it currently reads without one.
-- Show defined names in the Variables panel, and plot each definition's curve on
-  its own variable.
-- **Decide:** are definitions document-wide and order-independent (my choice) or
-  forward-only? Document-wide is easier to explain and avoids a class of "why
-  doesn't this work" questions, at the cost of allowing a definition to be used
-  above its line.
-
-**Risk:** definitions make every read depend on every other line, so one broken
-definition must not blank the document. Plan: read line by line and let a broken
-definition degrade to "`f` is undefined" only on the lines that use it.
-
-## 2. Undo and redo — 10 h
-
-The field is already `Clone`. Keep a ring of snapshots (say 100), pushing on each
-*structural* change and coalescing typing on a 400 ms timer so undo steps back a
-word rather than a keystroke. Contained to `canlab-gui`; no model change.
-
-**Risk:** one snapshot per keystroke on a long document — cap the ring and measure.
-
-## 3. Parameters the user can set — 8 h
-
-Every variable that is not on an axis gets a row in the plot overlay: name and a
-drag value, default 1. That replaces the acknowledged `l = 1 assumed` placeholder.
-Sliders are the last 10 % — a drag value is enough.
-
----
-
-## 4. SymPy for real — 16 h
-
-The worker exists, the protocol is tested in memory, and it has never run: there
-is no Python on this machine. This is a **packaging** problem, not a coding one —
-bundle an interpreter, or require one and document it. Prefer the latter for a
-hobby project; a bundled runtime is a distribution question.
-
-## 5. Native elimination for 3+ unknowns — 10 h
-
-Gaussian elimination over the existing exact `Number` arithmetic. The 2×2 case is
-there; generalising it is bookkeeping, not new mathematics, and it removes the
-"three unknowns → declined" cliff for linear systems.
-
-## 6. Plot interaction — 16 h
-
-- Drag to pan, scroll to zoom (equal-aspect window is already the only state).
-- Newton-refine each intersection blob into a point instead of drawing the ε-ring,
-  whose size currently depends on how steep the surface is.
-- Show coordinates of an intersection on hover.
-
-## 7. Persistence — 6 h
-
-`eframe`'s persistence stores app state to disk; the document, theme and accent
-are plain data. Brings the first third-party dependency outside the GUI (`serde`).
-
-**Risk:** a saved format is a promise. Version it from the first commit.
-
-## 8. Editor polish — 12 h
-
-- Paste LaTeX into the field and copy the document as LaTeX (`from_latex` reads
-  bare brackets, `/`, indexed roots and definitions now — this is mostly wiring).
-- Click a history entry to load it back into the editor.
-- Line numbers in the gutter, once documents are long enough to need them.
-
----
-
-## Known sharp edges (not in the estimate)
-
-- **Window resizing**: a window created maximised came up blank on this machine,
-  and the workaround is "size it at creation and don't resize". The real fix is a
-  surface reconfigure on resize; `wgpu`/`eframe` territory.
 - **Memory**: a full rebuild needs `-j 1` here; `-j 2` exhausts commit. Not code,
   but it shapes how the project is developed.
+- **Screenshots**: a normal build cannot be read back as an image. `--features
+  glow` exists for that, and is not meant as the shipping renderer.
 
-## What I would do next, regardless of the rate
+## What I would do next
 
-**Finish item 1.** Everything else is polish on a calculator; definitions are what
-let a student use it for a real task, and the reader half is already paid for.
-Undo is the cheap second because it is felt every session.
+Fix the mixed-document brace and the `2f(3)` glue first. Both are things a
+student would meet in the first ten minutes, and both are confined to printing
+and to how the reader handles a run. The plot resampling is next: a system that
+drags slowly feels broken even when the answer is right. The wgpu resize is the
+least certain estimate, so it is the one I would not promise a date for. SymPy
+waits for a machine with Python.

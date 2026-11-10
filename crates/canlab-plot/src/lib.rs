@@ -50,9 +50,11 @@
 //! ```
 
 pub mod implicit;
+pub mod intersect;
 pub mod sampler;
 pub mod svg;
 
 pub use implicit::{ImplicitOptions, sample_implicit};
+pub use intersect::{Intersection, locate, refine};
 pub use sampler::{Curve, SampleOptions, SampleStats, sample, sample_with_stats};
 pub use svg::{SvgOptions, map_to_pixels, to_svg};

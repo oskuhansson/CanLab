@@ -17,7 +17,12 @@ canlab-parse = { path = "../canlab-parse" }
 canlab-tex = { path = "../canlab-tex" }
 canlab-plot = { path = "../canlab-plot" }
 canlab-solver = { path = "../canlab-solver" }
-# The default (wgpu) backend; it is also the only one with a framebuffer
-# capture path, which `shots.rs` needs for looking at the UI over a remote
-# session where `PrintWindow` returns a blank bitmap.
+# The default (wgpu) backend is the one that ships. `--features glow` switches to
+# the GL renderer, whose framebuffer *can* be read back — which is how the
+# screenshot hook in `shot.rs` works on a machine where `PrintWindow` sees a
+# blank surface over a remote session.
 eframe = "0.37.0"
+
+[features]
+default = []
+glow = ["eframe/glow"]

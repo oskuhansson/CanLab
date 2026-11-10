@@ -4,7 +4,7 @@
 //! panel's body. Keeping the dock chrome in `layout.rs` means these functions
 //! only have to answer one question each: what does this panel show?
 
-use canlab_mathview::{MathView, Style};
+use canlab_mathview::{DisplayList, MathView, Style};
 use canlab_plot::implicit::{ImplicitOptions, sample_implicit};
 use canlab_plot::{Curve, SampleOptions, sample};
 use canlab_tex::to_latex;
@@ -58,9 +58,9 @@ fn editor_column(app: &mut CasApp, ui: &mut Ui) {
             format!(
                 "Document · {} system(s), {} line(s)",
                 app.field.system_count(),
-                // Lines, not *readable* equations: a half-typed document still
-                // has lines, and reporting zero made it look empty.
-                app.field.line_count()
+                // Lines across the whole document: a two-system page whose cursor
+                // is in the first system is not a one-line document.
+                app.field.rows().count()
             )
         } else {
             String::from("Document")
@@ -70,11 +70,33 @@ fn editor_column(app: &mut CasApp, ui: &mut Ui) {
             let (text, color) = if app.error.is_some() {
                 ("parse error", ui.visuals().error_fg_color)
             } else if app.field.is_incomplete() {
-                ("incomplete", ui.visuals().weak_text_color())
+                ("incomplete", crate::theme::weak())
             } else {
-                ("live parse", ui.visuals().weak_text_color())
+                ("live parse", crate::theme::weak())
             };
             ui.label(RichText::new(text).small().color(color));
+            // Undo and redo live on the document, so they belong beside the
+            // document header rather than in a menu nobody opens.
+            if ui
+                .add_enabled(
+                    app.undo.can_redo(),
+                    Button::new(RichText::new("↷").size(14.0)).frame(false),
+                )
+                .on_hover_text("Redo (Ctrl+Shift+Z)")
+                .clicked()
+            {
+                app.redo_edit();
+            }
+            if ui
+                .add_enabled(
+                    app.undo.can_undo(),
+                    Button::new(RichText::new("↶").size(14.0)).frame(false),
+                )
+                .on_hover_text("Undo (Ctrl+Z)")
+                .clicked()
+            {
+                app.undo_edit();
+            }
         });
     });
     ui.add_space(4.0);
@@ -91,7 +113,7 @@ fn editor_column(app: &mut CasApp, ui: &mut Ui) {
             RichText::new("LaTeX")
                 .small()
                 .strong()
-                .color(ui.visuals().weak_text_color()),
+                .color(crate::theme::weak()),
         );
         ui.add(
             Label::new(
@@ -102,11 +124,24 @@ fn editor_column(app: &mut CasApp, ui: &mut Ui) {
                 })
                 .monospace()
                 .size(12.0)
-                .color(ui.visuals().weak_text_color()),
+                .color(crate::theme::weak()),
             )
             .selectable(true)
             .wrap(),
         );
+        if !latex.is_empty() {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui
+                    .add(Button::new(RichText::new("copy LaTeX").small()).frame(false))
+                    .on_hover_text(
+                        "Copy the whole document as LaTeX (Ctrl+C). Paste with Ctrl+V.",
+                    )
+                    .clicked()
+                {
+                    app.copy_latex(ui.ctx());
+                }
+            });
+        }
     });
 
     // The actions moved to the panels that show their answers: Solve and the
@@ -126,8 +161,8 @@ fn editor_column(app: &mut CasApp, ui: &mut Ui) {
     }
 }
 
-/// The structural field: a painted background, the maths itself, and the focus
-/// target that the keyboard handler listens to.
+/// The structural field: a line-number gutter, the mathematics itself, and the
+/// focus target that the keyboard handler listens to.
 ///
 /// The wrapper is a clickable rectangle above the field's own widget, so a
 /// click in the padding still focuses the editor. `MathView` handles the part
@@ -145,7 +180,18 @@ fn math_field(app: &mut CasApp, ui: &mut Ui) -> egui::Response {
     // No box. The mathematics sits straight on the panel: a filled, bordered
     // rectangle around an editor is chrome that costs space and says nothing the
     // caret does not already say.
-    let inner = rect.shrink2(vec2(FIELD_PADDING_X, FIELD_PADDING_Y));
+    let mut inner = rect.shrink2(vec2(FIELD_PADDING_X, FIELD_PADDING_Y));
+
+    // A gutter, once the document is long enough to need one. It is painted here
+    // rather than laid out as a widget because it belongs to the *document*, and
+    // its rows come from the layout that has already been computed.
+    if display.line_bands.len() > 1 {
+        let digits = display.line_bands.len().to_string().len();
+        let gutter = digits as f32 * 8.0 + 12.0;
+        paint_gutter(app, ui, &display, inner);
+        inner.min.x += gutter;
+    }
+
     let mut child = ui.new_child(
         UiBuilder::new()
             .id_salt("canlab-math-field")
@@ -163,6 +209,61 @@ fn math_field(app: &mut CasApp, ui: &mut Ui) -> egui::Response {
     math
 }
 
+/// Paint line numbers beside the document.
+///
+/// The line the caret is in is marked with the accent colour, which is the
+/// cheapest way to answer "which equation am I editing?" in a four-line system.
+fn paint_gutter(app: &CasApp, ui: &Ui, display: &DisplayList, inner: Rect) {
+    // The clip is widened to the left: the numbers live *beside* the maths, and
+    // clipping them to the maths is how they disappear.
+    let band = Rect::from_min_max(
+        pos2(inner.left() - 48.0, inner.top()),
+        pos2(inner.right(), inner.bottom()),
+    );
+    let painter = ui.painter().with_clip_rect(band);
+    let weak = crate::theme::weak();
+    let accent = crate::theme::accent();
+    let current = display
+        .line_refs
+        .iter()
+        .position(|&(system, line)| system == app.field.system() && line == app.field.line());
+    for (index, band) in display.line_bands.iter().enumerate() {
+        let selected = current == Some(index);
+        let color = if selected {
+            accent
+        } else {
+            weak.gamma_multiply(0.75)
+        };
+        painter.text(
+            pos2(inner.min.x - 6.0, inner.min.y + band.y + band.h * 0.5),
+            Align2::RIGHT_CENTER,
+            (index + 1).to_string(),
+            FontId::monospace(11.0),
+            color,
+        );
+    }
+}
+
+/// What Enter means, in order:
+///
+/// 1. a half-typed `\name` is committed (`\bar` + Enter is the accent, not a new
+///    line);
+/// 2. Ctrl+Enter starts a new, separate system;
+/// 3. after a *definition*, a new system too: a definition is not one of the
+///    equations of a system, so bracing it with them would be a lie about what
+///    the document is;
+/// 4. otherwise the next equation of this system.
+pub(crate) fn press_enter(app: &mut CasApp, command: bool) {
+    if app.field.commit_command() {
+        return;
+    }
+    if command || app.field.is_definition_row(app.field.root()) {
+        app.field.new_system();
+    } else {
+        app.field.new_line();
+    }
+}
+
 /// Route the frame's key events into the field.
 ///
 /// `MathView` deliberately owns clicks only. `Event::Text` is the key here:
@@ -178,6 +279,9 @@ fn math_field(app: &mut CasApp, ui: &mut Ui) -> egui::Response {
 /// the shell.
 fn handle_field_keys(app: &mut CasApp, ui: &mut Ui, response: &egui::Response) {
     if !response.has_focus() {
+        // Losing focus ends a typing burst: resuming later must not silently
+        // fuse into the same undo step.
+        app.undo.break_burst();
         return;
     }
 
@@ -225,6 +329,7 @@ fn handle_field_keys(app: &mut CasApp, ui: &mut Ui, response: &egui::Response) {
     for event in events {
         match event {
             egui::Event::Text(text) => {
+                app.note_edit(false);
                 app.field.type_str(&text);
                 changed = true;
             }
@@ -239,10 +344,12 @@ fn handle_field_keys(app: &mut CasApp, ui: &mut Ui, response: &egui::Response) {
                     changed = true;
                 }
                 egui::Key::Backspace => {
+                    app.note_edit(false);
                     app.field.backspace();
                     changed = true;
                 }
                 egui::Key::Delete => {
+                    app.note_edit(false);
                     app.field.delete_forward();
                     changed = true;
                 }
@@ -260,13 +367,9 @@ fn handle_field_keys(app: &mut CasApp, ui: &mut Ui, response: &egui::Response) {
                 // 2. Ctrl+Enter starts a new, separate system;
                 // 3. otherwise the next equation of this system.
                 egui::Key::Enter => {
-                    if app.field.commit_command() {
-                        // The keystroke was consumed by the command.
-                    } else if modifiers.command {
-                        app.field.new_system();
-                    } else {
-                        app.field.new_line();
-                    }
+                    // A structural change is always its own undo step.
+                    app.note_edit(true);
+                    press_enter(app, modifiers.command);
                     changed = true;
                 }
                 _ => {}
@@ -335,14 +438,10 @@ fn plot_row(app: &mut CasApp, ui: &mut Ui) {
             .add(egui::DragValue::new(&mut app.x_max).speed(0.5))
             .changed();
 
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.label(
-                RichText::new(app.plot_note.as_str())
-                    .small()
-                    .color(ui.visuals().weak_text_color()),
-            );
-        });
-
+        if axes_changed {
+            // A new axis can turn a parameter into a coordinate or back.
+            app.refresh_parameters();
+        }
         if axes_changed || range_changed {
             crate::panels::build_curve_fitting(app, false);
         }
@@ -400,7 +499,7 @@ fn result_card(app: &CasApp, ui: &mut Ui) {
             ui.label(
                 RichText::new("display form")
                     .small()
-                    .color(ui.visuals().weak_text_color()),
+                    .color(crate::theme::weak()),
             );
         });
     });
@@ -409,7 +508,7 @@ fn result_card(app: &CasApp, ui: &mut Ui) {
         ui.label(
             RichText::new("Type an expression above; it is parsed as you type.")
                 .small()
-                .color(ui.visuals().weak_text_color()),
+                .color(crate::theme::weak()),
         );
     } else {
         result_body(app, ui);
@@ -427,7 +526,7 @@ fn result_body(app: &CasApp, ui: &mut Ui) {
         base_size: 28.0,
         ..Style::default()
     };
-    let weak = ui.visuals().weak_text_color();
+    let weak = crate::theme::weak();
     let rendered = canlab_input::MathField::from_latex(&app.result_latex).ok();
 
     ui.horizontal_top(|ui| {
@@ -459,6 +558,7 @@ fn result_body(app: &CasApp, ui: &mut Ui) {
 /// token, `½` becomes a real fraction. Entries the model does not have (tables,
 /// `\overleftarrow`) report why instead of pasting raw LaTeX into the field.
 fn apply_palette(app: &mut CasApp, button: &canlab_parse::palette::Button) {
+    app.note_edit(true);
     if let Err(error) = app.field.apply_snippet(button.insert) {
         app.status = format!("{}: {error}", button.label);
     }
@@ -470,7 +570,7 @@ pub fn palette(app: &mut CasApp, ui: &mut Ui) {
         RichText::new("Abitti palette")
             .small()
             .strong()
-            .color(ui.visuals().weak_text_color()),
+            .color(crate::theme::weak()),
     );
     ui.add_space(2.0);
     egui::ScrollArea::vertical()
@@ -484,7 +584,7 @@ pub fn palette(app: &mut CasApp, ui: &mut Ui) {
                     RichText::new(category.to_uppercase())
                         .small()
                         .strong()
-                        .color(ui.visuals().weak_text_color()),
+                        .color(crate::theme::weak()),
                 );
                 ui.add_space(2.0);
                 ui.horizontal_wrapped(|ui| {
@@ -508,18 +608,34 @@ pub fn palette(app: &mut CasApp, ui: &mut Ui) {
 }
 
 pub fn variables(app: &mut CasApp, ui: &mut Ui) {
+    // Scrollable: a document with definitions, free variables and an answer is
+    // taller than a dock panel, and clipping the definitions was how they
+    // appeared to be missing.
+    egui::ScrollArea::vertical()
+        .id_salt("variables-scroll")
+        .auto_shrink([false, false])
+        .show(ui, |ui| variables_body(app, ui));
+}
+
+fn variables_body(app: &mut CasApp, ui: &mut Ui) {
     ui.horizontal(|ui| {
         ui.label(
             RichText::new("SOLVER")
                 .small()
                 .strong()
-                .color(ui.visuals().weak_text_color()),
+                .color(crate::theme::weak()),
         );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.label(
-                RichText::new("native · linear & quadratic")
+                RichText::new(app.jobs.backend_label())
                     .small()
-                    .color(ui.visuals().weak_text_color()),
+                    .color(crate::theme::weak()),
+            )
+            .on_hover_text(
+                app.jobs
+                    .backend()
+                    .note
+                    .unwrap_or_else(|| String::from("The solver runs in the background.")),
             );
         });
     });
@@ -533,14 +649,14 @@ pub fn variables(app: &mut CasApp, ui: &mut Ui) {
         RichText::new("FREE VARIABLES")
             .small()
             .strong()
-            .color(ui.visuals().weak_text_color()),
+            .color(crate::theme::weak()),
     );
     ui.add_space(4.0);
     if app.free_vars.is_empty() {
         ui.label(
             RichText::new("No free variables.")
                 .small()
-                .color(ui.visuals().weak_text_color()),
+                .color(crate::theme::weak()),
         );
     } else {
         for var in &app.free_vars {
@@ -556,10 +672,59 @@ pub fn variables(app: &mut CasApp, ui: &mut Ui) {
     ui.separator();
     ui.add_space(8.0);
     ui.label(
+        RichText::new("DEFINITIONS")
+            .small()
+            .strong()
+            .color(crate::theme::weak()),
+    );
+    ui.add_space(4.0);
+    if app.definitions.is_empty() && app.definition_problems.is_empty() {
+        ui.label(
+            RichText::new("None. Write f(x) = x² + 1 to define one.")
+                .small()
+                .color(crate::theme::weak()),
+        );
+    } else {
+        for (name, function) in app.definitions.functions() {
+            let params: Vec<String> = function
+                .params
+                .iter()
+                .map(|parameter| to_latex(&canlab_core::sym(parameter.as_str().as_str())))
+                .collect();
+            ui.label(
+                RichText::new(name.to_string())
+                    .monospace()
+                    .size(15.0)
+                    .strong(),
+            );
+            ui.label(
+                RichText::new(format!(
+                    "{name}({}) = {}",
+                    params.join(", "),
+                    to_latex(&function.body)
+                ))
+                .monospace()
+                .size(11.0)
+                .color(crate::theme::weak()),
+            );
+        }
+        for (name, why) in &app.definition_problems {
+            ui.label(
+                RichText::new(format!("{name}: {why}"))
+                    .small()
+                    .color(ui.visuals().warn_fg_color),
+            );
+        }
+    }
+
+    ui.add_space(12.0);
+    ui.separator();
+    ui.add_space(8.0);
+    ui.label(
         RichText::new("SOLUTIONS")
             .small()
             .strong()
-            .color(ui.visuals().weak_text_color()),
+            .color(crate::theme::weak()),
     );
     ui.add_space(4.0);
     match &app.solve {
@@ -567,14 +732,14 @@ pub fn variables(app: &mut CasApp, ui: &mut Ui) {
             ui.label(
                 RichText::new("Run Solve to see values here.")
                     .small()
-                    .color(ui.visuals().weak_text_color()),
+                    .color(crate::theme::weak()),
             );
         }
         SolveState::Declined { label, why } => {
             ui.label(
                 RichText::new(label.as_str())
                     .small()
-                    .color(ui.visuals().weak_text_color()),
+                    .color(crate::theme::weak()),
             );
             ui.label(
                 RichText::new("declined")
@@ -585,7 +750,7 @@ pub fn variables(app: &mut CasApp, ui: &mut Ui) {
             ui.label(
                 RichText::new(why.as_str())
                     .small()
-                    .color(ui.visuals().weak_text_color()),
+                    .color(crate::theme::weak()),
             );
         }
         SolveState::System { assignments } => {
@@ -593,7 +758,7 @@ pub fn variables(app: &mut CasApp, ui: &mut Ui) {
                 ui.label(
                     RichText::new("No values.")
                         .small()
-                        .color(ui.visuals().weak_text_color()),
+                        .color(crate::theme::weak()),
                 );
             } else {
                 for (variable, value) in assignments {
@@ -616,7 +781,7 @@ pub fn variables(app: &mut CasApp, ui: &mut Ui) {
             ui.label(
                 RichText::new(message.as_str())
                     .small()
-                    .color(ui.visuals().weak_text_color()),
+                    .color(crate::theme::weak()),
             );
         }
         SolveState::Solved { var, values } => {
@@ -624,7 +789,7 @@ pub fn variables(app: &mut CasApp, ui: &mut Ui) {
                 ui.label(
                     RichText::new("No solutions.")
                         .small()
-                        .color(ui.visuals().weak_text_color()),
+                        .color(crate::theme::weak()),
                 );
             } else {
                 let name = to_latex(&canlab_core::sym(&var.as_str()));
@@ -641,69 +806,238 @@ pub fn variables(app: &mut CasApp, ui: &mut Ui) {
 }
 
 pub fn plot(app: &mut CasApp, ui: &mut Ui) {
-    // The canvas is the whole panel; the controls float over it. Anything the
-    // controls take from the top is graph the user cannot see.
+    // In a narrow dock the floating strip would cover most of the graph, so the
+    // controls go above the canvas and the picture keeps whatever is left.
+    let wide = ui.available_width() >= 520.0;
+    if !wide {
+        plot_row(app, ui);
+        if !app.parameters.is_empty() {
+            parameter_row(app, ui);
+        }
+        ui.add_space(4.0);
+    }
+
+    // The canvas is the rest of the panel; in a wide panel the controls float
+    // over it, because anything they take from the top is graph nobody sees.
     let size = ui.available_size();
     let width = size.x.max(80.0);
     let height = size.y.max(90.0);
-    let (rect, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+    let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click_and_drag());
     let painter = ui.painter_at(rect);
-    let visuals = ui.visuals();
+    let visuals = ui.visuals().clone();
 
-    if app.curves.is_empty() {
+    // Pan and zoom act on the data window, which is the only display state the
+    // plot has. The mapping used here is the one the picture is drawn with: the
+    // equal-aspect box, not the panel, because that is where a pixel is a
+    // coordinate.
+    let mut moved = false;
+    let drawn = equal_aspect(rect, (app.x_min, app.x_max), app.y_range);
+    if drawn.width() > 1.0 && drawn.height() > 1.0 {
+        let (x0, x1) = (app.x_min, app.x_max);
+        let (y0, y1) = app.y_range;
+
+        // Drag to pan: the content follows the pointer, so the window moves the
+        // other way.
+        let delta = response.drag_delta();
+        if response.dragged() && delta != egui::Vec2::ZERO {
+            let dx = -(delta.x as f64) * (x1 - x0) / drawn.width() as f64;
+            let dy = (delta.y as f64) * (y1 - y0) / drawn.height() as f64;
+            app.x_min = x0 + dx;
+            app.x_max = x1 + dx;
+            app.y_range = (y0 + dy, y1 + dy);
+            moved = true;
+        }
+
+        // Scroll to zoom about the pointer, so the point under the cursor stays
+        // where it is.
+        if response.hovered() {
+            let scroll = ui.input(|input| input.smooth_scroll_delta.y);
+            if scroll.abs() > 0.5 {
+                let factor = (-(scroll as f64) * 0.0020).exp().clamp(0.25, 4.0);
+                let anchor = response
+                    .hover_pos()
+                    .map(|position| {
+                        (
+                            x0 + ((position.x - drawn.left()) / drawn.width()) as f64 * (x1 - x0),
+                            y0 + ((drawn.bottom() - position.y) / drawn.height()) as f64 * (y1 - y0),
+                        )
+                    })
+                    .unwrap_or(((x0 + x1) * 0.5, (y0 + y1) * 0.5));
+                app.x_min = anchor.0 + (x0 - anchor.0) * factor;
+                app.x_max = anchor.0 + (x1 - anchor.0) * factor;
+                app.y_range = (
+                    anchor.1 + (y0 - anchor.1) * factor,
+                    anchor.1 + (y1 - anchor.1) * factor,
+                );
+                moved = true;
+            }
+        }
+    }
+    if moved {
+        // Not fitted: the user has chosen this window, and refitting would fight
+        // the gesture that just set it.
+        build_curve_fitting(app, false);
+        ui.ctx().request_repaint();
+    }
+
+    let drawn = equal_aspect(rect, (app.x_min, app.x_max), app.y_range);
+    if app.curves.is_empty() && app.intersections.is_empty() {
         painter.text(
             rect.center(),
             Align2::CENTER_CENTER,
             "Nothing to plot yet.",
             FontId::proportional(13.0),
-            visuals.weak_text_color(),
+            crate::theme::weak(),
         );
     } else {
         // Axes once, then every curve on top of them in its own colour, so a
         // system of two equations reads as two lines rather than one thick one.
         // Everything is drawn in the equal-aspect box, so resizing the panel
         // letterboxes the picture instead of reshaping it.
-        let plot_rect = equal_aspect(rect, (app.x_min, app.x_max), app.y_range);
-        paint_axes(&painter, plot_rect, (app.x_min, app.x_max), app.y_range);
+        paint_axes(&painter, drawn, (app.x_min, app.x_max), app.y_range);
         for (index, curve) in app.curves.iter().enumerate() {
             paint_curve(
                 &painter,
-                plot_rect,
+                drawn,
                 curve,
                 (app.x_min, app.x_max),
                 app.y_range,
-                curve_color(index, crate::theme::accent()),
+                curve_color(index),
             );
         }
+        paint_intersections(&painter, &response, app, drawn, rect);
     }
 
-    // The overlay: a translucent strip across the top, so the controls stay
-    // readable over the grid without owning any of the panel.
-    let strip = Rect::from_min_size(
-        rect.min + vec2(10.0, 10.0),
-        vec2((rect.width() - 20.0).max(120.0), 30.0),
-    );
-    painter.rect_filled(strip, 6.0, visuals.window_fill.gamma_multiply(0.88));
-    let mut child = ui.new_child(
-        UiBuilder::new()
-            .max_rect(strip.shrink2(vec2(8.0, 4.0)))
-            .layout(Layout::left_to_right(Align::Center)),
-    );
-    child.set_clip_rect(strip);
-    plot_row(app, &mut child);
+    // The overlay: translucent strips across the top, so the controls stay
+    // readable over the grid without owning any of the panel. The caption gets a
+    // line of its own — it is a sentence, and a sentence cannot share a row with
+    // two dropdowns and two number boxes.
+    if wide {
+        let with_parameters = !app.parameters.is_empty();
+        let strip_height = 54.0 + if with_parameters { 24.0 } else { 0.0 };
+        let strip = Rect::from_min_size(
+            rect.min + vec2(10.0, 10.0),
+            vec2((rect.width() - 20.0).max(120.0), strip_height),
+        );
+        painter.rect_filled(strip, 6.0, visuals.window_fill.gamma_multiply(0.88));
+        let mut child = ui.new_child(
+            UiBuilder::new()
+                .max_rect(strip.shrink2(vec2(8.0, 4.0)))
+                .layout(Layout::top_down(Align::Min)),
+        );
+        child.set_clip_rect(strip);
+        child.spacing_mut().item_spacing.y = 2.0;
+        plot_row(app, &mut child);
+        if with_parameters {
+            parameter_row(app, &mut child);
+        }
+        plot_note_row(app, &mut child);
+    } else {
+        ui.add_space(2.0);
+        plot_note_row(app, ui);
+    }
 }
 
-/// A distinct colour per curve: the accent first, then a small wheel.
-fn curve_color(index: usize, accent: Color32) -> Color32 {
-    let wheel: [Color32; 6] = [
-        accent,
-        Color32::from_rgb(0x62, 0xB0, 0xF5),
-        Color32::from_rgb(0x8B, 0xC3, 0x4A),
-        Color32::from_rgb(0xE5, 0x7A, 0xC8),
-        Color32::from_rgb(0xF2, 0xC9, 0x4C),
-        Color32::from_rgb(0x7A, 0xE0, 0xD4),
-    ];
-    wheel[index % wheel.len()]
+/// The plot's caption: what is drawn, on which axes, at which parameter values.
+fn plot_note_row(app: &CasApp, ui: &mut Ui) {
+    ui.add(
+        Label::new(
+            RichText::new(app.plot_note.as_str())
+                .small()
+                .color(crate::theme::weak()),
+        )
+        .truncate(),
+    );
+}
+
+/// Draw the intersections as points, and name the one under the pointer.
+fn paint_intersections(
+    painter: &egui::Painter,
+    response: &egui::Response,
+    app: &CasApp,
+    drawn: Rect,
+    rect: Rect,
+) {
+    if app.intersections.is_empty() {
+        return;
+    }
+    let to_px = |x: f64, y: f64| {
+        pos2(
+            drawn.left() + ((x - app.x_min) / (app.x_max - app.x_min)) as f32 * drawn.width(),
+            drawn.bottom() - ((y - app.y_range.0) / (app.y_range.1 - app.y_range.0)) as f32 * drawn.height(),
+        )
+    };
+    for intersection in &app.intersections {
+        let point = to_px(intersection.x, intersection.y);
+        painter.circle_filled(point, 4.5, crate::theme::accent());
+        painter.circle_stroke(point, 4.5, Stroke::new(1.5, crate::theme::current().panel));
+    }
+
+    let Some(pointer) = response.hover_pos() else {
+        return;
+    };
+    let nearest = app
+        .intersections
+        .iter()
+        .map(|intersection| (intersection, to_px(intersection.x, intersection.y)))
+        .filter(|(_, point)| (*point - pointer).length() <= 16.0)
+        .min_by(|a, b| (a.1 - pointer).length().total_cmp(&(b.1 - pointer).length()));
+    let Some((intersection, at)) = nearest else {
+        return;
+    };
+    let text = format!("({:.4}, {:.4})", intersection.x, intersection.y);
+    let galley = painter.layout_no_wrap(text, FontId::monospace(11.0), crate::theme::text());
+    let mut label = Rect::from_min_size(
+        at + vec2(10.0, -20.0),
+        galley.size() + vec2(8.0, 4.0),
+    );
+    if label.right() > rect.right() {
+        label = label.translate(vec2(rect.right() - label.right() - 2.0, 0.0));
+    }
+    if label.top() < rect.top() {
+        label = label.translate(vec2(0.0, at.y - label.top() + 8.0));
+    }
+    painter.rect_filled(label, 3.0, crate::theme::current().panel);
+    painter.galley(label.min + vec2(4.0, 2.0), galley, crate::theme::text());
+}
+
+/// One row per *parameter*: a variable in the document that is not on an axis.
+///
+/// This is what replaces `l = 1 assumed`: the variable still starts at 1, but the
+/// value is now a control, and the plot says what it is set to.
+fn parameter_row(app: &mut CasApp, ui: &mut Ui) {
+    let mut changed = false;
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            RichText::new("parameters")
+                .small()
+                .strong()
+                .color(crate::theme::weak()),
+        );
+        for parameter in &mut app.parameters {
+            ui.label(
+                RichText::new(parameter.name.as_str())
+                    .monospace()
+                    .size(12.0)
+                    .strong(),
+            );
+            changed |= ui
+                .add(
+                    egui::DragValue::new(&mut parameter.value)
+                        .speed(0.02)
+                        .range(-1.0e6..=1.0e6),
+                )
+                .changed();
+        }
+    });
+    if changed {
+        build_curve_fitting(app, false);
+    }
+}
+
+/// A distinct colour per curve, from the palette's wheel.
+fn curve_color(index: usize) -> Color32 {
+    crate::theme::curve_color(index)
 }
 
 /// The square-ish area the data window actually gets.
@@ -726,9 +1060,12 @@ fn equal_aspect(rect: Rect, x_range: (f64, f64), y_range: (f64, f64)) -> Rect {
 
 /// Draw the grid, the axes and the window label into `rect`.
 fn paint_axes(painter: &egui::Painter, rect: Rect, x_range: (f64, f64), y_range: (f64, f64)) {
-    let visuals = painter.ctx().global_style().visuals.clone();
-    let axis_color = visuals.weak_text_color();
-    let label_color = visuals.text_color().gamma_multiply(0.8);
+    // Colours come from the palette, not from egui's derived text colours: the
+    // grid is a *line* colour and the labels are *weak* text, which is what makes
+    // the axes recede in every scheme instead of just the default one.
+    let axis_color = crate::theme::weak();
+    let label_color = crate::theme::weak();
+    let grid_color = crate::theme::line();
     let (x0, x1) = x_range;
     let (y0, y1) = y_range;
     if !(x1 > x0 && y1 > y0) {
@@ -737,7 +1074,7 @@ fn paint_axes(painter: &egui::Painter, rect: Rect, x_range: (f64, f64), y_range:
             Align2::CENTER_CENTER,
             "x range is empty",
             FontId::proportional(13.0),
-            visuals.warn_fg_color,
+            crate::theme::current().warn,
         );
         return;
     }
@@ -750,7 +1087,7 @@ fn paint_axes(painter: &egui::Painter, rect: Rect, x_range: (f64, f64), y_range:
     };
 
     // A subtle grid: four vertical and four horizontal divisions.
-    let grid = Stroke::new(1.0, axis_color.gamma_multiply(0.55));
+    let grid = Stroke::new(1.0, grid_color);
     for step in 1..4 {
         let t = step as f64 / 4.0;
         let x = rect.left() + rect.width() * t as f32;
@@ -769,9 +1106,11 @@ fn paint_axes(painter: &egui::Painter, rect: Rect, x_range: (f64, f64), y_range:
         painter.line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], axis);
     }
 
+    // Along the bottom: the top of the plot is where the controls float, and a
+    // label underneath them is a label nobody can read.
     painter.text(
-        pos2(rect.left() + 8.0, rect.top() + 6.0),
-        Align2::LEFT_TOP,
+        pos2(rect.left() + 8.0, rect.bottom() - 2.0),
+        Align2::LEFT_BOTTOM,
         format!("x [{x0:.3}, {x1:.3}]   y [{y0:.3}, {y1:.3}]"),
         FontId::monospace(10.0),
         label_color,
@@ -811,24 +1150,25 @@ fn paint_curve(
     }
 }
 
-/// Display-only: `canlab-input` has no LaTeX-to-tree parser, so a row cannot be loaded back into the field.
-pub fn history(app: &CasApp, ui: &mut Ui) {
+/// The results so far, newest first. Clicking one puts it back into the editor.
+pub fn history(app: &mut CasApp, ui: &mut Ui) {
     if app.history.is_empty() {
         ui.label(
             RichText::new("No results yet. Simplify, integrate or solve something.")
                 .small()
-                .color(ui.visuals().weak_text_color()),
+                .color(crate::theme::weak()),
         );
         return;
     }
 
     ui.label(
-        RichText::new("NEWEST FIRST")
+        RichText::new("NEWEST FIRST · click one to edit it again")
             .small()
             .strong()
-            .color(ui.visuals().weak_text_color()),
+            .color(crate::theme::weak()),
     );
     ui.add_space(4.0);
+    let mut load: Option<String> = None;
     egui::ScrollArea::vertical()
         .id_salt("history-scroll")
         .auto_shrink([false, false])
@@ -838,83 +1178,253 @@ pub fn history(app: &CasApp, ui: &mut Ui) {
                 ui.label(
                     RichText::new(entry.label.as_str())
                         .small()
-                        .color(ui.visuals().weak_text_color()),
+                        .color(crate::theme::weak()),
                 );
-                ui.add(
+                let response = ui.add(
                     Label::new(RichText::new(entry.latex.as_str()).monospace().size(14.0))
                         .wrap()
-                        .selectable(true),
+                        .selectable(false)
+                        .sense(Sense::click()),
                 );
+                let response = response.on_hover_text("Load this back into the editor");
+                if response.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+                if response.clicked() {
+                    load = Some(entry.latex.clone());
+                }
                 ui.add_space(4.0);
             }
         });
+    if let Some(latex) = load {
+        app.load_latex(&latex);
+    }
 }
 
 /// Sample the document and keep the curves for the Plot panel.
 ///
-/// Two kinds of picture come out of the same button:
+/// Three kinds of picture come out of one document:
 ///
+/// * an *equation* — a line like `x + y = 3` is not a function of x, so it is
+///   traced as the set of points where `left − right = 0`. A system gives one
+///   curve per line, and where two of them cross the crossing is refined to a
+///   point rather than left as a ring of samples;
 /// * a *function* `y = f(x)` — the field holds one expression, so it is sampled
 ///   along x;
-/// * an *equation* — a line like `x + y = 3` is not a function of x, so it is
-///   traced as the set of points where `left − right = 0`, which is what
-///   students mean by plotting an equation. A system gives one curve per line,
-///   and several systems give all of their lines.
+/// * a *definition* — `f(x) = x² + 1` is a curve of its own, drawn as `y = f(x)`
+///   against the variable it is a function of.
 pub fn build_curve(app: &mut CasApp) {
     build_curve_fitting(app, true);
 }
 
-/// As [uild_curve], but saying whether the view should be fitted to what was
+/// As [`build_curve`], but saying whether the view should be fitted to what was
 /// drawn. Automatic plotting fits (a unit circle in a -10..10 window is tiny);
-/// changing the range by hand must not, or the two would fight.
+/// changing the range by hand, or panning, must not, or the two would fight.
 pub fn build_curve_fitting(app: &mut CasApp, fit: bool) {
     app.curves.clear();
+    app.intersections.clear();
     if !app.x_max.is_finite() || !app.x_min.is_finite() || app.x_max <= app.x_min {
         app.plot_note = String::from("x range is empty");
         return;
     }
 
-    let equations = app.field.build_equations();
-    if let Ok(equations) = &equations
-        && equations.iter().any(|(_, right)| right.is_some())
-    {
-        plot_equations(app, equations, fit);
+    let equations = app
+        .field
+        .build_equations_with(&app.definitions)
+        .unwrap_or_default();
+    if equations.iter().any(|(_, right)| right.is_some()) {
+        plot_equations(app, &equations, fit);
         return;
     }
 
-    let Some(expr) = app.expr.clone() else {
+    // No equations: a function, and any definitions beside it.
+    let mut noted: Vec<String> = Vec::new();
+    if let Some(expr) = app.expr.clone() {
+        if app.free_vars.len() != 1 {
+            app.plot_note = format!("plot needs one variable, found {}", app.free_vars.len());
+            return;
+        }
+        let Some(program) = canlab_core::Program::compile(&expr, &app.free_vars) else {
+            app.plot_note = String::from("cannot evaluate numerically");
+            return;
+        };
+        let curve = sample(
+            &program,
+            &SampleOptions {
+                x_min: app.x_min,
+                x_max: app.x_max,
+                ..SampleOptions::default()
+            },
+        );
+        app.y_range = vertical_extent(&curve).unwrap_or((-1.0, 1.0));
+        let count = curve.segments.len();
+        noted.push(match count {
+            1 => String::from("1 segment"),
+            n => format!("{n} segments"),
+        });
+        app.curves.push(curve);
+    }
+    noted.extend(plot_definitions(app));
+    if app.curves.is_empty() && app.intersections.is_empty() {
         app.plot_note = String::from("nothing to plot");
         return;
+    }
+    if fit {
+        fit_to_curves(app, app.curves.len());
+    }
+    app.plot_note = noted.join(", ");
+}
+
+/// Draw `y = f(x)` for every definition whose parameter is the horizontal axis.
+///
+/// Returns at most one note fragment, which is what the plot caption says when a
+/// definition was drawn.
+fn plot_definitions(app: &mut CasApp) -> Vec<String> {
+    let Some(horizontal) = app.x_axis else {
+        return Vec::new();
     };
-    if app.free_vars.len() != 1 {
-        app.plot_note = format!("plot needs one variable, found {}", app.free_vars.len());
+    let definitions: Vec<(String, Vec<canlab_core::SymbolId>, canlab_core::Expr)> = app
+        .definitions
+        .functions()
+        .map(|(name, function)| {
+            (
+                name.to_string(),
+                function.params.clone(),
+                function.body.clone(),
+            )
+        })
+        .collect();
+    // Only the definitions decide the vertical range when nothing else was drawn:
+    // an expression has already been sampled into a range that fits it.
+    let first = app.curves.is_empty();
+    let mut labels: Vec<String> = Vec::new();
+    let mut extent: Option<(f64, f64)> = None;
+    for (name, params, body) in definitions {
+        // A function of two variables is a surface; a function of a *different*
+        // variable does not belong on this horizontal axis.
+        if params != vec![horizontal] {
+            continue;
+        }
+        let Some(program) = canlab_core::Program::compile(&body, &[horizontal]) else {
+            continue;
+        };
+        let curve = sample(
+            &program,
+            &SampleOptions {
+                x_min: app.x_min,
+                x_max: app.x_max,
+                ..SampleOptions::default()
+            },
+        );
+        if curve.segments.is_empty() {
+            continue;
+        }
+        if let Some((low, high)) = vertical_extent(&curve) {
+            extent = Some(match extent {
+                Some((existing_low, existing_high)) => {
+                    (existing_low.min(low), existing_high.max(high))
+                }
+                None => (low, high),
+            });
+        }
+        labels.push(format!("{name}({})", horizontal.as_str()));
+        app.curves.push(curve);
+    }
+    if first && let Some(range) = extent {
+        app.y_range = range;
+    }
+    if labels.is_empty() {
+        Vec::new()
+    } else {
+        vec![format!("definition(s) of {}", labels.join(", "))]
+    }
+}
+
+/// Grow the view to contain everything that was drawn.
+///
+/// The window is only ever *shrunk* to the curves, never grown past a sane size,
+/// and never below a minimum: a curve that is a single point would otherwise ask
+/// for a zero-width window.
+fn fit_to_curves(app: &mut CasApp, limit: usize) {
+    if app.curves.is_empty() {
         return;
     }
-    let Some(program) = canlab_core::Program::compile(&expr, &app.free_vars) else {
-        app.plot_note = String::from("cannot evaluate numerically");
+    let mut low_x = f64::MAX;
+    let mut high_x = f64::MIN;
+    let mut low_y = f64::MAX;
+    let mut high_y = f64::MIN;
+    let considered = limit.clamp(1, app.curves.len());
+    for curve in app.curves.iter().take(considered) {
+        for segment in &curve.segments {
+            for point in segment {
+                low_x = low_x.min(point[0]);
+                high_x = high_x.max(point[0]);
+                low_y = low_y.min(point[1]);
+                high_y = high_y.max(point[1]);
+            }
+        }
+    }
+    // A curve's bounding box can be degenerate or absurd (a pole, a failed
+    // sample); fitting to that is how the range once jumped to -163.
+    let sane = low_x.is_finite() && high_x.is_finite() && low_y.is_finite() && high_y.is_finite();
+    let reasonable = (high_x - low_x) < 1.0e6 && (high_y - low_y) < 1.0e6;
+    // `sane` already rules out NaN, so a plain `>=` is the right emptiness test.
+    if !sane || !reasonable || low_x >= high_x || low_y >= high_y {
         return;
+    }
+    let pad = |low: f64, high: f64| {
+        let margin = ((high - low) * 0.12).max(0.5);
+        (low - margin, high + margin)
     };
-    let curve = sample(
-        &program,
-        &SampleOptions {
-            x_min: app.x_min,
-            x_max: app.x_max,
-            ..SampleOptions::default()
-        },
-    );
-    app.y_range = vertical_extent(&curve).unwrap_or((-1.0, 1.0));
-    let count = curve.segments.len();
-    let suffix = if count == 1 { "" } else { "s" };
-    app.plot_note = format!("{count} segment{suffix}");
-    app.curves.push(curve);
+    let (low_x, high_x) = pad(low_x, high_x);
+    let (low_y, high_y) = pad(low_y, high_y);
+    // Only ever *shrink*: an implicit curve is traced across the whole window, so
+    // its bounding box is the window, and fitting to that would grow the view on
+    // every redraw — each rebuild widening the range by the margin again.
+    app.x_min = app.x_min.max(low_x);
+    app.x_max = app.x_max.min(high_x);
+    app.y_range = (app.y_range.0.max(low_y), app.y_range.1.min(high_y));
+}
+
+/// Frame the intersections: they are what a system's picture is *about*.
+///
+/// Fitting to the curves instead does not work for a linear equation, which
+/// spans the whole window and therefore has no useful extent of its own.
+fn fit_to_intersections(app: &mut CasApp) {
+    if app.intersections.is_empty() {
+        return;
+    }
+    let mut low_x = f64::MAX;
+    let mut high_x = f64::MIN;
+    let mut low_y = f64::MAX;
+    let mut high_y = f64::MIN;
+    for point in &app.intersections {
+        low_x = low_x.min(point.x);
+        high_x = high_x.max(point.x);
+        low_y = low_y.min(point.y);
+        high_y = high_y.max(point.y);
+    }
+    if !(low_x.is_finite() && high_x.is_finite() && low_y.is_finite() && high_y.is_finite()) {
+        return;
+    }
+    let centre_x = (low_x + high_x) * 0.5;
+    let centre_y = (low_y + high_y) * 0.5;
+    // Enough context to see the curves meeting, not just a dot in the middle:
+    // at least four units across, and half again the spread of the answers.
+    let spread = (high_x - low_x).max(high_y - low_y);
+    let half = (spread * 1.5).max(2.0);
+    app.x_min = centre_x - half;
+    app.x_max = centre_x + half;
+    app.y_range = (centre_y - half, centre_y + half);
 }
 
 /// Trace every equation in the document as an implicit curve.
 ///
 /// The two axes come from the document's variable list, so the letters are
 /// irrelevant: `i² + j² = 1` with `i` on x and `j` on y plots exactly the same
-/// circle as `x² + y² = 1` does. An equation with a third free variable cannot be
-/// drawn on two axes, so it is skipped rather than guessed at.
+/// circle as `x² + y² = 1` does. Any variable that is neither on an axis nor a
+/// definition parameter is a *parameter*, sampled at the value the user set in
+/// the plot overlay.
 fn plot_equations(
     app: &mut CasApp,
     equations: &[(canlab_core::Expr, Option<canlab_core::Expr>)],
@@ -938,8 +1448,8 @@ fn plot_equations(
         None => format!("{} → x", horizontal.as_str()),
     };
 
-    // An equation has no preferred y range, so the window is square: the two
-    // axes get the same span, which is also what makes a circle look round.
+    // An equation has no preferred y range, so the window is square: the two axes
+    // get the same span, which is also what makes a circle look round.
     let span = (app.x_max - app.x_min).abs().max(1.0);
     let y_min = -span / 2.0;
     let y_max = span / 2.0;
@@ -951,153 +1461,50 @@ fn plot_equations(
         y_max,
     };
 
-    // Any variable that is not on an axis is a *parameter*. With no value it
-    // cannot be sampled, so it takes 1.0 and the caption says so - better than
-    // silently drawing nothing, and the seed of a real parameter control.
-    let mut parameters: Vec<canlab_core::SymbolId> = Vec::new();
-    for (left, right) in equations {
-        let expression = match right {
+    // `left − right`, so the curve is where the equation holds.
+    let expressions: Vec<canlab_core::Expr> = equations
+        .iter()
+        .map(|(left, right)| match right {
             Some(right) => canlab_core::add(vec![
                 left.clone(),
                 canlab_core::mul(vec![canlab_core::int(-1), right.clone()]),
             ]),
             None => left.clone(),
-        };
-        for variable in canlab_solver::variables_of(&expression) {
-            if !variables.contains(&variable) && !parameters.contains(&variable) {
-                parameters.push(variable);
-            }
-        }
-    }
+        })
+        .collect();
+
+    // The parameters, in the order the compiled programs expect them.
+    let parameter_names: Vec<canlab_core::SymbolId> =
+        app.parameters.iter().map(|parameter| parameter.name).collect();
+    let parameter_values: Vec<f64> = app
+        .parameters
+        .iter()
+        .map(|parameter| parameter.value)
+        .collect();
     let mut sampling = variables.clone();
-    sampling.extend(parameters.iter().copied());
+    sampling.extend(parameter_names.iter().copied());
+    let evaluate = |program: &canlab_core::Program, axes: &[f64]| -> f64 {
+        let mut args = axes.to_vec();
+        args.extend(parameter_values.iter().copied());
+        program.eval(&args)
+    };
 
     let mut plotted = 0;
     let mut skipped = 0;
-
-    // A *system* is about where the equations meet, not about drawing each curve
-    // separately. Once every equation is compiled, the intersection is the zero
-    // set of the sum of squares: squaring means a sign cannot cancel another
-    // equation's, and the sum is zero exactly where all of them are.
-    //
-    // The tracer only follows sign changes, and a sum of squares touches zero
-    // from above instead of crossing it, so the level set is traced at a small
-    // epsilon. That turns each intersection into a small ring you can see, which
-    // is the point of the picture.
-    if equations.len() > 1 {
-        let mut programs = Vec::new();
-        for (left, right) in equations {
-            let expression = match right {
-                Some(right) => canlab_core::add(vec![
-                    left.clone(),
-                    canlab_core::mul(vec![canlab_core::int(-1), right.clone()]),
-                ]),
-                None => left.clone(),
-            };
-            match canlab_core::Program::compile(&expression, &sampling) {
-                Some(program) => programs.push(program),
-                None => skipped += 1,
-            }
-        }
-        if programs.len() > 1 {
-            // The curves themselves first, so the intersection is seen in
-            // context rather than as two dots in an empty panel.
-            for program in &programs {
-                let curve = sample_implicit(
-                    |x, y| {
-                        let mut args = vec![x, y];
-                        args.resize(sampling.len(), 1.0);
-                        program.eval(&args)
-                    },
-                    &options,
-                );
-                if !curve.segments.is_empty() {
-                    app.curves.push(curve);
-                    plotted += 1;
-                }
-            }
-            let evaluate = |x: f64, y: f64| -> f64 {
-                let mut args = vec![x, y];
-                args.resize(sampling.len(), 1.0);
-                programs
-                    .iter()
-                    .map(|program| {
-                        let value = program.eval(&args);
-                        value * value
-                    })
-                    .sum()
-            };
-            // The epsilon is a fraction of the largest value the sum reaches on
-            // the grid, so it scales with the problem instead of being a magic
-            // absolute number.
-            let mut peak: f64 = 0.0;
-            for step in 0..=4 {
-                let t = step as f64 / 4.0;
-                let x = app.x_min + (app.x_max - app.x_min) * t;
-                let y = y_min + (y_max - y_min) * t;
-                peak = peak.max(evaluate(x, y));
-            }
-            let epsilon = (peak * 0.004).max(f64::MIN_POSITIVE);
-            let intersections = sample_implicit(
-                |x, y| evaluate(x, y) - epsilon,
-                &options,
-            );
-            if !intersections.segments.is_empty() {
-                let count = intersections.segments.len();
-                app.curves.push(intersections);
-                app.plot_note = format!(
-                    "{count} intersection(s), {axes_label}{}",
-                    if parameters.is_empty() {
-                        String::new()
-                    } else {
-                        format!(
-                            "; {} = 1 assumed",
-                            parameters
-                                .iter()
-                                .map(|parameter| parameter.as_str().to_string())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )
-                    }
-                );
-                app.y_range = (y_min, y_max);
-                return;
-            }
+    let mut programs: Vec<canlab_core::Program> = Vec::new();
+    for expression in &expressions {
+        match canlab_core::Program::compile(expression, &sampling) {
+            Some(program) => programs.push(program),
+            None => skipped += 1,
         }
     }
 
-    for (left, right) in equations {
-        let expression = match right {
-            // `left − right`, so the curve is where the equation holds.
-            Some(right) => canlab_core::add(vec![
-                left.clone(),
-                canlab_core::mul(vec![canlab_core::int(-1), right.clone()]),
-            ]),
-            None => left.clone(),
-        };
-        let Some(program) = canlab_core::Program::compile(&expression, &sampling) else {
-            skipped += 1;
-            continue;
-        };
+    for program in &programs {
         let curve = if variables.len() == 2 {
-            sample_implicit(
-                |x, y| {
-                    let mut args = vec![x, y];
-                    args.resize(sampling.len(), 1.0);
-                    program.eval(&args)
-                },
-                &options,
-            )
+            sample_implicit(|x, y| evaluate(program, &[x, y]), &options)
         } else {
             // One variable: the zero set is a set of vertical lines.
-            sample_implicit(
-                |x, _| {
-                    let mut args = vec![x];
-                    args.resize(sampling.len(), 1.0);
-                    program.eval(&args)
-                },
-                &options,
-            )
+            sample_implicit(|x, _| evaluate(program, &[x]), &options)
         };
         if curve.segments.is_empty() {
             skipped += 1;
@@ -1107,59 +1514,117 @@ fn plot_equations(
         }
     }
 
-    app.y_range = (y_min, y_max);
-    // Fit the view to what was drawn. A unit circle in a -10..10 window is a
-    // tenth of the width, which reads as "the graph is tiny" however large the
-    // panel is. The window is only ever *shrunk* to the curve, never grown, and
-    // never below a sensible minimum.
-    if fit && !app.curves.is_empty() {
-        let mut low_x = f64::MAX;
-        let mut high_x = f64::MIN;
-        let mut low_y = f64::MAX;
-        let mut high_y = f64::MIN;
-        for curve in &app.curves {
-            for segment in &curve.segments {
-                for point in segment {
-                    low_x = low_x.min(point[0]);
-                    high_x = high_x.max(point[0]);
-                    low_y = low_y.min(point[1]);
-                    high_y = high_y.max(point[1]);
+    // Where two curves cross, the tracer only sees a ring of near-zero samples:
+    // the sum of squares touches zero from above instead of crossing it. That
+    // ring is a *hint*, and Newton's method turns each hint into a coordinate,
+    // which is a thing a reader can read off instead of a blob they cannot.
+    if programs.len() >= 2 && variables.len() == 2 {
+        let tolerance = ((options.x_max - options.x_min) / options.resolution as f64) * 3.0;
+        for first in 0..programs.len() {
+            for second in (first + 1)..programs.len() {
+                let mut peak: f64 = 0.0;
+                for step in 0..=4 {
+                    let t = step as f64 / 4.0;
+                    let x = options.x_min + (options.x_max - options.x_min) * t;
+                    let y = y_min + (y_max - y_min) * t;
+                    let a = evaluate(&programs[first], &[x, y]);
+                    let b = evaluate(&programs[second], &[x, y]);
+                    peak = peak.max(a * a + b * b);
+                }
+                let epsilon = (peak * 0.004).max(f64::MIN_POSITIVE);
+                let hint = sample_implicit(
+                    |x, y| {
+                        let a = evaluate(&programs[first], &[x, y]);
+                        let b = evaluate(&programs[second], &[x, y]);
+                        a * a + b * b - epsilon
+                    },
+                    &options,
+                );
+                let found = canlab_plot::locate(
+                    |x, y| evaluate(&programs[first], &[x, y]),
+                    |x, y| evaluate(&programs[second], &[x, y]),
+                    &hint.segments,
+                    tolerance,
+                );
+                for point in found {
+                    let duplicate = app.intersections.iter().any(|existing| {
+                        (existing.x - point.x).abs() < 1.0e-6
+                            && (existing.y - point.y).abs() < 1.0e-6
+                    });
+                    if !duplicate {
+                        app.intersections.push(point);
+                    }
                 }
             }
         }
-        // A curve's bounding box can be degenerate or absurd (a pole, a failed
-        // sample); fitting to that is how the range once jumped to -163.
-        let sane = low_x.is_finite() && high_x.is_finite() && low_y.is_finite() && high_y.is_finite();
-        let reasonable = (high_x - low_x) < 1.0e6 && (high_y - low_y) < 1.0e6;
-        if sane && reasonable && low_x < high_x && low_y < high_y {
-            let pad = |low: f64, high: f64| {
-                let margin = ((high - low) * 0.12).max(0.5);
-                (low - margin, high + margin)
-            };
-            let (low_x, high_x) = pad(low_x, high_x);
-            let (low_y, high_y) = pad(low_y, high_y);
-            app.x_min = low_x;
-            app.x_max = high_x;
-            app.y_range = (low_y, high_y);
+    }
+
+    app.y_range = (y_min, y_max);
+
+    // A page can do both: define a function and ask a question about it. The fit
+    // below only looks at the *equation* curves: `y = x²` runs off the top of a
+    // plot of the unit circle, and fitting to it would make the circle a dot.
+    let equation_curves = app.curves.len();
+    let definitions = plot_definitions(app);
+
+    if fit {
+        // The intersections if there are any: a linear equation spans the whole
+        // window, so a system's curves have no useful extent of their own.
+        if app.intersections.is_empty() {
+            fit_to_curves(app, equation_curves);
+        } else {
+            fit_to_intersections(app);
         }
     }
-    app.plot_note = match (plotted, skipped) {
-        (0, _) => format!("no curve found in this window ({axes_label})"),
-        (n, 0) if parameters.is_empty() => format!("{n} equation curve(s), {axes_label}"),
-        (n, 0) => {
-            let assumed: Vec<String> = parameters
+
+    let parameters_label = if parameter_names.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "; {}",
+            app.parameters
                 .iter()
-                .map(|parameter| parameter.as_str().to_string())
-                .collect();
-            format!(
-                "{n} equation curve(s), {axes_label}; {} = 1 assumed",
-                assumed.join(", ")
-            )
-        }
+                .map(|parameter| format!(
+                    "{} = {}",
+                    parameter.name.as_str(),
+                    short_number(parameter.value)
+                ))
+                .collect::<Vec<String>>()
+                .join(", ")
+        )
+    };
+    let intersections = app.intersections.len();
+    let equations_label = match (plotted, skipped) {
+        (0, _) => format!("no curve found in this window ({axes_label})"),
+        (n, 0) => format!("{n} equation curve(s), {axes_label}"),
         (n, s) => format!("{n} equation curve(s), {s} skipped, {axes_label}"),
     };
+    let mut note = equations_label;
+    if intersections > 0 {
+        let suffix = if intersections == 1 { "" } else { "s" };
+        note = format!("{intersections} intersection{suffix}, {note}");
+    }
+    note.push_str(&parameters_label);
+    if let Some(fragment) = definitions.first() {
+        note.push_str("; ");
+        note.push_str(fragment);
+    }
+    app.plot_note = note;
 }
 
+/// A number with its trailing zeros trimmed: `1`, `0.5`, `-2.25`.
+fn short_number(value: f64) -> String {
+    if !value.is_finite() {
+        return String::from("0");
+    }
+    let text = format!("{value:.6}");
+    let trimmed = text.trim_end_matches('0').trim_end_matches('.');
+    if trimmed.is_empty() || trimmed == "-0" {
+        String::from("0")
+    } else {
+        trimmed.to_string()
+    }
+}
 /// Vertical display range for the plot.
 ///
 /// Taking the true min/max is wrong for anything with a pole: `1/x` on
@@ -1266,3 +1731,4 @@ mod tests {
         assert_eq!(field.cursor().path.len(), 1);
     }
 }
+
