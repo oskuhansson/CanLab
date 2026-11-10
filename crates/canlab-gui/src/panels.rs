@@ -972,6 +972,98 @@ fn plot_equations(
 
     let mut plotted = 0;
     let mut skipped = 0;
+
+    // A *system* is about where the equations meet, not about drawing each curve
+    // separately. Once every equation is compiled, the intersection is the zero
+    // set of the sum of squares: squaring means a sign cannot cancel another
+    // equation's, and the sum is zero exactly where all of them are.
+    //
+    // The tracer only follows sign changes, and a sum of squares touches zero
+    // from above instead of crossing it, so the level set is traced at a small
+    // epsilon. That turns each intersection into a small ring you can see, which
+    // is the point of the picture.
+    if equations.len() > 1 {
+        let mut programs = Vec::new();
+        for (left, right) in equations {
+            let expression = match right {
+                Some(right) => canlab_core::add(vec![
+                    left.clone(),
+                    canlab_core::mul(vec![canlab_core::int(-1), right.clone()]),
+                ]),
+                None => left.clone(),
+            };
+            match canlab_core::Program::compile(&expression, &sampling) {
+                Some(program) => programs.push(program),
+                None => skipped += 1,
+            }
+        }
+        if programs.len() > 1 {
+            // The curves themselves first, so the intersection is seen in
+            // context rather than as two dots in an empty panel.
+            for program in &programs {
+                let curve = sample_implicit(
+                    |x, y| {
+                        let mut args = vec![x, y];
+                        args.resize(sampling.len(), 1.0);
+                        program.eval(&args)
+                    },
+                    &options,
+                );
+                if !curve.segments.is_empty() {
+                    app.curves.push(curve);
+                    plotted += 1;
+                }
+            }
+            let evaluate = |x: f64, y: f64| -> f64 {
+                let mut args = vec![x, y];
+                args.resize(sampling.len(), 1.0);
+                programs
+                    .iter()
+                    .map(|program| {
+                        let value = program.eval(&args);
+                        value * value
+                    })
+                    .sum()
+            };
+            // The epsilon is a fraction of the largest value the sum reaches on
+            // the grid, so it scales with the problem instead of being a magic
+            // absolute number.
+            let mut peak: f64 = 0.0;
+            for step in 0..=4 {
+                let t = step as f64 / 4.0;
+                let x = app.x_min + (app.x_max - app.x_min) * t;
+                let y = y_min + (y_max - y_min) * t;
+                peak = peak.max(evaluate(x, y));
+            }
+            let epsilon = (peak * 0.004).max(f64::MIN_POSITIVE);
+            let intersections = sample_implicit(
+                |x, y| evaluate(x, y) - epsilon,
+                &options,
+            );
+            if !intersections.segments.is_empty() {
+                let count = intersections.segments.len();
+                app.curves.push(intersections);
+                app.plot_note = format!(
+                    "{count} intersection(s), {axes_label}{}",
+                    if parameters.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            "; {} = 1 assumed",
+                            parameters
+                                .iter()
+                                .map(|parameter| parameter.as_str().to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    }
+                );
+                app.y_range = (y_min, y_max);
+                return;
+            }
+        }
+    }
+
     for (left, right) in equations {
         let expression = match right {
             // `left − right`, so the curve is where the equation holds.

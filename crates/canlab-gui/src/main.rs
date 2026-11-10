@@ -965,7 +965,12 @@ mod tests {
         app.field = field;
         app.recompute();
         crate::panels::build_curve(&mut app);
-        assert_eq!(app.curves.len(), 2, "status: {}", app.plot_note);
+        assert!(app.curves.len() >= 2, "status: {}", app.plot_note);
+        assert!(
+            app.plot_note.contains("intersection"),
+            "note: {}",
+            app.plot_note
+        );
         assert!(app.curves.iter().all(|curve| !curve.segments.is_empty()));
     }
 
@@ -981,7 +986,12 @@ mod tests {
         app.field = field;
         app.recompute();
         crate::panels::build_curve(&mut app);
-        assert_eq!(app.curves.len(), 2, "status: {}", app.plot_note);
+        assert!(app.curves.len() >= 2, "status: {}", app.plot_note);
+        assert!(
+            app.plot_note.contains("intersection"),
+            "note: {}",
+            app.plot_note
+        );
     }
 
     #[test]
@@ -995,7 +1005,12 @@ mod tests {
         app.field = field;
         app.recompute();
         crate::panels::build_curve(&mut app);
-        assert_eq!(app.curves.len(), 2, "status: {}", app.plot_note);
+        assert!(app.curves.len() >= 2, "status: {}", app.plot_note);
+        assert!(
+            app.plot_note.contains("intersection"),
+            "note: {}",
+            app.plot_note
+        );
     }
 
     #[test]
