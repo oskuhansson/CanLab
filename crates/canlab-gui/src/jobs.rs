@@ -35,6 +35,8 @@ pub enum JobOp {
     Simplify(Expr),
     Integrate(Expr, SymbolId),
     Solve(Expr, SymbolId),
+    /// The whole document's equations, solved together for all its variables.
+    SolveSystem(Vec<Expr>, Vec<SymbolId>),
 }
 
 /// A named request queued for the worker.
@@ -52,6 +54,8 @@ pub enum JobOutcome {
     Value(Expr),
     /// All solutions of an equation (solve).
     Solutions(Vec<Expr>),
+    /// One value per variable, from solving a system (solve).
+    Assignments(Vec<(SymbolId, Expr)>),
     /// The backend understood the request and declined, with a line saying what
     /// it can do instead. Not an error.
     Declined(String),
@@ -177,6 +181,13 @@ fn run(solver: &dyn Solver, job: Job) -> JobResult {
             };
             (JobKind::Solve, Some(var), outcome)
         }
+        JobOp::SolveSystem(equations, vars) => {
+            let outcome = match solver.solve_system(&equations, &vars) {
+                Ok(assignments) => JobOutcome::Assignments(assignments),
+                Err(err) => declined_or_failed(err, JobKind::Solve),
+            };
+            (JobKind::Solve, vars.first().copied(), outcome)
+        }
     };
     JobResult {
         label,
@@ -289,6 +300,7 @@ mod tests {
         match outcome {
             JobOutcome::Value(_) => "a value",
             JobOutcome::Solutions(_) => "solutions",
+            JobOutcome::Assignments(_) => "assignments",
             JobOutcome::Declined(_) => "declined",
             JobOutcome::Failed(_) => "a failure",
         }

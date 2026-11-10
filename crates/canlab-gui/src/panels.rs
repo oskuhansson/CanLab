@@ -587,6 +587,24 @@ pub fn variables(app: &mut CasApp, ui: &mut Ui) {
                     .color(ui.visuals().weak_text_color()),
             );
         }
+        SolveState::System { assignments } => {
+            if assignments.is_empty() {
+                ui.label(
+                    RichText::new("No values.")
+                        .small()
+                        .color(ui.visuals().weak_text_color()),
+                );
+            } else {
+                for (variable, value) in assignments {
+                    let name = to_latex(&canlab_core::sym(&variable.as_str()));
+                    ui.label(
+                        RichText::new(format!("{name} = {}", to_latex(value)))
+                            .monospace()
+                            .size(15.0),
+                    );
+                }
+            }
+        }
         SolveState::Failed(message) => {
             ui.label(
                 RichText::new("solver failed")

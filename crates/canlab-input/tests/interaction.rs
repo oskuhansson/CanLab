@@ -681,6 +681,16 @@ fn a_leading_minus_is_a_sign_and_not_an_empty_term() {
 }
 
 #[test]
+fn a_logarithm_with_a_base_is_a_ratio_of_natural_logs() {
+    // `\log_2(10)` — the subscript is the base, not a decoration on a variable.
+    let field = typed("\\log_2(10)");
+    let expression = field.to_expr().expect("log with a base is an expression");
+    let program = canlab_core::Program::compile(&expression, &[]).expect("evaluable");
+    let value = program.eval(&[]);
+    assert!((value - 10f64.log2()).abs() < 1e-9, "got {value}");
+}
+
+#[test]
 fn a_unit_marker_is_notation_and_the_number_still_reads() {
     // `80°` is a perfectly good thing to write in an exam answer. The degree
     // sign is not an operator, so it must not make the whole field unreadable.

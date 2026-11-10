@@ -62,6 +62,10 @@ pub enum SolveState {
         /// What the backend can do instead.
         why: String,
     },
+    /// A system's answer: one value per variable it could pin down.
+    System {
+        assignments: Vec<(SymbolId, Expr)>,
+    },
     Failed(String),
 }
 
@@ -314,6 +318,34 @@ impl CasApp {
     }
 
     fn start_solve(&mut self) {
+        // A document with several equations is a *system*: solve it as one, or
+        // the answer would only cover the first line.
+        if self.equations.len() > 1 {
+            let equations: Vec<Expr> = self
+                .equations
+                .iter()
+                .map(|(left, right)| match right {
+                    Some(right) => canlab_core::add(vec![
+                        left.clone(),
+                        canlab_core::mul(vec![canlab_core::int(-1), right.clone()]),
+                    ]),
+                    None => left.clone(),
+                })
+                .collect();
+            let label = format!("Solve {} equations", equations.len());
+            let generation = self.generation;
+            let status = format!("{label}…");
+            if self.jobs.submit(Job {
+                label,
+                op: JobOp::SolveSystem(equations, self.free_vars.clone()),
+                generation,
+            }) {
+                self.status = status;
+            } else {
+                self.status = String::from("solver worker unavailable");
+            }
+            return;
+        }
         self.start_job(JobKind::Solve);
     }
 
@@ -443,6 +475,21 @@ impl CasApp {
                     self.status = format!("{label}: {} solution{suffix}", values.len());
                 }
                 self.solve = SolveState::Solved { var, values };
+                self.push_history(&label, self.result_latex.clone());
+            }
+            JobOutcome::Assignments(assignments) => {
+                // A system answers per variable, in one list.
+                let parts: Vec<String> = assignments
+                    .iter()
+                    .map(|(variable, value)| {
+                        let name = to_latex(&canlab_core::sym(&variable.as_str()));
+                        format!("{name} = {}", to_latex(value))
+                    })
+                    .collect();
+                self.result_latex = parts.join(",\\quad ");
+                self.result_plain = parts.join(", ");
+                self.status = format!("{label}: {} variable(s)", assignments.len());
+                self.solve = SolveState::System { assignments };
                 self.push_history(&label, self.result_latex.clone());
             }
             JobOutcome::Declined(why) => {
@@ -727,6 +774,33 @@ mod tests {
         app.recompute();
         for _ in 0..2 {
             draw_a_frame(&mut app, &ctx);
+        }
+    }
+
+    #[test]
+    fn a_system_solves_every_variable_not_just_the_first() {
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex_lines(&[
+            String::from("x=1"),
+            String::from("y=x"),
+        ])
+        .expect("a two-line system");
+        app.recompute();
+        app.start_solve();
+
+        let ctx = egui::Context::default();
+        for _ in 0..400 {
+            app.poll_jobs(&ctx);
+            if !matches!(app.solve, SolveState::Idle) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        match &app.solve {
+            SolveState::System { assignments } => {
+                assert_eq!(assignments.len(), 2, "both variables are pinned down");
+            }
+            other => panic!("expected a system answer, got {other:?}"),
         }
     }
 

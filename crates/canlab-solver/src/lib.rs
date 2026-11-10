@@ -40,12 +40,14 @@ use canlab_core::{Expr, SymbolId};
 pub mod json;
 pub mod mock;
 pub mod native;
+pub mod system;
 pub mod session;
 pub mod sympy;
 
 pub use json::{decode, decode_array, encode};
 pub use mock::MockSolver;
 pub use native::NativeSolver;
+pub use system::{solve_system, substitute, variables_of};
 pub use session::Session;
 pub use sympy::SympyWorker;
 
@@ -140,6 +142,20 @@ pub trait Solver: Send + Sync {
     /// The expansion of `e` around `at`, truncated at `order`.
     fn series(&self, e: &Expr, var: SymbolId, at: &Expr, order: usize)
     -> Result<Expr, SolverError>;
+
+    /// Solve a *system*: all the equations together, for all the variables.
+    ///
+    /// Returns one assignment per variable it could pin down, in a stable order.
+    /// A backend that only knows single equations leaves this at the default,
+    /// which is an honest decline — solving `x = 1, y = x` one equation at a time
+    /// would silently drop `y`.
+    fn solve_system(
+        &self,
+        _equations: &[Expr],
+        _vars: &[SymbolId],
+    ) -> Result<Vec<(SymbolId, Expr)>, SolverError> {
+        Err(SolverError::NotImplemented)
+    }
 }
 
 #[cfg(test)]

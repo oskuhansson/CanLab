@@ -209,6 +209,18 @@ impl Solver for NativeSolver {
         }
     }
 
+    /// Solve the system as a system: substitution first, then elimination.
+    ///
+    /// One equation at a time would silently drop the variables the other
+    /// equations pin down — `x = 1, y = x` needs both answers.
+    fn solve_system(
+        &self,
+        equations: &[Expr],
+        vars: &[SymbolId],
+    ) -> Result<Vec<(SymbolId, Expr)>, SolverError> {
+        crate::system::solve_system(self, equations, vars)
+    }
+
     fn limit(&self, _e: &Expr, _var: SymbolId, _at: &Expr) -> Result<Expr, SolverError> {
         Err(SolverError::NotImplemented)
     }

@@ -110,11 +110,36 @@ fn product(row: &Row) -> Result<Expr, ToExprError> {
         // only useful reading for a CAS. **[INFERRED]**
         if let Node::Sym(name) = nodes[i] {
             if let Some(func) = function_of(name) {
-                if i + 1 >= nodes.len() {
-                    return Err(ToExprError::UnsupportedCommand(name.clone()));
+                // `\log_2(x)` — the subscript on a function token is its *base*,
+                // not a decoration on a variable. Read as a ratio of natural
+                // logs, which is what it means and what the evaluator can do.
+                //
+                // A script keeps absorbing what follows it, so `\log_2(10)` can
+                // arrive with the argument *inside* the subscript. When it does,
+                // the first item is the base and the rest is the argument.
+                let mut next = i + 1;
+                let mut base: Option<Expr> = None;
+                let mut argument_in_subscript: Option<Expr> = None;
+                if let Some(Node::Sub(base_row)) = nodes.get(next) {
+                    if base_row.len() > 1 {
+                        base = Some(build(&base_row[..1].to_vec())?);
+                        argument_in_subscript = Some(build(&base_row[1..].to_vec())?);
+                    } else {
+                        base = Some(build(&base_row.to_vec())?);
+                    }
+                    next += 1;
                 }
-                let mut arg = atom(nodes[i + 1])?;
-                let mut j = i + 2;
+                let from_subscript = argument_in_subscript.is_some();
+                let mut arg = match argument_in_subscript {
+                    Some(argument) => argument,
+                    None => {
+                        if next >= nodes.len() {
+                            return Err(ToExprError::UnsupportedCommand(name.clone()));
+                        }
+                        atom(nodes[next])?
+                    }
+                };
+                let mut j = if from_subscript { next } else { next + 1 };
                 while j < nodes.len() {
                     match nodes[j] {
                         Node::Sup(sub) => {
@@ -124,7 +149,15 @@ fn product(row: &Row) -> Result<Expr, ToExprError> {
                         _ => break,
                     }
                 }
-                factors.push(ExprNode::fn_raw(SymbolId::intern(func), vec![arg]));
+                let value = match base {
+                    Some(base) => {
+                        let upper = ExprNode::fn_raw(SymbolId::intern("ln"), vec![arg]);
+                        let lower = ExprNode::fn_raw(SymbolId::intern("ln"), vec![base]);
+                        mul([upper, pow(lower, ExprNode::int(-1))])
+                    }
+                    None => ExprNode::fn_raw(SymbolId::intern(func), vec![arg]),
+                };
+                factors.push(value);
                 i = j;
                 if let Some(Node::Sym(s)) = nodes.get(i) {
                     if s == "\\cdot" {
