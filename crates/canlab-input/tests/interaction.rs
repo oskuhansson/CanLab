@@ -1013,3 +1013,31 @@ fn typing_a_two_letter_definition_with_arguments_works() {
     assert_eq!(f.to_latex(), "ab\\left(c\\right)=1");
     assert!(f.is_definition_row(f.root()), "{:?}", f.root());
 }
+
+#[test]
+fn closing_a_bracket_of_a_scripted_group_lands_past_the_script() {
+    // There is no caret position between an atom and its superscript, so closing
+    // a bracket that already carries a script must land *after* the script. The
+    // old caret stayed at the node boundary, which was not a position at all:
+    // nothing could move it, and the next character was inserted between the
+    // bracket and its exponent, silently re-basing the exponent onto the new
+    // character.
+    let mut f = MathField::from_latex("\\left(x\\right)^2").expect("a scripted group");
+    // Put the caret at the end of the bracket's body, where `)` will close it.
+    let inside = f
+        .positions()
+        .into_iter()
+        .find(|cursor| cursor.path.len() == 1 && cursor.offset == 1)
+        .expect("a position inside the bracket");
+    assert!(f.set_cursor(inside));
+    f.type_str(")");
+    let positions = f.positions();
+    assert!(
+        positions.contains(f.cursor()),
+        "the caret is not at a position: {:?}",
+        f.cursor()
+    );
+    assert_eq!(f.to_latex(), "\\left(x\\right)^2");
+    f.type_str("z");
+    assert_eq!(f.to_latex(), "\\left(x\\right)^2z", "the exponent stayed put");
+}

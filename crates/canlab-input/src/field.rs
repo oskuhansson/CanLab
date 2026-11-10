@@ -1115,7 +1115,18 @@ impl MathField {
         // They coincide only for one-character nodes, which is why `f(x)` worked
         // and `ab(c)` put the caret in the middle of the run instead of after the
         // bracket.
-        let after = caret_before(self.row_at(&parent), last.index + 1);
+        let row = self.row_at(&parent);
+        let mut after = caret_before(row, last.index + 1);
+        // A position *immediately before* a script does not exist — the script is
+        // a decoration on the atom in front of it. `\left(x\right)^2` therefore has
+        // no caret position between the bracket and the exponent, so a caret put
+        // there could not be moved or typed into without re-basing the exponent.
+        // Step over the scripts that follow the bracket.
+        let mut next = last.index + 1;
+        while let Some(Node::Sup(_) | Node::Sub(_)) = row.get(next) {
+            after += node_caret_len(&row[next]);
+            next += 1;
+        }
         if let Some(Node::Group { ghost, .. }) = self.row_at_mut(&parent).get_mut(last.index) {
             *ghost = Ghost::None;
         }
