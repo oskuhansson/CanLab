@@ -13,7 +13,6 @@ use eframe::egui::{
     Sense, Stroke, Ui, UiBuilder, pos2, vec2,
 };
 
-use crate::theme::ACCENT;
 use crate::{CasApp, SolveState};
 
 /// Width of the editor's reading column. Wide enough for a display equation,
@@ -545,7 +544,7 @@ pub fn variables(app: &mut CasApp, ui: &mut Ui) {
         for var in &app.free_vars {
             ui.horizontal(|ui| {
                 let (dot, _) = ui.allocate_exact_size(vec2(6.0, 6.0), Sense::hover());
-                ui.painter().circle_filled(dot.center(), 2.5, ACCENT);
+                ui.painter().circle_filled(dot.center(), 2.5, app.accent);
                 ui.label(RichText::new(var.as_str()).monospace().size(15.0).strong());
             });
         }
@@ -675,22 +674,22 @@ pub fn plot(app: &mut CasApp, ui: &mut Ui) {
             curve,
             (app.x_min, app.x_max),
             app.y_range,
-            curve_color(index),
+            curve_color(index, app.accent),
         );
     }
 }
 
 /// A distinct colour per curve: the accent first, then a small wheel.
-fn curve_color(index: usize) -> Color32 {
-    const WHEEL: [Color32; 6] = [
-        ACCENT,
+fn curve_color(index: usize, accent: Color32) -> Color32 {
+    let wheel: [Color32; 6] = [
+        accent,
         Color32::from_rgb(0x62, 0xB0, 0xF5),
         Color32::from_rgb(0x8B, 0xC3, 0x4A),
         Color32::from_rgb(0xE5, 0x7A, 0xC8),
         Color32::from_rgb(0xF2, 0xC9, 0x4C),
         Color32::from_rgb(0x7A, 0xE0, 0xD4),
     ];
-    WHEEL[index % WHEEL.len()]
+    wheel[index % wheel.len()]
 }
 
 /// The square-ish area the data window actually gets.

@@ -110,6 +110,8 @@ struct CasApp {
     history: Vec<HistoryEntry>,
     dock: Dock,
     mode: Mode,
+    /// The accent colour chosen in Settings.
+    accent: egui::Color32,
     jobs: Jobs,
     /// Bumped on every re-parse. A solver result from an older generation is
     /// stale and must not replace the current expression's result.
@@ -141,6 +143,7 @@ impl CasApp {
             history: Vec::new(),
             dock: Dock::default(),
             mode: Mode::Dark,
+            accent: theme::ACCENT,
             jobs: Jobs::spawn(),
             generation: 0,
             paints: 0,
@@ -570,6 +573,51 @@ impl CasApp {
     }
 }
 
+/// The Settings menu: appearance, in one place.
+///
+/// Deliberately small — a settings page that drifts into a second control panel
+/// is a failure mode of its own. Theme and accent are the two things that change
+/// how the whole app looks.
+fn settings(app: &mut CasApp, ui: &mut egui::Ui) {
+    ui.label(
+        egui::RichText::new("THEME")
+            .small()
+            .strong()
+            .color(ui.visuals().weak_text_color()),
+    );
+    for mode in [Mode::Dark, Mode::Light] {
+        if ui
+            .selectable_label(app.mode == mode, mode.label())
+            .clicked()
+        {
+            app.mode = mode;
+            theme::apply(ui.ctx(), mode);
+            theme::apply_accent(ui.ctx(), app.mode, app.accent);
+            ui.close();
+        }
+    }
+
+    ui.separator();
+    ui.label(
+        egui::RichText::new("ACCENT")
+            .small()
+            .strong()
+            .color(ui.visuals().weak_text_color()),
+    );
+    ui.horizontal(|ui| {
+        for palette in theme::PALETTES {
+            let selected = app.accent == palette.color;
+            let chip = egui::Button::new(if selected { "●" } else { "○" })
+                .fill(palette.color)
+                .min_size(egui::vec2(26.0, 20.0));
+            if ui.add(chip).on_hover_text(palette.name).clicked() {
+                app.accent = palette.color;
+                theme::apply_accent(ui.ctx(), app.mode, palette.color);
+            }
+        }
+    });
+}
+
 fn menu_bar(app: &mut CasApp, ui: &mut egui::Ui) {
     let fill = ui.visuals().window_fill;
     egui::Panel::top("canlab-menu")
@@ -610,14 +658,7 @@ fn menu_bar(app: &mut CasApp, ui: &mut egui::Ui) {
                 });
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .button(format!("Theme: {}", app.mode.label()))
-                        .on_hover_text("Switch light/dark mode")
-                        .clicked()
-                    {
-                        app.mode = app.mode.other();
-                        theme::apply(ui.ctx(), app.mode);
-                    }
+                    ui.menu_button("Settings", |ui| settings(app, ui));
                     ui.label(
                         egui::RichText::new("drag the seams · split from a panel menu")
                             .small()

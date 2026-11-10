@@ -14,6 +14,39 @@ use eframe::egui::{self, Color32, CornerRadius, FontId, Margin, Stroke, TextStyl
 pub const ACCENT: Color32 = Color32::from_rgb(0xe8, 0x7d, 0x0d);
 /// Cool blue — links and the "solver is thinking" hint.
 pub const BLUE: Color32 = Color32::from_rgb(0x3d, 0x7e, 0xff);
+/// The accent colours the Settings menu offers. The first is the default.
+///
+/// One accent, used for the caret, the active widget, the selection and the first
+/// plot curve: a second colour would fight the first for attention.
+pub const PALETTES: [Palette; 5] = [
+    Palette { name: "Amber", color: ACCENT },
+    Palette { name: "Blue", color: Color32::from_rgb(0x3d, 0x7e, 0xff) },
+    Palette { name: "Green", color: Color32::from_rgb(0x4c, 0xaf, 0x50) },
+    Palette { name: "Magenta", color: Color32::from_rgb(0xe5, 0x5a, 0xa8) },
+    Palette { name: "Violet", color: Color32::from_rgb(0x9b, 0x6b, 0xff) },
+];
+
+/// One named accent colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Palette {
+    pub name: &'static str,
+    pub color: Color32,
+}
+
+/// Repaint the interface in ccent, keeping the light/dark choice.
+///
+/// Called from the Settings menu. The visuals are rebuilt from mode rather than
+/// patched, so switching palette twice in a row cannot accumulate colour.
+pub fn apply_accent(ctx: &egui::Context, mode: Mode, accent: Color32) {
+    let mut visuals = mode.visuals();
+    visuals.widgets.active.bg_fill = accent;
+    visuals.widgets.active.weak_bg_fill = accent;
+    visuals.selection.bg_fill = accent;
+    visuals.hyperlink_color = accent;
+    ctx.set_visuals_of(mode.egui_theme(), visuals.clone());
+    ctx.set_visuals(visuals);
+    ctx.request_repaint();
+}
 
 /// Which palette the app is wearing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -31,6 +64,7 @@ impl Mode {
         }
     }
 
+    #[allow(dead_code)] // kept for callers that toggle rather than pick
     pub fn other(self) -> Self {
         match self {
             Self::Dark => Self::Light,
