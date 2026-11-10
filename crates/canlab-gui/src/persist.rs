@@ -282,21 +282,30 @@ pub fn path_for(session: Option<String>, appdata: Option<String>, home: Option<S
 /// Save `session`, creating its directory. Returns the path written.
 pub fn save(session: &Session) -> Result<PathBuf, String> {
     let path = path();
+    save_to(&path, session)?;
+    Ok(path)
+}
+
+/// Save to an explicit path, creating its directory.
+pub fn save_to(path: &Path, session: &Session) -> Result<(), String> {
     if let Some(directory) = path.parent()
         && !directory.as_os_str().is_empty()
     {
         std::fs::create_dir_all(directory)
             .map_err(|error| format!("could not create {}: {error}", directory.display()))?;
     }
-    std::fs::write(&path, session.to_text())
-        .map_err(|error| format!("could not write {}: {error}", path.display()))?;
-    Ok(path)
+    std::fs::write(path, session.to_text())
+        .map_err(|error| format!("could not write {}: {error}", path.display()))
 }
 
 /// Load the session, or `None` when there is nothing (or nothing readable) there.
 pub fn load() -> Option<Session> {
-    let path = path();
-    let text = std::fs::read_to_string(&path).ok()?;
+    load_from(&path())
+}
+
+/// Load from an explicit path.
+pub fn load_from(path: &Path) -> Option<Session> {
+    let text = std::fs::read_to_string(path).ok()?;
     Session::from_text(&text).ok()
 }
 
@@ -402,6 +411,18 @@ mod tests {
         assert!(read.palette.is_empty());
         assert!(!read.dark);
         assert_eq!(read.accent, [1, 2, 3]);
+    }
+
+    #[test]
+    fn a_session_survives_the_disk() {
+        // The format tests above are in memory; this one writes and reads a real
+        // file, in `target/` so it cannot touch a user's session.
+        let path = Path::new("target/test-session/session.canlab");
+        let session = sample();
+        save_to(path, &session).expect("writes");
+        assert_eq!(load_from(path), Some(session));
+        // A missing file is `None`, not an error to report at startup.
+        assert_eq!(load_from(Path::new("target/test-session/nothing.canlab")), None);
     }
 
     #[test]

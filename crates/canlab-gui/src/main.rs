@@ -1339,12 +1339,78 @@ mod tests {
     /// actually does lives in `CasApp::draw`, and a panic in there is exactly
     /// what produces a blank window.
     fn draw_a_frame(app: &mut CasApp, ctx: &egui::Context) {
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        frame_with(app, ctx, Vec::new());
+    }
+
+    /// Paint one frame with `events` delivered to it.
+    fn frame_with(app: &mut CasApp, ctx: &egui::Context, events: Vec<egui::Event>) {
+        let input = egui::RawInput {
+            events,
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
             app.draw(ui);
         });
         // A real backend uploads these; epaint panics if they are dropped
         // unhandled, which is the test harness's job and not a UI bug.
         output.textures_delta.clear();
+    }
+
+    /// A key press with modifiers.
+    fn key(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    #[test]
+    fn ctrl_z_and_ctrl_shift_z_work_through_a_real_frame() {
+        // The undo *wiring* — claiming the event before any panel draws — is not
+        // exercised by calling `undo_edit` directly.
+        let ctx = egui::Context::default();
+        let mut app = CasApp::new();
+        app.field = MathField::new();
+        app.recompute();
+        app.note_edit(false);
+        app.field.type_str("x");
+        app.recompute();
+        assert_eq!(app.field.to_latex(), "x");
+
+        frame_with(&mut app, &ctx, vec![key(egui::Key::Z, egui::Modifiers::COMMAND)]);
+        assert_eq!(app.field.to_latex(), "", "Ctrl+Z did not undo");
+
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![key(
+                egui::Key::Z,
+                egui::Modifiers::COMMAND.plus(egui::Modifiers::SHIFT),
+            )],
+        );
+        assert_eq!(app.field.to_latex(), "x", "Ctrl+Shift+Z did not redo");
+
+        frame_with(&mut app, &ctx, vec![key(egui::Key::Y, egui::Modifiers::COMMAND)]);
+        assert_eq!(app.field.to_latex(), "x");
+    }
+
+    #[test]
+    fn ctrl_v_pastes_latex_at_the_caret() {
+        let ctx = egui::Context::default();
+        let mut app = CasApp::new();
+        app.field = MathField::new();
+        app.recompute();
+
+        frame_with(
+            &mut app,
+            &ctx,
+            vec![egui::Event::Paste(String::from("x^2+1"))],
+        );
+        assert_eq!(app.field.to_latex(), "x^2+1");
+        assert!(app.expr.is_some(), "{:?}", app.error);
     }
 
     #[test]
