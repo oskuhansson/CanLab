@@ -469,28 +469,38 @@ enum Axis {
     Vertical,
 }
 
-/// The choices one axis picker offers.
+/// Put `variable` on `axis`, swapping it with the other axis when needed.
 ///
-/// The variable on the *other* axis is left out: offering it let both axes be the
-/// same variable, and `q² + q² = 1` then sampled `q` twice and drew two vertical
-/// lines instead of a curve.
-fn axis_options(app: &CasApp, axis: Axis) -> Vec<canlab_core::SymbolId> {
-    let other = match axis {
-        Axis::Horizontal => app.y_axis,
-        Axis::Vertical => app.x_axis,
-    };
-    app.free_vars
-        .iter()
-        .copied()
-        .filter(|variable| Some(*variable) != other)
-        .collect()
+/// Every free variable is offered on either axis, including the one already on
+/// the other axis. Taking that one swaps the pair: the replaced choice moves to
+/// the other axis, so the same variable never ends up on both. Two axes on one
+/// variable made the sampler evaluate it twice, and `q² + q² = 1` drew two
+/// vertical lines instead of a curve.
+fn choose_axis(app: &mut CasApp, axis: Axis, variable: canlab_core::SymbolId) {
+    match axis {
+        Axis::Horizontal => {
+            let replaced = app.x_axis;
+            app.x_axis = Some(variable);
+            if app.y_axis == Some(variable) {
+                app.y_axis = replaced;
+            }
+        }
+        Axis::Vertical => {
+            let replaced = app.y_axis;
+            app.y_axis = Some(variable);
+            if app.x_axis == Some(variable) {
+                app.x_axis = replaced;
+            }
+        }
+    }
 }
 
 /// One "which variable is this axis?" selector.
 ///
-/// Any variable in the document can go on either axis, which is what makes
-/// `i² + j² = 1` plottable: nothing about the maths cares what the letters are
-/// called, only which one is horizontal.
+/// Any free variable is offered on either axis, which is what makes
+/// `i² + j² = 1` plottable and a swap one click: nothing about the maths cares
+/// what the letters are called, only which one is horizontal. Picking the
+/// other axis's variable goes through [`choose_axis`], so it swaps the pair.
 fn axis_picker(app: &mut CasApp, ui: &mut Ui, label: &str, axis: Axis) -> bool {
     let current = match axis {
         Axis::Horizontal => app.x_axis,
@@ -503,16 +513,13 @@ fn axis_picker(app: &mut CasApp, ui: &mut Ui, label: &str, axis: Axis) -> bool {
         .selected_text(RichText::new(selected).monospace().size(12.0))
         .width(52.0)
         .show_ui(ui, |ui| {
-            for variable in axis_options(app, axis) {
+            for variable in app.free_vars.clone() {
                 let is_current = current == Some(variable);
                 if ui
                     .selectable_label(is_current, variable.as_str().to_string())
                     .clicked()
                 {
-                    match axis {
-                        Axis::Horizontal => app.x_axis = Some(variable),
-                        Axis::Vertical => app.y_axis = Some(variable),
-                    }
+                    choose_axis(app, axis, variable);
                     changed = true;
                 }
             }
@@ -788,7 +795,7 @@ fn variables_body(app: &mut CasApp, ui: &mut Ui) {
         SolveState::System { assignments } => {
             if assignments.is_empty() {
                 ui.label(
-                    RichText::new("No values.")
+                    RichText::new("No solutions.")
                         .small()
                         .color(crate::theme::weak()),
                 );
@@ -1735,10 +1742,63 @@ mod tests {
         assert_eq!(app.y_range, (-2.0, 2.0));
     }
 
+    fn axes_of(app: &crate::CasApp) -> (Option<String>, Option<String>) {
+        (
+            app.x_axis.map(|v| v.as_str().to_string()),
+            app.y_axis.map(|v| v.as_str().to_string()),
+        )
+    }
+
     #[test]
-    fn an_axis_picker_does_not_offer_the_other_axis() {
-        // Offering it let both combos show the same variable, which sampled it
-        // twice: `q² + q² = 1` drew two vertical lines.
+    fn choosing_the_other_axis_swaps_the_pair() {
+        // x = q, y = p, then pick q for y: q moves to y and p moves to x. With
+        // the old exclusion q was not even offered on y, so a swap was
+        // impossible.
+        let mut app = crate::CasApp::new();
+        app.field = canlab_input::MathField::from_latex("p^2+q^2=1").expect("a circle");
+        app.recompute();
+        let p = canlab_core::SymbolId::intern("p");
+        let q = canlab_core::SymbolId::intern("q");
+        app.x_axis = Some(q);
+        app.y_axis = Some(p);
+
+        choose_axis(&mut app, Axis::Vertical, q);
+        assert_eq!(
+            axes_of(&app),
+            (Some(String::from("p")), Some(String::from("q")))
+        );
+
+        // And the same move in the other direction.
+        choose_axis(&mut app, Axis::Horizontal, q);
+        assert_eq!(
+            axes_of(&app),
+            (Some(String::from("q")), Some(String::from("p")))
+        );
+    }
+
+    #[test]
+    fn choosing_a_third_variable_leaves_the_other_axis_alone() {
+        let mut app = crate::CasApp::new();
+        app.field =
+            canlab_input::MathField::from_latex("p^2+q^2+r^2=1").expect("three variables");
+        app.recompute();
+        let p = canlab_core::SymbolId::intern("p");
+        let q = canlab_core::SymbolId::intern("q");
+        let r = canlab_core::SymbolId::intern("r");
+        app.x_axis = Some(p);
+        app.y_axis = Some(q);
+
+        choose_axis(&mut app, Axis::Vertical, r);
+        assert_eq!(
+            axes_of(&app),
+            (Some(String::from("p")), Some(String::from("r")))
+        );
+    }
+
+    #[test]
+    fn an_axis_choice_never_puts_one_variable_on_both_axes() {
+        // The other axis's variable stays in the list so it can be swapped in;
+        // the decision must move the replaced choice, never duplicate it.
         let mut app = crate::CasApp::new();
         app.field = canlab_input::MathField::from_latex("p^2+q^2=1").expect("a circle");
         app.recompute();
@@ -1746,15 +1806,13 @@ mod tests {
         let q = canlab_core::SymbolId::intern("q");
         app.x_axis = Some(p);
         app.y_axis = Some(q);
-        assert_eq!(axis_options(&app, Axis::Horizontal), vec![p], "q is vertical");
-        assert_eq!(axis_options(&app, Axis::Vertical), vec![q], "p is horizontal");
 
-        // The variable already on this axis stays listed: swapping the two axes
-        // is a normal thing to want.
-        app.x_axis = Some(q);
-        app.y_axis = Some(p);
-        assert_eq!(axis_options(&app, Axis::Horizontal), vec![q]);
-        assert_eq!(axis_options(&app, Axis::Vertical), vec![p]);
+        for variable in [p, q] {
+            choose_axis(&mut app, Axis::Horizontal, variable);
+            assert_ne!(app.x_axis, app.y_axis, "after choosing on x");
+            choose_axis(&mut app, Axis::Vertical, variable);
+            assert_ne!(app.x_axis, app.y_axis, "after choosing on y");
+        }
     }
 
     #[test]

@@ -145,6 +145,10 @@ pub struct JobResult {
     pub var: Option<SymbolId>,
     pub outcome: JobOutcome,
     pub generation: u64,
+    /// True when the failure is one the backend cannot recover from. The worker
+    /// retires SymPy only for these: `BadOutput` is one malformed line from a
+    /// worker that is still alive, not a dead pipe.
+    pub fatal: bool,
 }
 
 /// The app-side handle to the worker thread.
@@ -179,15 +183,15 @@ impl Jobs {
                     guard.note = note;
                 }
                 while let Ok(job) = job_rx.recv() {
-                    // A fatal answer means the backend is gone for good — a dead
-                    // worker, a timeout, a Python without SymPy. Retry the same
-                    // request on the native backend once, and say so, rather than
-                    // leaving every later request to fail against a dead pipe.
+                    // A *fatal* answer means the backend is gone for good — a
+                    // dead worker, a timeout, a Python without SymPy. Retry the
+                    // same request on the native backend once, and say so, rather
+                    // than leaving every later request to fail against a dead
+                    // pipe. A `BadOutput` is a malformed line, not a dead backend,
+                    // and must not retire a worker that is still alive.
                     let retry = job.op.clone();
                     let mut result = run(&*solver, backend, job);
-                    if matches!(result.outcome, JobOutcome::Failed(_))
-                        && backend != Backend::Native
-                    {
+                    if should_retire_backend(result.fatal, backend) {
                         solver = Arc::new(NativeSolver);
                         backend = Backend::Native;
                         let mut guard = shared
@@ -290,45 +294,53 @@ impl Jobs {
     }
 }
 
+/// Should a failed answer retire the backend for the rest of the session?
+///
+/// Only a fatal error means the backend is gone: `BadOutput` is one malformed
+/// line from a worker that is still alive, and a decline is an answer. Retiring
+/// on every `Failed` silently ended SymPy for one protocol hiccup and blamed
+/// SymPy in the note.
+fn should_retire_backend(fatal: bool, backend: Backend) -> bool {
+    fatal && backend != Backend::Native
+}
+
 fn run(solver: &dyn Solver, backend: Backend, job: Job) -> JobResult {
     let Job {
         label,
         op,
         generation,
     } = job;
-    let (kind, var, outcome) = match op {
-        JobOp::Simplify(expr) => (
-            JobKind::Simplify,
-            None,
-            single(solver.simplify(&expr), JobKind::Simplify, backend),
-        ),
-        JobOp::Integrate(expr, var) => (
-            JobKind::Integrate,
-            Some(var),
-            single(solver.integrate(&expr, var), JobKind::Integrate, backend),
-        ),
+    let (kind, var, outcome, fatal) = match op {
+        JobOp::Simplify(expr) => {
+            let (outcome, fatal) = single(solver.simplify(&expr), JobKind::Simplify, backend);
+            (JobKind::Simplify, None, outcome, fatal)
+        }
+        JobOp::Integrate(expr, var) => {
+            let (outcome, fatal) = single(solver.integrate(&expr, var), JobKind::Integrate, backend);
+            (JobKind::Integrate, Some(var), outcome, fatal)
+        }
         JobOp::Solve(expr, var) => {
-            let outcome = match solver.solve(&expr, var) {
-                Ok(solutions) => JobOutcome::Solutions(solutions),
+            let (outcome, fatal) = match solver.solve(&expr, var) {
+                Ok(solutions) => (JobOutcome::Solutions(solutions), false),
                 Err(err) => declined_or_failed(err, JobKind::Solve, backend),
             };
-            (JobKind::Solve, Some(var), outcome)
+            (JobKind::Solve, Some(var), outcome, fatal)
         }
         JobOp::SolveSystem(equations, vars) => {
-            let outcome = match solver.solve_system(&equations, &vars) {
-                Ok(assignments) => JobOutcome::Assignments(assignments),
+            let (outcome, fatal) = match solver.solve_system(&equations, &vars) {
+                Ok(assignments) => (JobOutcome::Assignments(assignments), false),
                 // SymPy has no system solver behind this trait, while the native
                 // matrix elimination solves exactly these. A system is the one
                 // case where trying the other backend beats declining.
                 Err(err) if err.is_declined() && backend != Backend::Native => {
                     match NativeSolver.solve_system(&equations, &vars) {
-                        Ok(assignments) => JobOutcome::Assignments(assignments),
+                        Ok(assignments) => (JobOutcome::Assignments(assignments), false),
                         Err(native) => declined_or_failed(native, JobKind::Solve, Backend::Native),
                     }
                 }
                 Err(err) => declined_or_failed(err, JobKind::Solve, backend),
             };
-            (JobKind::Solve, vars.first().copied(), outcome)
+            (JobKind::Solve, vars.first().copied(), outcome, fatal)
         }
     };
     JobResult {
@@ -337,12 +349,13 @@ fn run(solver: &dyn Solver, backend: Backend, job: Job) -> JobResult {
         var,
         outcome,
         generation,
+        fatal,
     }
 }
 
-fn single(result: Result<Expr, SolverError>, kind: JobKind, backend: Backend) -> JobOutcome {
+fn single(result: Result<Expr, SolverError>, kind: JobKind, backend: Backend) -> (JobOutcome, bool) {
     match result {
-        Ok(expr) => JobOutcome::Value(expr),
+        Ok(expr) => (JobOutcome::Value(expr), false),
         Err(err) => declined_or_failed(err, kind, backend),
     }
 }
@@ -350,11 +363,16 @@ fn single(result: Result<Expr, SolverError>, kind: JobKind, backend: Backend) ->
 /// A backend declining is a real answer, and the panel has to be able to say
 /// *what* it declined and what the backend can do instead. "No solver backend"
 /// is the one thing it is not: the backend answered.
-fn declined_or_failed(err: SolverError, kind: JobKind, backend: Backend) -> JobOutcome {
+///
+/// The bool is whether the error is fatal to the backend. The worker uses it to
+/// decide whether to retire SymPy; `JobOutcome` stays a plain answer for the
+/// panel.
+fn declined_or_failed(err: SolverError, kind: JobKind, backend: Backend) -> (JobOutcome, bool) {
+    let fatal = err.is_fatal();
     if err.is_declined() {
-        JobOutcome::Declined(backend.repertoire(kind))
+        (JobOutcome::Declined(backend.repertoire(kind)), false)
     } else {
-        JobOutcome::Failed(err.to_string())
+        (JobOutcome::Failed(err.to_string()), fatal)
     }
 }
 
@@ -473,6 +491,71 @@ mod tests {
             }
             other => panic!("expected assignments, got {}", describe(&other)),
         }
+    }
+
+    /// A backend whose every operation fails with the same error.
+    struct Fails(SolverError);
+
+    impl Solver for Fails {
+        fn simplify(&self, _: &Expr) -> Result<Expr, SolverError> {
+            Err(self.0.clone())
+        }
+        fn diff(&self, _: &Expr, _: SymbolId) -> Result<Expr, SolverError> {
+            Err(self.0.clone())
+        }
+        fn integrate(&self, _: &Expr, _: SymbolId) -> Result<Expr, SolverError> {
+            Err(self.0.clone())
+        }
+        fn solve(&self, _: &Expr, _: SymbolId) -> Result<Vec<Expr>, SolverError> {
+            Err(self.0.clone())
+        }
+        fn limit(&self, _: &Expr, _: SymbolId, _: &Expr) -> Result<Expr, SolverError> {
+            Err(self.0.clone())
+        }
+        fn series(&self, _: &Expr, _: SymbolId, _: &Expr, _: usize) -> Result<Expr, SolverError> {
+            Err(self.0.clone())
+        }
+    }
+
+    #[test]
+    fn only_a_fatal_error_retires_sympy() {
+        let failed = |error: SolverError| {
+            run(
+                &Fails(error),
+                Backend::Sympy,
+                job(JobOp::Simplify(sym("x"))),
+            )
+        };
+
+        // A malformed line came from a worker that is still alive: keep it.
+        let bad_output = failed(SolverError::BadOutput(String::from("not a result")));
+        assert!(matches!(bad_output.outcome, JobOutcome::Failed(_)));
+        assert!(!bad_output.fatal);
+        assert!(!should_retire_backend(bad_output.fatal, Backend::Sympy));
+
+        // A timeout or a dead worker is fatal: retire SymPy and retry natively.
+        for error in [
+            SolverError::Timeout,
+            SolverError::Backend(String::from("worker exited")),
+        ] {
+            let result = failed(error);
+            assert!(matches!(result.outcome, JobOutcome::Failed(_)));
+            assert!(result.fatal);
+            assert!(should_retire_backend(result.fatal, Backend::Sympy));
+        }
+
+        // A decline is an answer, not a failure.
+        let declined = run(
+            &MockSolver,
+            Backend::Sympy,
+            job(JobOp::Simplify(sym("x"))),
+        );
+        assert!(matches!(declined.outcome, JobOutcome::Declined(_)));
+        assert!(!declined.fatal);
+        assert!(!should_retire_backend(declined.fatal, Backend::Sympy));
+
+        // Native is never retired in favour of itself.
+        assert!(!should_retire_backend(true, Backend::Native));
     }
 
     fn describe(outcome: &JobOutcome) -> &'static str {

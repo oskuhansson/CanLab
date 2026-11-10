@@ -995,6 +995,9 @@ impl CasApp {
             var,
             outcome,
             generation,
+            // The worker has already used this to decide whether to retire the
+            // backend; the panel only shows the answer.
+            fatal: _,
         } = result;
         if generation != self.generation {
             self.status = String::from("discarded a stale solver result");
@@ -1031,17 +1034,26 @@ impl CasApp {
                 self.push_history(&label, self.result_latex.clone());
             }
             JobOutcome::Assignments(assignments) => {
-                // A system answers per variable, in one list.
-                let parts: Vec<String> = assignments
-                    .iter()
-                    .map(|(variable, value)| {
-                        let name = to_latex(&canlab_core::sym(&variable.as_str()));
-                        format!("{name} = {}", to_latex(value))
-                    })
-                    .collect();
-                self.result_latex = parts.join(",\\quad ");
-                self.result_plain = parts.join(", ");
-                self.status = format!("{label}: {} variable(s)", assignments.len());
+                // A system answers per variable, in one list. An empty list is a
+                // contradiction — no point satisfies every equation — which is a
+                // real answer and must read like "no solutions", not like the
+                // solver had nothing to say.
+                if assignments.is_empty() {
+                    self.result_latex = String::from("\\varnothing");
+                    self.result_plain = String::from("no solutions");
+                    self.status = format!("{label}: no solutions");
+                } else {
+                    let parts: Vec<String> = assignments
+                        .iter()
+                        .map(|(variable, value)| {
+                            let name = to_latex(&canlab_core::sym(&variable.as_str()));
+                            format!("{name} = {}", to_latex(value))
+                        })
+                        .collect();
+                    self.result_latex = parts.join(",\\quad ");
+                    self.result_plain = parts.join(", ");
+                    self.status = format!("{label}: {} variable(s)", assignments.len());
+                }
                 self.solve = SolveState::System { assignments };
                 self.push_history(&label, self.result_latex.clone());
             }
@@ -1578,6 +1590,42 @@ mod tests {
             }
             other => panic!("expected a system answer, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_contradictory_system_says_no_solutions() {
+        // `x+y=1` and `x+y=2` cannot both hold. The solver's empty assignment
+        // list is a real answer, and the result card must say so.
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex_lines(&[
+            String::from("x+y=1"),
+            String::from("x+y=2"),
+        ])
+        .expect("a contradictory system");
+        app.recompute();
+        app.start_solve();
+
+        let ctx = egui::Context::default();
+        for _ in 0..400 {
+            app.poll_jobs(&ctx);
+            if !matches!(app.solve, SolveState::Idle) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        match &app.solve {
+            SolveState::System { assignments } => {
+                assert!(assignments.is_empty(), "{assignments:?}");
+            }
+            other => panic!("expected an empty system answer, got {other:?}"),
+        }
+        assert_eq!(app.result_latex, "\\varnothing");
+        assert_eq!(app.result_plain, "no solutions");
+        assert!(
+            app.status.contains("no solutions"),
+            "status: {}",
+            app.status
+        );
     }
 
     #[test]
