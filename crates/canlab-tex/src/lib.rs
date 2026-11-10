@@ -253,8 +253,17 @@ fn write_mul(factors: &[Expr], out: &mut String) {
         return;
     }
 
-    for (index, factor) in factors.iter().enumerate() {
-        if index > 0 {
+    // `-1·x` is `-x`, never `-1x`: a unit coefficient is a sign, not a factor.
+    let mut first = 0;
+    if factors.len() > 1
+        && matches!(&*factors[0], ExprNode::Num(n) if n.is_negative() && n.abs().is_one())
+    {
+        out.push('-');
+        first = 1;
+    }
+
+    for (index, factor) in factors.iter().enumerate().skip(first) {
+        if index > first {
             out.push_str(mul_separator(&factors[index - 1], factor));
         }
         // A leading signed coefficient prints `-3x`, not `\left(-3\right)x`,
@@ -344,15 +353,16 @@ fn write_reciprocal(base: &Expr, power: u128, out: &mut String) {
 
 /// Render the exponent inside `^{…}`.
 ///
-/// A numeric exponent is written directly: it needs no parentheses of its own
-/// (the braces group) and `x^{-\frac{1}{2}}` reads better than
-/// `x^{\left(-\frac{1}{2}\right)}`. Anything else is a general expression,
-/// where a sum does have to be delimited — `x^{\left(a + b\right)}`.
+/// The braces already group, so nothing inside them needs parentheses of its
+/// own: `x^{-2}`, `x^{a + b}` and `x^{-\frac{1}{2}}` all read correctly, and
+/// `x^{\left(-2\right)}` is just noise. This is why the call passes
+/// [`PREC_ADD`] — the weakest context — rather than a precedence that would
+/// reach for parentheses.
 fn write_exponent(exp: &Expr, out: &mut String) {
     if let ExprNode::Num(n) = &**exp {
         write_number(n, out);
     } else {
-        write_node(exp, out, PREC_MUL);
+        write_node(exp, out, PREC_ADD);
     }
 }
 
@@ -602,9 +612,9 @@ mod tests {
     }
 
     #[test]
-    fn sum_in_exponent_is_parenthesized() {
+    fn sum_in_exponent_needs_no_parentheses() {
         let e = power(x(), sum(vec![int(1), y()]));
-        assert_eq!(to_latex(&e), "x^{\\left(1 + y\\right)}");
+        assert_eq!(to_latex(&e), "x^{1 + y}");
     }
 
     #[test]
