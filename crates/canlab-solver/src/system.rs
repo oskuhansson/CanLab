@@ -131,11 +131,19 @@ pub fn solve_system(
     }
 
     if unknown.is_empty() {
-        // Every equation must hold now; a leftover that does not is a
-        // contradiction, which this backend does not report as a solution.
+        // Every equation must hold with the values just found. A leftover with no
+        // variables is a number, and that number is either zero — the equation
+        // holds — or not, which is a contradiction. Checking only "has no
+        // variables" is how `x = 1, x = 2` used to return `x = 1`.
         for equation in &remaining {
             if !variables_of(equation).is_empty() {
                 return Err(SolverError::NotImplemented);
+            }
+            match constant(equation) {
+                Some(value) if value.is_zero() => {}
+                Some(_) => return Ok(Vec::new()),
+                // Not a number this backend can evaluate exactly — a `sin`, say.
+                None => return Err(SolverError::NotImplemented),
             }
         }
         return Ok(assignments);

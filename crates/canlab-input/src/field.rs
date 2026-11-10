@@ -1357,8 +1357,14 @@ impl MathField {
             self.cursor = Cursor::at(Vec::new(), end);
             return true;
         }
-        // A whole empty system folds into the one above it.
-        if self.systems.len() > 1 && self.line == 0 && self.systems[self.system].len() == 1 {
+        // A whole empty system folds into the one above it. There must *be* one
+        // above it: without the `system > 0` check this underflows on the first
+        // system and panics.
+        if self.systems.len() > 1
+            && self.system > 0
+            && self.line == 0
+            && self.systems[self.system].len() == 1
+        {
             self.systems.remove(self.system);
             self.system -= 1;
             self.line = self.systems[self.system].len() - 1;
@@ -1465,6 +1471,9 @@ impl MathField {
             .iter()
             .flatten()
             .filter(|row| !self.is_definition_row(row))
+            // A blank line is not an expression and not an error: it is a carriage
+            // return. `build_equations_with` already skips them.
+            .filter(|row| row_caret_len(row) > 0)
             .map(|row| crate::expr::build_with(row, definitions))
             .collect()
     }

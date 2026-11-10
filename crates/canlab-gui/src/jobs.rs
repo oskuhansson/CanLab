@@ -105,6 +105,7 @@ impl JobKind {
 }
 
 /// A unit of work for the solver worker.
+#[derive(Clone)]
 pub enum JobOp {
     Simplify(Expr),
     Integrate(Expr, SymbolId),
@@ -169,7 +170,7 @@ impl Jobs {
             .spawn(move || {
                 // Choosing may start a process (finding Python), which is exactly
                 // why it happens here and not in a frame.
-                let (solver, backend, note) = choose_backend();
+                let (mut solver, mut backend, note) = choose_backend();
                 {
                     let mut guard = shared
                         .lock()
@@ -178,7 +179,35 @@ impl Jobs {
                     guard.note = note;
                 }
                 while let Ok(job) = job_rx.recv() {
-                    if result_tx.send(run(&*solver, backend, job)).is_err() {
+                    // A fatal answer means the backend is gone for good — a dead
+                    // worker, a timeout, a Python without SymPy. Retry the same
+                    // request on the native backend once, and say so, rather than
+                    // leaving every later request to fail against a dead pipe.
+                    let retry = job.op.clone();
+                    let mut result = run(&*solver, backend, job);
+                    if matches!(result.outcome, JobOutcome::Failed(_))
+                        && backend != Backend::Native
+                    {
+                        solver = Arc::new(NativeSolver);
+                        backend = Backend::Native;
+                        let mut guard = shared
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        guard.backend = Some(backend);
+                        guard.note =
+                            Some(String::from("SymPy failed; using the native backend"));
+                        drop(guard);
+                        result = run(
+                            &*solver,
+                            backend,
+                            Job {
+                                label: result.label.clone(),
+                                op: retry,
+                                generation: result.generation,
+                            },
+                        );
+                    }
+                    if result_tx.send(result).is_err() {
                         break;
                     }
                 }
@@ -288,6 +317,15 @@ fn run(solver: &dyn Solver, backend: Backend, job: Job) -> JobResult {
         JobOp::SolveSystem(equations, vars) => {
             let outcome = match solver.solve_system(&equations, &vars) {
                 Ok(assignments) => JobOutcome::Assignments(assignments),
+                // SymPy has no system solver behind this trait, while the native
+                // matrix elimination solves exactly these. A system is the one
+                // case where trying the other backend beats declining.
+                Err(err) if err.is_declined() && backend != Backend::Native => {
+                    match NativeSolver.solve_system(&equations, &vars) {
+                        Ok(assignments) => JobOutcome::Assignments(assignments),
+                        Err(native) => declined_or_failed(native, JobKind::Solve, Backend::Native),
+                    }
+                }
                 Err(err) => declined_or_failed(err, JobKind::Solve, backend),
             };
             (JobKind::Solve, vars.first().copied(), outcome)

@@ -48,10 +48,10 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long `--version` may take before an interpreter is written off.
 ///
-/// Long enough for a cold start on a loaded machine, short enough that a Store
-/// alias — which takes seconds to fail — does not stall a search that has already
-/// found nothing.
-const PROBE_TIMEOUT: Duration = Duration::from_millis(400);
+/// Long enough for a cold start of `py -3` (which spawns two processes) on a
+/// loaded machine, short enough that a Store alias — which takes seconds to
+/// fail — does not stall a search that has already found nothing.
+const PROBE_TIMEOUT: Duration = Duration::from_millis(700);
 
 /// One queued request for the session thread.
 struct Job {
@@ -493,7 +493,8 @@ impl Discovery {
     pub fn describe(&self) -> String {
         match self {
             Discovery::Ready { interpreter, script } => format!(
-                "SymPy backend available: `{} {}`",
+                "Python and worker.py found: `{} {}`. Run `canlab solver --probe` \
+                 to check that SymPy imports and answers.",
                 interpreter.display(),
                 script.display()
             ),
@@ -531,12 +532,22 @@ impl Discovery {
 fn interpreters() -> Vec<Interpreter> {
     let mut candidates = Vec::new();
     if let Ok(specification) = std::env::var("CANLAB_PYTHON") {
-        let mut parts = specification.split_whitespace();
-        if let Some(program) = parts.next() {
-            candidates.push(Interpreter {
-                program: program.to_string(),
-                args: parts.map(str::to_string).collect(),
-            });
+        let specification = specification.trim();
+        if !specification.is_empty() {
+            // A path may contain spaces — `C:\Program Files\Python312\python.exe`
+            // is the *normal* Windows install — so an existing file is taken
+            // whole and only an unrecognised command line is split.
+            if Path::new(specification).is_file() {
+                candidates.push(Interpreter::new(specification));
+            } else {
+                let mut parts = specification.split_whitespace();
+                if let Some(program) = parts.next() {
+                    candidates.push(Interpreter {
+                        program: program.to_string(),
+                        args: parts.map(str::to_string).collect(),
+                    });
+                }
+            }
         }
     }
     // The Windows launcher first: it is a real program, where `python3.exe` in
@@ -604,8 +615,12 @@ pub fn discovery() -> &'static Discovery {
 }
 
 /// Start the SymPy backend the environment offers, or say what is missing.
+///
+/// "The interpreter runs and the script exists" is not "it works": a Python
+/// without the `sympy` package satisfies both. The worker is asked one trivial
+/// question here, so a caller never labels a backend SymPy when it cannot answer.
 pub fn open() -> Result<SympyWorker, String> {
-    match discovery() {
+    let worker = match discovery() {
         Discovery::Ready { interpreter, script } => {
             SympyWorker::with_interpreter(interpreter.clone(), script).map_err(|error| {
                 format!(
@@ -613,9 +628,17 @@ pub fn open() -> Result<SympyWorker, String> {
                     interpreter.display(),
                     script.display()
                 )
-            })
+            })?
         }
-        other => Err(other.describe()),
+        other => return Err(other.describe()),
+    };
+    match worker.simplify(&canlab_core::int(0)) {
+        Ok(_) => Ok(worker),
+        Err(SolverError::Backend(message)) => Err(format!(
+            "the worker started but did not answer: {message} \
+             (is the `sympy` package installed?)"
+        )),
+        Err(error) => Err(format!("the worker answered badly: {error}")),
     }
 }
 
@@ -626,6 +649,8 @@ pub fn open() -> Result<SympyWorker, String> {
 /// protocol. `canlab solver` prints the result.
 pub fn probe() -> Result<String, String> {
     let description = discovery().describe();
+    // `open` already round-trips a request, so reaching this line means the
+    // worker imported SymPy and answered.
     let worker = open()?;
     match worker.simplify(&canlab_core::int(0)) {
         Ok(value) => Ok(format!("{description} — answered `{value}`")),

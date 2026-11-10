@@ -232,26 +232,45 @@ pub fn harvest(candidates: &[Candidate]) -> (Definitions, Vec<(usize, DefineErro
         visit(index, &dependencies, &mut state, &mut order);
     }
 
+    // A definition that could not be made leaves its dependents unbuildable. They
+    // must be *skipped*, not built against a table that lacks the name: a missing
+    // name reads as a product, so the dependent would be quietly wrong rather
+    // than absent.
+    let mut failed = vec![false; candidates.len()];
     for index in order {
         let candidate = &candidates[index];
+        let broken = dependencies[index].iter().any(|dependency| failed[*dependency]);
+        if broken {
+            problems.push((
+                index,
+                DefineError::Unreadable(String::from(
+                    "it uses a definition that cannot be made",
+                )),
+            ));
+            failed[index] = true;
+            continue;
+        }
         let body = match crate::expr::build_with(&candidate.body, &definitions) {
             Ok(body) => body,
             Err(error) => {
                 problems.push((index, DefineError::Unreadable(error.to_string())));
+                failed[index] = true;
                 continue;
             }
         };
         if let Err(error) = definitions.define(&candidate.name, candidate.params.clone(), body) {
             problems.push((index, error));
+            failed[index] = true;
         }
     }
 
-    // Whatever the ordering could not place: a cycle, or something that needs one.
+    // Whatever the ordering could not place: a cycle, or something downstream of
+    // one. Only the names actually *in* the cycle are described as recursive.
     for (index, candidate) in candidates.iter().enumerate() {
         if state[index] == Visit::Ordered {
             continue;
         }
-        let error = if dependencies[index].contains(&index) || state[index] == Visit::Cyclic {
+        let error = if reaches_itself(index, &dependencies) {
             DefineError::Recursive(candidate.name.clone())
         } else {
             DefineError::Unreadable(String::from(
@@ -330,9 +349,16 @@ fn visit(
 
 /// The candidates this body applies as a function: `f(…)` where `f` is defined
 /// somewhere in the document.
+///
+/// Spaces between the name and the bracket are layout, not algebra: `f (x)` is a
+/// call, so they are stepped over rather than breaking the pattern.
 fn calls(body: &Row, names: &[&str]) -> Vec<usize> {
+    let significant: Vec<&Node> = body
+        .iter()
+        .filter(|node| !matches!(node, Node::Text(text) if text.trim().is_empty()))
+        .collect();
     let mut out: Vec<usize> = Vec::new();
-    for window in body.windows(2) {
+    for window in significant.windows(2) {
         let [Node::Text(text), Node::Group { .. }] = &window[0..2] else {
             continue;
         };
@@ -343,6 +369,23 @@ fn calls(body: &Row, names: &[&str]) -> Vec<usize> {
         }
     }
     out
+}
+
+/// Is `index` part of a dependency cycle, rather than merely downstream of one?
+fn reaches_itself(index: usize, dependencies: &[Vec<usize>]) -> bool {
+    let mut stack = dependencies[index].clone();
+    let mut seen = vec![false; dependencies.len()];
+    while let Some(node) = stack.pop() {
+        if node == index {
+            return true;
+        }
+        if seen.get(node).copied().unwrap_or(true) {
+            continue;
+        }
+        seen[node] = true;
+        stack.extend(dependencies[node].iter().copied());
+    }
+    false
 }
 
 /// Does `expression` mention the symbol called `name`?
@@ -388,8 +431,18 @@ pub fn substitute(body: &Expr, params: &[SymbolId], args: &[Expr]) -> Expr {
             substitute(base, params, args),
             substitute(exponent, params, args),
         ),
-        // A call inside a body is left alone: definitions cannot call each
-        // other yet, and pretending otherwise would need an evaluator here.
-        ExprNode::Fn(_, _) | ExprNode::Hold(_) => body.clone(),
+        // A *built-in* call in the body (`sin x`, `ln x`) has its arguments
+        // substituted like anything else: `f(x) = x + sin x` called with 2 must
+        // become `2 + sin 2`, not `2 + sin x`. A call to a *user* definition has
+        // already been inlined by the reader, so only `Fn` and a held integral
+        // reach this arm, and the integral is rightly opaque.
+        ExprNode::Fn(name, call_args) => ExprNode::fn_raw(
+            *name,
+            call_args
+                .iter()
+                .map(|argument| substitute(argument, params, args))
+                .collect(),
+        ),
+        ExprNode::Hold(_) => body.clone(),
     }
 }

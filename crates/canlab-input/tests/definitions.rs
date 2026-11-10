@@ -196,3 +196,83 @@ fn a_lone_definition_is_not_an_expression() {
     );
 }
 
+// ------------------------------------------------------- what a call substitutes
+
+#[test]
+fn a_built_in_function_in_a_body_is_substituted() {
+    // `f(x) = x + sin x` called with 2 is `2 + sin 2`. Leaving the argument alone
+    // would be silently wrong algebra, not a refusal.
+    let field = document(&["f(x) = x+\\sin(x)", "f(2)"]);
+    let harvest = field.harvest();
+    assert!(harvest.problems.is_empty(), "{:?}", harvest.problems);
+    let lines = field.build_lines_with(&harvest.definitions).expect("readable");
+    let printed = canlab_tex::to_latex(&lines[0]);
+    assert!(!printed.contains('x'), "x survived substitution: {printed}");
+    assert!(printed.contains("\\sin"), "{printed}");
+}
+
+#[test]
+fn a_logarithm_in_a_body_is_substituted() {
+    let field = document(&["f(x) = \\ln(x)", "f(3)"]);
+    let harvest = field.harvest();
+    let lines = field.build_lines_with(&harvest.definitions).expect("readable");
+    let printed = canlab_tex::to_latex(&lines[0]);
+    assert!(!printed.contains('x'), "x survived substitution: {printed}");
+}
+
+#[test]
+fn a_definition_that_depends_on_a_broken_one_is_reported_not_guessed() {
+    // `f` cannot be made, so `g(x) = f(x) + 1` must be *absent* rather than
+    // built against a table without `f` — which would read as `f·x + 1`.
+    let field = document(&["f(x) = x+", "g(x) = f(x)+1"]);
+    let harvest = field.harvest();
+    assert!(harvest.definitions.get("f").is_none());
+    assert!(
+        harvest.definitions.get("g").is_none(),
+        "g was built against a missing f: {:?}",
+        harvest.definitions.get("g")
+    );
+    let names: Vec<&String> = harvest.problems.iter().map(|(name, _)| name).collect();
+    assert!(names.contains(&&String::from("g")), "{:?}", harvest.problems);
+}
+
+#[test]
+fn a_space_before_the_bracket_is_still_a_call() {
+    // Spaces are layout. `a(x) = b (x)` above `b` must resolve to `b`, not to the
+    // product `b·x`.
+    let field = document(&["a(x) = b (x)", "b(x) = x^2", "a(3)"]);
+    let harvest = field.harvest();
+    assert!(harvest.problems.is_empty(), "{:?}", harvest.problems);
+    let lines = field.build_lines_with(&harvest.definitions).expect("readable");
+    assert_eq!(lines[0].to_string(), "9");
+}
+
+#[test]
+fn only_the_names_in_a_cycle_are_called_recursive() {
+    // `d` merely uses a cycle; telling the user "d cannot be defined in terms of
+    // itself" would be a false statement about their document.
+    let field = document(&["a(x) = b(x)", "b(x) = a(x)", "d(x) = a(x)"]);
+    let harvest = field.harvest();
+    let why = |name: &str| {
+        harvest
+            .problems
+            .iter()
+            .find(|(problem, _)| problem == name)
+            .map(|(_, error)| error.clone())
+    };
+    assert!(matches!(why("a"), Some(canlab_input::DefineError::Recursive(_))));
+    assert!(matches!(why("b"), Some(canlab_input::DefineError::Recursive(_))));
+    assert!(
+        matches!(why("d"), Some(canlab_input::DefineError::Unreadable(_))),
+        "{:?}",
+        harvest.problems
+    );
+}
+
+#[test]
+fn a_blank_line_does_not_break_reading() {
+    let field = document(&["x+1", ""]);
+    let lines = field.build_lines_with(&canlab_input::Definitions::default());
+    assert_eq!(lines.map(|lines| lines.len()), Ok(1));
+}
+
