@@ -665,6 +665,32 @@ fn a_run_of_letters_and_digits_is_a_product() {
 }
 
 #[test]
+fn a_leading_minus_is_a_sign_and_not_an_empty_term() {
+    // A sign with nothing before it is unary. This used to make the whole
+    // expression unreadable ("the field has an empty slot"), which is why
+    // `e^{-x^2}` could be typed but never evaluated.
+    assert!(typed("-x").to_expr().is_some());
+    assert!(typed("-1").to_expr().is_some());
+    assert!(typed("e^{-x^2}").to_expr().is_some());
+    assert!(typed("e^(-x^2").to_expr().is_some());
+    // Canonical form sorts the terms, so the constant comes first.
+    assert_eq!(typed("x+-1").to_expr().unwrap().to_string(), "-1 + x");
+    assert_eq!(typed("x--y").to_expr().unwrap().to_string(), "x + y");
+    // A bare sign on its own is still incomplete.
+    assert_eq!(typed("-").build_expr(), Err(canlab_input::ToExprError::EmptySlot));
+}
+
+#[test]
+fn a_unit_marker_is_notation_and_the_number_still_reads() {
+    // `80°` is a perfectly good thing to write in an exam answer. The degree
+    // sign is not an operator, so it must not make the whole field unreadable.
+    assert_eq!(typed("80°").to_expr().unwrap().to_string(), "80");
+    assert_eq!(typed("80°").to_latex(), "80°", "the sign stays in the LaTeX");
+    assert!(typed("5%").to_expr().is_some());
+    assert!(typed("1/2 + 30°").to_expr().is_some());
+}
+
+#[test]
 fn enter_commits_a_half_typed_command_instead_of_breaking_the_line() {
     // `\bar` then Enter must be the accent, with the cursor in its argument —
     // not an accent *and* a new line.

@@ -51,7 +51,10 @@ impl std::error::Error for ToExprError {}
 /// Translate a row, or explain why not.
 pub fn build(row: &Row) -> Result<Expr, ToExprError> {
     // Spaces are layout, not algebra.
-    let nodes: Vec<&Node> = row.iter().filter(|n| !is_space_node(n)).collect();
+    let nodes: Vec<&Node> = row
+        .iter()
+        .filter(|n| !is_space_node(n) && !is_unit_marker(n))
+        .collect();
     if nodes.is_empty() {
         return Err(ToExprError::EmptySlot);
     }
@@ -60,15 +63,18 @@ pub fn build(row: &Row) -> Result<Expr, ToExprError> {
     let mut negative = false;
     for node in nodes {
         match node {
-            Node::Text(s) if s == "+" => {
-                terms.push(signed(&current, negative)?);
-                current.clear();
-                negative = false;
-            }
-            Node::Text(s) if s == "-" => {
-                terms.push(signed(&current, negative)?);
-                current.clear();
-                negative = true;
+            Node::Text(s) if s == "+" || s == "-" => {
+                let sign_negative = s == "-";
+                if current.is_empty() {
+                    // A sign with nothing before it is a *unary* sign for the
+                    // term that follows: `-x` inside a superscript, or the `-1`
+                    // in `x+-1`. Toggling is what makes `x--y` read as `x + y`.
+                    negative ^= sign_negative;
+                } else {
+                    terms.push(signed(&current, negative)?);
+                    current.clear();
+                    negative = sign_negative;
+                }
             }
             _ => current.push(node.clone()),
         }
@@ -79,6 +85,16 @@ pub fn build(row: &Row) -> Result<Expr, ToExprError> {
 
 fn is_space_node(node: &Node) -> bool {
     matches!(node, Node::Text(s) if s.trim().is_empty())
+}
+
+/// Unit markers: `80°`, `5 %`, `3 ‰`.
+///
+/// They are part of the *notation* — they stay in the document's LaTeX and in
+/// what gets printed — but they are not algebra, so the value reader steps over
+/// them. No scaling is applied: `80°` reads as the number 80, and converting it
+/// to radians is the caller's business, not the editor's.
+pub fn is_unit_marker(node: &Node) -> bool {
+    matches!(node, Node::Text(marker) if matches!(marker.as_str(), "°" | "%" | "‰"))
 }
 
 fn product(row: &Row) -> Result<Expr, ToExprError> {
