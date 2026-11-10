@@ -480,6 +480,68 @@ mod tests {
     }
 
     #[test]
+    fn a_contradiction_reached_through_substitution_is_not_a_solution() {
+        // `x = 1` and `x = 2` both have a single unknown, so substitution takes
+        // both and no matrix is ever built. The check for a leftover equation
+        // used to ask only "has it any variables?" — so this returned `x = 1`.
+        let equations = vec![
+            canlab_core::add(vec![x(), int(-1)]),
+            canlab_core::add(vec![x(), int(-2)]),
+        ];
+        let vars = [SymbolId::intern("x")];
+        assert_eq!(NativeSolver.solve_system(&equations, &vars), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn a_contradiction_in_an_overdetermined_system_is_found_too() {
+        // Substitution peels `2x = 5` first, then `x + y = 3`, and the third
+        // equation only reveals the contradiction once it is a number.
+        let equations = vec![
+            canlab_core::add(vec![mul(vec![int(2), x()]), int(-5)]),
+            canlab_core::add(vec![x(), y(), int(-3)]),
+            canlab_core::add(vec![x(), mul(vec![int(-1), y()]), int(-1)]),
+        ];
+        let vars = [SymbolId::intern("x"), SymbolId::intern("y")];
+        assert_eq!(NativeSolver.solve_system(&equations, &vars), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn a_leftover_that_does_hold_is_a_solution() {
+        // The same overdetermined shape as the contradiction above, but
+        // consistent: 2x = 4, x + y = 3, x − y = 1 is x = 2, y = 1.
+        let equations = vec![
+            canlab_core::add(vec![mul(vec![int(2), x()]), int(-4)]),
+            canlab_core::add(vec![x(), y(), int(-3)]),
+            canlab_core::add(vec![x(), mul(vec![int(-1), y()]), int(-1)]),
+        ];
+        let vars = [SymbolId::intern("x"), SymbolId::intern("y")];
+        let assignments = NativeSolver
+            .solve_system(&equations, &vars)
+            .expect("a consistent overdetermined system");
+        assert_eq!(assignments.len(), 2, "{assignments:?}");
+        for (variable, value) in assignments {
+            let expected = if variable.as_str() == "x" { "2" } else { "1" };
+            assert_eq!(value.to_string(), expected, "{}", variable.as_str());
+        }
+    }
+
+    #[test]
+    fn a_leftover_with_a_function_is_declined_not_guessed() {
+        // `cos x` at the found value is not a number this backend can evaluate
+        // exactly, so the honest answer is a decline, not "0 = cos 1".
+        let cosine = canlab_core::ExprNode::fn_raw(SymbolId::intern("cos"), vec![x()]);
+        let equations = vec![
+            canlab_core::add(vec![x(), int(-1)]),
+            canlab_core::add(vec![cosine, canlab_core::ratio(-1, 2)]),
+        ];
+        let vars = [SymbolId::intern("x")];
+        assert_eq!(
+            NativeSolver.solve_system(&equations, &vars),
+            Err(SolverError::NotImplemented)
+        );
+    }
+
+    #[test]
     fn a_constant_expression_is_read_exactly() {
         // `pi` has no exact rational value, but it is a number, not a symbol.
         assert!(constant(&sym("pi")).is_some());
