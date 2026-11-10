@@ -1125,7 +1125,11 @@ fn plot_equations(
                 }
             }
         }
-        if low_x < high_x && low_y < high_y {
+        // A curve's bounding box can be degenerate or absurd (a pole, a failed
+        // sample); fitting to that is how the range once jumped to -163.
+        let sane = low_x.is_finite() && high_x.is_finite() && low_y.is_finite() && high_y.is_finite();
+        let reasonable = (high_x - low_x) < 1.0e6 && (high_y - low_y) < 1.0e6;
+        if sane && reasonable && low_x < high_x && low_y < high_y {
             let pad = |low: f64, high: f64| {
                 let margin = ((high - low) * 0.12).max(0.5);
                 (low - margin, high + margin)

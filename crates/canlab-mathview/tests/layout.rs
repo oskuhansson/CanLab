@@ -634,3 +634,16 @@ fn egui_integration_exists_without_a_window() {
     let _show: fn(&mut egui::Ui, &mut MathField, &Style) -> egui::Response =
         canlab_mathview::MathView::show;
 }
+
+#[test]
+fn a_prime_is_raised_like_a_superscript() {
+    // On the baseline the prime reads as a quotation mark: thin, low, easy to
+    // miss. It belongs above the baseline, at script size.
+    let mut field = MathField::new();
+    field.type_str("f'");
+    let list = layout(&field);
+    let prime = text(&list, "\u{2032}");
+    let base = text(&list, "f");
+    assert!(prime.pos.y < base.pos.y, "the prime sits above the baseline");
+    assert!(prime.size < base.size, "and is set smaller than the base");
+}

@@ -257,10 +257,17 @@ impl CasApp {
                 self.expr = Some(expr);
             }
             Err(error) => {
-                self.error = Some(format!(
-                    "This expression cannot be read yet: {}.",
+                // `System` only means "more than one line"; the line that
+                // actually failed has a better reason, so ask it.
+                let reason = if matches!(error, ToExprError::System) {
+                    match self.field.build_equations() {
+                        Err(inner) => friendly_error(&inner),
+                        Ok(_) => friendly_error(&error),
+                    }
+                } else {
                     friendly_error(&error)
-                ));
+                };
+                self.error = Some(format!("This expression cannot be read yet: {reason}."));
                 self.free_vars.clear();
                 self.result_plain.clear();
                 self.result_latex.clear();

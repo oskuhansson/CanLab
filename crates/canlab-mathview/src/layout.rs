@@ -670,6 +670,12 @@ impl Layout<'_> {
 
     fn node(&self, node: &Node, size: f32) -> Frag {
         match node {
+            // A prime is a *mark*, not a character: on the baseline it reads as a
+            // quotation mark, which is what made `f'(x)` look like `f'(x)` with a
+            // speck. Raised to script height it is a differential.
+            Node::Text(text) if text.trim() == "'" || text.trim() == "\u{2032}" => {
+                self.prime(size)
+            }
             Node::Text(text) => self.text(text, size),
             Node::Sym(sym) => self.sym(sym, size),
             Node::Frac { num, den } => self.frac(num, den, size),
@@ -918,6 +924,16 @@ impl Layout<'_> {
     }
 
     // -- glyphs -------------------------------------------------------------
+
+    /// A prime: a small mark raised like a superscript.
+    ///
+    /// Duty calls it a "prime" and LaTeX writes `'`, but on the baseline the
+    /// glyph is a quotation mark — thin, low, and easy to miss next to an `f`.
+    /// Raised to script height it reads as the differential it is.
+    fn prime(&self, size: f32) -> Frag {
+        let script = self.style.script_size(size);
+        self.glyph("\u{2032}", script, -self.style.script_raise(size), false)
+    }
 
     /// A single glyph whose baseline sits `dy` below this fragment's baseline.
     fn glyph(&self, text: &str, size: f32, dy: f32, italic: bool) -> Frag {
