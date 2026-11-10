@@ -18,6 +18,18 @@
 //! form it. Multiplying both equations or the coordinates by a constant therefore
 //! leaves the crossing unchanged.
 //!
+//! # Tangencies
+//!
+//! A near tangency is not an exact singular point: its Jacobian is invertible and
+//! the first-order distance `|f| / |∇f|` is much smaller than the actual distance
+//! to the touch, because the zero set curves away. This module has no second-order
+//! test, so it can report a point near a tangency as a meeting rather than refuse
+//! it. For the unit circle and `y = 1`, the guess `(0.05, 0.95)` returns a point
+//! about 2.4×10⁻⁵ from the touch. An exactly singular Jacobian is still refused.
+//! A fixed residual-noise acceptance bound does not separate the two at every
+//! scale: Newton can reach a point whose residual is rounding noise while it is
+//! still off the touching curves.
+//!
 //! # Why it is a separate module
 //!
 //! Nothing here knows about egui, curves or colours: two closures, a pair of
@@ -103,7 +115,9 @@ fn invertible_determinant(dxx: f64, dxy: f64, dgx: f64, dgy: f64) -> Option<f64>
 /// `|f| / |∇f|` is the first-order distance from the point to `f = 0`. Comparing
 /// that distance with the coordinate scale makes the test independent of both
 /// the function's units and the coordinate's units. A zero gradient gives no
-/// distance at all, so it is refused rather than read as a zero distance.
+/// distance at all, so it is refused rather than read as a zero distance. Near a
+/// tangency the estimate is optimistic, so a point accepted here can be near the
+/// touch rather than on it; see the module note.
 fn near_root(fx: f64, gx: f64, dxx: f64, dxy: f64, dgx: f64, dgy: f64, x: f64, y: f64) -> bool {
     let coordinate_scale = 1.0_f64.max(x.abs()).max(y.abs());
     let f_gradient = dxx.abs() + dxy.abs();
@@ -353,23 +367,24 @@ mod tests {
     }
 
     #[test]
-    fn a_tangency_is_not_reported_as_a_crossing() {
-        // x² + y² = 1 touches y = 1 at exactly (0, 1): the Jacobian is singular
-        // there, and inventing a nearby point would be worse than saying nothing.
+    fn a_zero_function_is_not_reported_as_a_crossing() {
+        // The zero function is zero on the whole plane; it is not a tangent
+        // line. Its gradient is zero everywhere, so there is no isolated point
+        // where it meets the circle.
         let circle = |x: f64, y: f64| x * x + y * y - 1.0;
-        let tangent = |_x: f64, _y: f64| 0.0;
-        let refined = refine(circle, tangent, (0.05, 0.95));
+        let zero = |_x: f64, _y: f64| 0.0;
+        let refined = refine(circle, zero, (0.05, 0.95));
         assert!(refined.is_none(), "got {refined:?}");
     }
 
     #[test]
-    fn a_tangency_at_its_touch_point_is_not_reported_as_a_crossing() {
-        // Starting exactly at (0, 1) makes both residuals zero, but the
-        // Jacobian is still singular. Zero residuals do not make a tangency a
-        // crossing.
+    fn zero_residuals_with_a_zero_jacobian_are_not_a_crossing() {
+        // Starting at (0, 1) makes both residuals zero, but the zero function
+        // still has a singular Jacobian. Zero residuals do not turn a
+        // degenerate zero set into an isolated crossing.
         let circle = |x: f64, y: f64| x * x + y * y - 1.0;
-        let tangent = |_x: f64, _y: f64| 0.0;
-        let refined = refine(circle, tangent, (0.0, 1.0));
+        let zero = |_x: f64, _y: f64| 0.0;
+        let refined = refine(circle, zero, (0.0, 1.0));
         assert!(refined.is_none(), "got {refined:?}");
     }
 
@@ -394,6 +409,29 @@ mod tests {
         // this is the degenerate singular case rather than a relative pass.
         let refined = refine(|_x: f64, _y: f64| 1.0, |_x: f64, _y: f64| 2.0, (0.0, 0.0));
         assert!(refined.is_none(), "got {refined:?}");
+    }
+
+    #[test]
+    fn a_shallow_but_real_crossing_is_accepted() {
+        // y = 0 meets x² + y² = 1 at (1, 0) at a right angle. The guess is close
+        // to the crossing, and the first-order distance is accurate there.
+        let circle = |x: f64, y: f64| x * x + y * y - 1.0;
+        let line = |_x: f64, y: f64| y;
+        let point = refine(circle, line, (0.99, 0.01)).expect("crosses at (1, 0)");
+        assert!((point.x - 1.0).abs() < 1e-9, "{point:?}");
+        assert!(point.y.abs() < 1e-9, "{point:?}");
+    }
+
+    #[test]
+    fn a_small_angle_crossing_is_accepted() {
+        // Two real lines crossing at (0, 0) with a 0.001 radian angle. The
+        // Jacobian is badly conditioned but not singular, and the crossing is
+        // real; the positional test accepts it.
+        let first = |_x: f64, y: f64| y;
+        let second = |x: f64, y: f64| y - 0.001 * x;
+        let point = refine(first, second, (1.0, 0.0)).expect("crosses at (0, 0)");
+        assert!(point.x.abs() < 1e-9, "{point:?}");
+        assert!(point.y.abs() < 1e-9, "{point:?}");
     }
 
     #[test]
@@ -584,6 +622,17 @@ mod tests {
         let near = vec![vec![[root - 5.0e-4, root]], vec![[root + 5.0e-4, root]]];
         let found = locate(vertical, horizontal, &near, 1.0e-4);
         assert_eq!(found.len(), 1, "{found:?}");
+    }
+
+    #[test]
+    fn a_tangent_line_at_a_large_radius_is_not_reported_as_a_crossing() {
+        // The radius-10⁴ circle and its tangent y = 10⁴, from a guess well
+        // below the touch. The current tree refuses this one; the test keeps it
+        // refused.
+        let circle = |x: f64, y: f64| x * x + y * y - 1.0e8;
+        let tangent = |_x: f64, y: f64| y - 1.0e4;
+        let refined = refine(circle, tangent, (5.0, 95.0));
+        assert!(refined.is_none(), "got {refined:?}");
     }
 
     #[test]
