@@ -1,4 +1,4 @@
-﻿# Normalise line endings: the Linux CI and the Rust toolchain both prefer LF,
+# Normalise line endings: the Linux CI and the Rust toolchain both prefer LF,
 # and without this every file shows as rewritten on the next checkout.
 * text=auto eol=lf
 
