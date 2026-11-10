@@ -37,10 +37,10 @@ different shell (Bevy, say) a one-crate port rather than a rewrite.
 
 | Capability | Behaviour |
 |---|---|
-| Definitions | `f(x) = x² + 1` defines a name for the whole document, resolved in dependency order; `f(3)` substitutes, `f'(x)` and `f''(x)` differentiate, cycles are refused. |
+| Definitions | `f(x) = x² + 1` defines a name for the whole document, resolved in dependency order; `f(3)` substitutes including built-in calls, `f'(x)` and `f''(x)` differentiate, cycles are refused, and a definition that depends on a broken one is reported. A space before the bracket is still a call. |
 | Undo and redo | A 100-snapshot ring with 400 ms typing coalescing; Ctrl+Z, Ctrl+Shift+Z or Ctrl+Y, and buttons in the editor header. |
 | Parameters | A variable that is not on an axis gets a drag control in the plot overlay, default 1. Automatic axis choice prefers the familiar axis names. |
-| Systems | Linear systems beyond 2×2 by exact Gaussian elimination: a point, no solution, or a declined underdetermined system, never one point from a family. |
+| Systems | Linear systems beyond 2×2 by exact native Gaussian elimination, including when SymPy declines a system: a point, no solution, or a declined underdetermined system, never one point from a family. |
 | Plot | Drag to pan, scroll to zoom about the pointer; intersections are Newton-refined, drawn as dots and named on hover; the view fits them. |
 | Sessions | The document, palette, plot window, axes and parameter values are saved 1.2 s after the last change, in a versioned text format. |
 | Editor | Ctrl+C copies the document as LaTeX, Ctrl+V pastes; history entries load back; the gutter marks the caret's line. |
@@ -74,8 +74,8 @@ cargo run -p canlab-cli -- eval "2x + 3x"
 cargo run -p canlab-cli -- tex  "\frac{1}{2} + \frac{1}{3}"
 cargo run -p canlab-cli -- plot "\sin x" -o sin.svg --xmin 0 --xmax 6.28
 cargo run -p canlab-cli -- int  "x^2" -v x
-cargo run -p canlab-cli -- solver          # what SymPy was found, or what is missing
-cargo run -p canlab-cli -- solver --probe  # start the worker and round-trip a request
+cargo run -p canlab-cli -- solver          # what discovery found, or what is missing
+cargo run -p canlab-cli -- solver --probe  # start the worker, import SymPy, answer one request
 cargo run -p canlab-cli        # REPL
 ```
 
@@ -93,11 +93,11 @@ These choose a backend, a layout or a file without changing the code:
 | Variable | Effect |
 |---|---|
 | `CANLAB_PALETTE` | palette for this run, for example `CANLAB_PALETTE=Nord` |
-| `CANLAB_SOLVER` | `native` forces the native backend even when SymPy is found |
+| `CANLAB_SOLVER` | `native` forces the native backend; otherwise SymPy is used only after its probe request succeeds |
 | `CANLAB_SESSION` | session file path, or `none` to turn saving and loading off |
 | `CANLAB_OPEN` | document to open, lines separated by a vertical bar |
 | `CANLAB_WORKSPACE` | preset layout: `editing`, `solving` or `plotting` |
-| `CANLAB_PYTHON`, `CANLAB_WORKER` | interpreter and `worker.py` location; see [docs/sympy.md](docs/sympy.md) |
+| `CANLAB_PYTHON`, `CANLAB_WORKER` | interpreter and `worker.py` location; an existing interpreter path may contain spaces; see [docs/sympy.md](docs/sympy.md) |
 | `CANLAB_SHOT` | write one frame to a BMP; needs a `--features glow` build |
 
 ---
@@ -111,10 +111,15 @@ bigint later is contained to `number.rs`.
 
 **The solver has two backends, and only one of them has run here.** The native
 backend is always available: exact linear and quadratic equations, polynomial
-calculus, and Gaussian elimination for systems. SymPy is used when it is found:
-`CANLAB_SOLVER=native` forces native. Discovery and the worker protocol are
-tested in memory, but there is no Python on this machine, so the worker has
-never imported SymPy here. `canlab solver --probe` is the check, and
+calculus, and Gaussian elimination for systems. SymPy is used only after one probe
+request comes back: discovery finds an interpreter and `worker.py`, giving each
+candidate 700 ms, but `open()` starts the worker and asks a trivial simplification
+before the panel says SymPy, so a Python without the `sympy` package falls back to
+native and the note explains why. `CANLAB_SOLVER=native` forces native. If SymPy
+declines a system, native elimination answers it; a fatal SymPy failure is retried
+once on native with the panel saying so. Discovery and the worker protocol are
+tested in memory, but there is no Python on this machine, so the worker has never
+imported SymPy here. `canlab solver --probe` is the check, and
 [docs/sympy.md](docs/sympy.md) is the packaging note.
 
 **A declined solve is a real answer.** When the backend cannot do something it

@@ -8,8 +8,9 @@ CanLab has two solvers behind one trait:
 | **SymPy** | Python 3 and the `sympy` package | general simplify, integrate, limit, series, and `solve` beyond polynomials |
 
 The native backend is always available, so the app never depends on a working
-Python. SymPy is found **when it is there**, and the Variables panel says which one
-is in use.
+Python. SymPy is found when Python and `worker.py` are there, then proved with one
+trivial request before the Variables panel says SymPy. If that request fails, the
+panel stays on native and its note explains why.
 
 ## Installing it
 
@@ -33,7 +34,7 @@ for a project at this scale the honest answer is "install Python".
 > `python.exe` and `python3.exe` in `%LOCALAPPDATA%\Microsoft\WindowsApps` are
 > Microsoft Store *aliases*, not interpreters, until the Store app is installed.
 > They take seconds to fail, which is why CanLab tries `py -3` first and gives each
-> candidate at most 400 ms to answer `--version`.
+> candidate at most 700 ms to answer `--version`.
 
 **macOS**
 
@@ -56,15 +57,15 @@ Two environment variables skip the search entirely:
 
 | variable | meaning |
 |---|---|
-| `CANLAB_PYTHON` | the interpreter, with any launcher arguments: `py -3`, `/opt/py/bin/python3` |
+| `CANLAB_PYTHON` | the interpreter or command line: `py -3`, `/opt/py/bin/python3`, `C:\Program Files\Python312\python.exe`. An existing full path is taken whole, so spaces are fine. |
 | `CANLAB_WORKER` | the path to `worker.py`, when it is not beside the executable or in the checkout |
 
 And one chooses the backend:
 
 | variable | meaning |
 |---|---|
-| `CANLAB_SOLVER=native` | always use the native backend, even if SymPy is installed |
-| `CANLAB_SOLVER` unset | use SymPy when it is found, native otherwise |
+| `CANLAB_SOLVER=native` | always use the native backend, even when SymPy is installed and answers |
+| `CANLAB_SOLVER` unset | use SymPy when it is found and answers its probe, native otherwise |
 
 ## Checking it
 
@@ -73,14 +74,22 @@ canlab solver            # what was found, or exactly what is missing
 canlab solver --probe    # start the worker and make it answer one question
 ```
 
-`--probe` is the difference between "the files exist" and "it works": it starts
-the worker, which imports SymPy, and round-trips a request through the real
-protocol. Its exit status is non-zero when that fails, so it can be used in a
-script.
+Discovery only proves that an interpreter runs and `worker.py` exists, not that
+SymPy is installed. `open()` — used by the GUI and by `--probe` — starts the
+worker and sends one trivial `simplify`; only an answer counts. A Python without
+the `sympy` package therefore falls back to native before any real request is
+made. `canlab solver --probe` performs the same check from the command line and
+prints the answer; its exit status is non-zero when that fails, so it can be used
+in a script.
+
+`canlab solver` prints what discovery found; when it finds both halves it says to
+run `--probe`, because finding the files is not proof that SymPy imports.
 
 The GUI makes the same choice on its own worker thread, so a slow search never
-blocks a frame. If SymPy is missing, the panel still says *native* and the note
-explains why — a hover away, not a modal.
+blocks a frame. If discovery or the probe fails, the panel says *native* and the
+note explains why — a hover away, not a modal. If SymPy later declines a system,
+native elimination answers that request; if the worker dies, the request is
+retried once on native and the panel says so.
 
 ## What the worker is
 
@@ -106,6 +115,7 @@ explains why — a hover away, not a modal.
 The protocol is tested in memory: `session.rs` is generic over `BufRead`/`Write`,
 so `sympy.rs`'s tests drive the whole request/response path from a `Cursor` with no
 interpreter anywhere near it. Discovery is tested for both halves being present and
-for each way it can be missing. The worker itself is the one part that cannot be
-tested on a machine without Python — which is exactly why `canlab solver --probe`
-exists, so that the first thing a user does is confirm it.
+for each way it can be missing. The worker itself, and the probe against a real
+interpreter, are the parts that cannot be tested on a machine without Python —
+which is exactly why `canlab solver --probe` exists, so that the first thing a
+user does is confirm it.
