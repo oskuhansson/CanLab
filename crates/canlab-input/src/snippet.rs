@@ -199,7 +199,12 @@ impl Parser {
                 if !run.is_empty() {
                     out.push(Node::text(std::mem::take(&mut run)));
                 }
-                out.push(Node::text(c.to_string()));
+                // `*` is the multiplication sign, as it is on the keyboard.
+                if c == '*' {
+                    out.push(Node::sym("\\cdot"));
+                } else {
+                    out.push(Node::text(c.to_string()));
+                }
                 self.pos += 1;
             }
         }

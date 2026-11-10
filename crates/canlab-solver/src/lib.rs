@@ -39,11 +39,13 @@ use canlab_core::{Expr, SymbolId};
 
 pub mod json;
 pub mod mock;
+pub mod native;
 pub mod session;
 pub mod sympy;
 
 pub use json::{decode, decode_array, encode};
 pub use mock::MockSolver;
+pub use native::NativeSolver;
 pub use session::Session;
 pub use sympy::SympyWorker;
 

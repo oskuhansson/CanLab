@@ -80,6 +80,17 @@ struct CasApp {
     error: Option<String>,
     /// The curves currently plotted: one for y = f(x), one per equation for a system.
     curves: Vec<Curve>,
+    /// The document's equations — the `left` and optional `right` of each line's
+    /// `=`. A lone equation is one entry; a system is several. Empty when the
+    /// document is a plain expression.
+    equations: Vec<(Expr, Option<Expr>)>,
+    /// Which variable is drawn along the horizontal axis. Any variable can be:
+    /// `i² + j² = 1` plots with `i` on x and `j` on y just as well as `x² + y² = 1`
+    /// does. `None` when the document has no variables at all.
+    x_axis: Option<SymbolId>,
+    /// Which variable is drawn vertically. `None` for a one-variable document,
+    /// where the curve is `y = f(x)` and only the horizontal axis is a variable.
+    y_axis: Option<SymbolId>,
     y_range: (f64, f64),
     status: String,
     solve: SolveState,
@@ -107,6 +118,9 @@ impl CasApp {
             result_plain: String::new(),
             error: None,
             curves: Vec::new(),
+            equations: Vec::new(),
+            x_axis: None,
+            y_axis: None,
             y_range: (-1.0, 1.0),
             status: String::from("ready"),
             solve: SolveState::Idle,
@@ -142,15 +156,21 @@ impl CasApp {
             return;
         }
 
-        // A system is several equations held together. There is no single
-        // expression to hand the algebra engine, so the result card shows the
-        // system itself and the actions stay disabled until the backend grows a
-        // system solver.
-        if self.field.is_system() {
+        // An *equation* is a first-class thing here, whether or not it is part of
+        // a system: `x + y = 3` on its own line is a perfectly good object to
+        // plot and to solve. `build_expr` refuses relations by design (a relation
+        // is not a value), so equations are read separately and kept on the app,
+        // and only a plain expression goes into `self.expr`.
+        let equations = self.field.build_equations();
+        let has_relation = equations
+            .as_ref()
+            .map(|equations| equations.iter().any(|(_, right)| right.is_some()))
+            .unwrap_or(false);
+        if has_relation {
             self.expr = None;
             self.free_vars.clear();
             self.result_latex = self.field.to_latex();
-            match self.field.build_equations() {
+            match equations {
                 Ok(equations) => {
                     let mut vars = Vec::new();
                     for (lhs, rhs) in &equations {
@@ -165,12 +185,16 @@ impl CasApp {
                         }
                     }
                     self.free_vars = vars;
+                    self.choose_axes();
                     let named = equations.iter().filter(|(_, rhs)| rhs.is_some()).count();
-                    self.result_plain = match named {
-                        0 => format!("system of {} lines", equations.len()),
-                        n if n == equations.len() => format!("system of {n} equations"),
-                        n => format!("system: {n} of {} lines are equations", equations.len()),
+                    let lines = equations.len();
+                    self.result_plain = match (named, lines) {
+                        (0, _) => String::from("an empty document"),
+                        (1, 1) => String::from("an equation"),
+                        (n, m) if n == m => format!("system of {n} equations"),
+                        (n, m) => format!("system: {n} of {m} lines are equations"),
                     };
+                    self.equations = equations;
                 }
                 Err(error) => {
                     self.error = Some(format!(
@@ -178,16 +202,19 @@ impl CasApp {
                         friendly_error(&error)
                     ));
                     self.result_plain.clear();
+                    self.equations.clear();
                 }
             }
             return;
         }
+        self.equations.clear();
 
         match self.field.build_expr() {
             Ok(expr) => {
                 let mut vars = Vec::new();
                 free_symbols(&expr, &mut vars);
                 self.free_vars = vars;
+                    self.choose_axes();
                 self.result_plain = node(&expr).to_string();
                 self.result_latex = to_latex(&expr);
                 self.expr = Some(expr);
@@ -209,6 +236,45 @@ impl CasApp {
         panels::build_curve(self);
     }
 
+    /// Is there anything the plot panel could draw?
+    ///
+    /// An equation is plottable even though it is not an expression — that is the
+    /// whole point of the implicit tracer — so this asks the document, not
+    /// `self.expr`.
+    fn can_plot(&self) -> bool {
+        self.expr.is_some() || !self.equations.is_empty()
+    }
+
+    /// Keep the axis choice coherent with the document.
+    ///
+    /// Called after every re-parse. A variable that no longer exists cannot stay
+    /// on an axis, and a document with two variables should get both axes filled
+    /// without anyone having to choose. `x` and `y` win when they exist; `i`/`j`
+    /// and the other common pairs are the fallbacks, so `i² + j² = 1` plots
+    /// straight away.
+    fn choose_axes(&mut self) {
+        let has = |variable: &SymbolId| self.free_vars.contains(variable);
+        let pick = |names: &[&str], avoid: Option<SymbolId>| {
+            names
+                .iter()
+                .map(|name| SymbolId::intern(name))
+                .find(|candidate| has(candidate) && Some(*candidate) != avoid)
+        };
+        if !self.x_axis.is_some_and(|axis| has(&axis)) {
+            self.x_axis = pick(&["x", "i", "t", "u", "s"], None)
+                .or_else(|| self.free_vars.first().copied());
+        }
+        if !self.y_axis.is_some_and(|axis| has(&axis)) {
+            self.y_axis = pick(&["y", "j", "u"], self.x_axis)
+                .or_else(|| {
+                    self.free_vars
+                        .iter()
+                        .copied()
+                        .find(|variable| Some(*variable) != self.x_axis)
+                });
+        }
+    }
+
     fn start_simplify(&mut self) {
         self.start_job(JobKind::Simplify);
     }
@@ -224,12 +290,41 @@ impl CasApp {
     fn start_job(&mut self, kind: JobKind) {
         // Send the field's own tree. Re-parsing `to_latex()` here would be a
         // second, subtly different interpretation of what the user built.
-        let expr = match self.field.build_expr() {
-            Ok(expr) => expr,
-            Err(error) => {
-                self.status = format!("nothing to send: {}", friendly_error(&error));
-                return;
-            }
+        //
+        // Solve wants an equation `left − right = 0`, not the bare left side, so
+        // the relation is folded in before the expression leaves the editor.
+        let equation = self.field.build_equations().ok().and_then(|equations| {
+            equations
+                .into_iter()
+                .find(|(_, right)| right.is_some())
+                .map(|(left, right)| {
+                    canlab_core::add(vec![
+                        left,
+                        canlab_core::mul(vec![canlab_core::int(-1), right.expect("checked")]),
+                    ])
+                })
+        });
+        let expr = match kind {
+            JobKind::Solve => match equation.or_else(|| self.field.build_expr().ok()) {
+                Some(expr) => expr,
+                None => {
+                    let reason = self
+                        .field
+                        .build_expr()
+                        .err()
+                        .map(|error| friendly_error(&error))
+                        .unwrap_or_else(|| String::from("no equation to solve"));
+                    self.status = format!("nothing to send: {reason}");
+                    return;
+                }
+            },
+            _ => match self.field.build_expr() {
+                Ok(expr) => expr,
+                Err(error) => {
+                    self.status = format!("nothing to send: {}", friendly_error(&error));
+                    return;
+                }
+            },
         };
         let (label, op) = match kind {
             JobKind::Simplify => (String::from("Simplify"), JobOp::Simplify(expr)),
@@ -603,6 +698,53 @@ mod tests {
         for _ in 0..2 {
             draw_a_frame(&mut app, &ctx);
         }
+    }
+
+    #[test]
+    fn any_variable_can_be_an_axis() {
+        // Nothing about the maths knows what the letters are called: `i² + j² = 1`
+        // is the same circle as `x² + y² = 1` and must plot without renaming.
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex("i^2+j^2=1").expect("a circle in i and j");
+        app.recompute();
+        assert_eq!(app.free_vars.len(), 2);
+        assert_eq!(
+            app.x_axis.map(|v| v.as_str().to_string()),
+            Some(String::from("i"))
+        );
+        assert_eq!(
+            app.y_axis.map(|v| v.as_str().to_string()),
+            Some(String::from("j"))
+        );
+        crate::panels::build_curve(&mut app);
+        assert_eq!(app.curves.len(), 1, "status: {}", app.status);
+    }
+
+    #[test]
+    fn swapping_the_axes_still_plots() {
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex("i^2+j^2=1").expect("a circle");
+        app.recompute();
+        app.x_axis = Some(SymbolId::intern("j"));
+        app.y_axis = Some(SymbolId::intern("i"));
+        crate::panels::build_curve(&mut app);
+        assert_eq!(app.curves.len(), 1, "status: {}", app.status);
+    }
+
+    #[test]
+    fn an_equation_with_an_unselected_third_variable_is_skipped() {
+        // Three variables cannot live on two axes; the plot says so instead of
+        // drawing something arbitrary.
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex("a*x+b*y=1").expect("an equation in four letters");
+        app.recompute();
+        crate::panels::build_curve(&mut app);
+        assert!(app.curves.is_empty());
+        assert!(
+            app.status.contains("skipped") || app.status.contains("no curve"),
+            "status: {}",
+            app.status
+        );
     }
 
     #[test]

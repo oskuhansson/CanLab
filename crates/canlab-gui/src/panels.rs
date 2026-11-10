@@ -108,8 +108,9 @@ fn editor_column(app: &mut CasApp, ui: &mut Ui) {
         );
     });
 
-    ui.add_space(9.0);
-    action_row(app, ui);
+    // The actions moved to the panels that show their answers: Solve and the
+    // simplifications live with the Variables panel, Plot with the plot itself.
+    // The editor is just the document.
 
     if let Some(error) = &app.error {
         ui.add_space(9.0);
@@ -289,34 +290,62 @@ fn handle_field_keys(app: &mut CasApp, ui: &mut Ui, response: &egui::Response) {
     }
 }
 
-fn action_row(app: &mut CasApp, ui: &mut Ui) {
+/// The buttons that act on the *document*, shown in the Variables panel because
+/// that is where their answers appear.
+fn solver_row(app: &mut CasApp, ui: &mut Ui) {
     ui.horizontal_wrapped(|ui| {
-        let enabled = app.expr.is_some();
         let size = vec2(92.0, 30.0);
+        let expression = app.expr.is_some();
+        let equation = !app.equations.is_empty();
         if ui
-            .add_enabled(enabled, Button::new("Simplify").min_size(size))
+            .add_enabled(expression, Button::new("Simplify").min_size(size))
+            .on_hover_text("Simplify the expression above")
             .clicked()
         {
             app.start_simplify();
         }
         if ui
-            .add_enabled(enabled, Button::new("Integrate").min_size(size))
+            .add_enabled(expression, Button::new("Integrate").min_size(size))
+            .on_hover_text("Integrate the expression with respect to its variable")
             .clicked()
         {
             app.start_integrate();
         }
         if ui
-            .add_enabled(enabled, Button::new("Solve").min_size(size))
+            .add_enabled(equation, Button::new("Solve").min_size(size))
+            .on_hover_text("Solve an equation, or the first equation of a system")
             .clicked()
         {
             app.start_solve();
         }
+        if app.jobs.in_flight() > 0 {
+            ui.spinner();
+        }
+    });
+}
+
+/// The plot's own controls, in the plot panel: the button, which variables go on
+/// which axis, and the window it draws into. They belong together.
+fn plot_row(app: &mut CasApp, ui: &mut Ui) {
+    let mut axes_changed = false;
+    ui.horizontal_wrapped(|ui| {
+        let plottable = app.can_plot();
         let plot = Button::new(RichText::new("Plot").color(Color32::WHITE))
             .fill(ACCENT)
-            .min_size(size);
-        if ui.add_enabled(enabled, plot).clicked() {
+            .min_size(vec2(92.0, 28.0));
+        let response = ui.add_enabled(plottable, plot);
+        let response = if plottable {
+            response.on_hover_text("Plot the expression, or every equation in the document")
+        } else {
+            response.on_disabled_hover_text("Nothing to plot yet")
+        };
+        if response.clicked() {
             app.plot();
         }
+
+        ui.separator();
+        axes_changed |= axis_picker(app, ui, "x", Axis::Horizontal);
+        axes_changed |= axis_picker(app, ui, "y", Axis::Vertical);
 
         ui.separator();
         ui.label(RichText::new("x from").small());
@@ -330,11 +359,50 @@ fn action_row(app: &mut CasApp, ui: &mut Ui) {
         if range_changed && !app.curves.is_empty() {
             app.plot();
         }
-
-        if app.jobs.in_flight() > 0 {
-            ui.spinner();
-        }
     });
+    if axes_changed && !app.curves.is_empty() {
+        app.plot();
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Axis {
+    Horizontal,
+    Vertical,
+}
+
+/// One "which variable is this axis?" selector.
+///
+/// Any variable in the document can go on either axis, which is what makes
+/// `i² + j² = 1` plottable: nothing about the maths cares what the letters are
+/// called, only which one is horizontal.
+fn axis_picker(app: &mut CasApp, ui: &mut Ui, label: &str, axis: Axis) -> bool {
+    let current = match axis {
+        Axis::Horizontal => app.x_axis,
+        Axis::Vertical => app.y_axis,
+    };
+    let mut changed = false;
+    ui.label(RichText::new(label).small().strong());
+    let selected = current.map_or_else(|| String::from("—"), |v| v.as_str().to_string());
+    egui::ComboBox::from_id_salt(("axis", label))
+        .selected_text(RichText::new(selected).monospace().size(12.0))
+        .width(52.0)
+        .show_ui(ui, |ui| {
+            for variable in app.free_vars.clone() {
+                let is_current = current == Some(variable);
+                if ui
+                    .selectable_label(is_current, variable.as_str().to_string())
+                    .clicked()
+                {
+                    match axis {
+                        Axis::Horizontal => app.x_axis = Some(variable),
+                        Axis::Vertical => app.y_axis = Some(variable),
+                    }
+                    changed = true;
+                }
+            }
+        });
+    changed
 }
 
 fn result_card(app: &CasApp, ui: &mut Ui) {
@@ -464,6 +532,18 @@ pub fn palette(app: &mut CasApp, ui: &mut Ui) {
 
 pub fn variables(app: &mut CasApp, ui: &mut Ui) {
     ui.label(
+        RichText::new("SOLVER")
+            .small()
+            .strong()
+            .color(ui.visuals().weak_text_color()),
+    );
+    ui.add_space(4.0);
+    solver_row(app, ui);
+    ui.add_space(10.0);
+    ui.separator();
+    ui.add_space(8.0);
+
+    ui.label(
         RichText::new("FREE VARIABLES")
             .small()
             .strong()
@@ -551,7 +631,10 @@ pub fn variables(app: &mut CasApp, ui: &mut Ui) {
     }
 }
 
-pub fn plot(app: &CasApp, ui: &mut Ui) {
+pub fn plot(app: &mut CasApp, ui: &mut Ui) {
+    plot_row(app, ui);
+    ui.add_space(6.0);
+
     let size = ui.available_size();
     let width = size.x.max(80.0);
     let height = size.y.max(90.0);
@@ -783,9 +866,29 @@ pub fn build_curve(app: &mut CasApp) {
 }
 
 /// Trace every equation in the document as an implicit curve.
+///
+/// The two axes come from the document's variable list, so the letters are
+/// irrelevant: `i² + j² = 1` with `i` on x and `j` on y plots exactly the same
+/// circle as `x² + y² = 1` does. An equation with a third free variable cannot be
+/// drawn on two axes, so it is skipped rather than guessed at.
 fn plot_equations(app: &mut CasApp, equations: &[(canlab_core::Expr, Option<canlab_core::Expr>)]) {
-    let x = canlab_core::SymbolId::intern("x");
-    let y = canlab_core::SymbolId::intern("y");
+    let Some(horizontal) = app.x_axis else {
+        app.status = String::from("no variables to plot");
+        return;
+    };
+    let vertical = app.y_axis;
+    let mut variables = vec![horizontal];
+    if let Some(vertical) = vertical {
+        variables.push(vertical);
+    }
+    let axes_label = match vertical {
+        Some(vertical) => format!(
+            "{} → x, {} → y",
+            horizontal.as_str(),
+            vertical.as_str()
+        ),
+        None => format!("{} → x", horizontal.as_str()),
+    };
 
     // An equation has no preferred y range, so the window is square: the two
     // axes get the same span, which is also what makes a circle look round.
@@ -811,11 +914,16 @@ fn plot_equations(app: &mut CasApp, equations: &[(canlab_core::Expr, Option<canl
             ]),
             None => left.clone(),
         };
-        let Some(program) = canlab_core::Program::compile(&expression, &[x, y]) else {
+        let Some(program) = canlab_core::Program::compile(&expression, &variables) else {
             skipped += 1;
             continue;
         };
-        let curve = sample_implicit(|px, py| program.eval(&[px, py]), &options);
+        let curve = if variables.len() == 2 {
+            sample_implicit(|x, y| program.eval(&[x, y]), &options)
+        } else {
+            // One variable: the zero set is a set of vertical lines.
+            sample_implicit(|x, _| program.eval(&[x]), &options)
+        };
         if curve.segments.is_empty() {
             skipped += 1;
         } else {
@@ -826,9 +934,9 @@ fn plot_equations(app: &mut CasApp, equations: &[(canlab_core::Expr, Option<canl
 
     app.y_range = (y_min, y_max);
     app.status = match (plotted, skipped) {
-        (0, _) => String::from("no curve found in this window"),
-        (n, 0) => format!("{n} equation curve(s)"),
-        (n, s) => format!("{n} equation curve(s), {s} skipped"),
+        (0, _) => format!("no curve found in this window ({axes_label})"),
+        (n, 0) => format!("{n} equation curve(s), {axes_label}"),
+        (n, s) => format!("{n} equation curve(s), {s} skipped, {axes_label}"),
     };
 }
 

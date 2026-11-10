@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
 use canlab_core::{Expr, SymbolId};
-use canlab_solver::{MockSolver, Solver, SolverError};
+use canlab_solver::{NativeSolver, Solver, SolverError};
 
 /// What kind of operation produced a result. The app uses it to decide whether
 /// a solve result belongs in the Variables panel.
@@ -84,7 +84,7 @@ impl Jobs {
         let spawned = std::thread::Builder::new()
             .name(String::from("canlab-solver"))
             .spawn(move || {
-                let solver: Arc<dyn Solver> = Arc::new(MockSolver);
+                let solver: Arc<dyn Solver> = Arc::new(NativeSolver);
                 while let Ok(job) = job_rx.recv() {
                     if result_tx.send(run(&*solver, job)).is_err() {
                         break;
@@ -213,7 +213,7 @@ mod tests {
     #[test]
     fn integrating_x_squared_returns_the_antiderivative() {
         let result = run(
-            &MockSolver,
+            &NativeSolver,
             job(JobOp::Integrate(
                 pow(sym("x"), int(2)),
                 SymbolId::intern("x"),
@@ -229,15 +229,44 @@ mod tests {
     }
 
     #[test]
+    fn solving_a_linear_equation_reaches_the_panel() {
+        // 2x - 6 = 0 has exactly one real solution, and the native backend
+        // knows it. This is the path the Variables panel reads.
+        let equation = canlab_core::add(vec![
+            canlab_core::mul(vec![int(2), sym("x")]),
+            int(-6),
+        ]);
+        let result = run(&NativeSolver, job(JobOp::Solve(equation, SymbolId::intern("x"))));
+        match result.outcome {
+            JobOutcome::Solutions(values) => {
+                assert_eq!(values.len(), 1);
+                assert_eq!(values[0].to_string(), "3");
+            }
+            other => panic!("expected solutions, got {}", describe(&other)),
+        }
+    }
+
+    #[test]
     fn a_declined_solve_is_not_reported_as_a_failure() {
+        // A cubic is outside the native backend's repertoire, and declining is a
+        // real answer: the UI must show "declined", not an error.
         let result = run(
-            &MockSolver,
-            job(JobOp::Solve(pow(sym("x"), int(2)), SymbolId::intern("x"))),
+            &NativeSolver,
+            job(JobOp::Solve(pow(sym("x"), int(3)), SymbolId::intern("x"))),
         );
         assert!(result.kind.is_solve());
         match result.outcome {
             JobOutcome::Declined => {}
             other => assert!(matches!(other, JobOutcome::Declined)),
+        }
+    }
+
+    fn describe(outcome: &JobOutcome) -> &'static str {
+        match outcome {
+            JobOutcome::Value(_) => "a value",
+            JobOutcome::Solutions(_) => "solutions",
+            JobOutcome::Declined => "declined",
+            JobOutcome::Failed(_) => "a failure",
         }
     }
 }
