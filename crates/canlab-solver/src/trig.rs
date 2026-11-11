@@ -17,7 +17,7 @@
 //! `0.785… + kπ`. Everything else keeps `arctan` as a function, which is the exact
 //! number and not an approximation of it.
 
-use canlab_core::{Expr, ExprNode, Number, SymbolId, add, mul};
+use canlab_core::{Expr, ExprNode, Number, SymbolId, add, int, mul};
 use crate::Solutions;
 
 /// `n/d · π`.
@@ -78,32 +78,84 @@ pub fn solve_trigonometric(equation: &Expr, var: SymbolId) -> Option<Solutions> 
     if !mentions(&argument, var) {
         return None;
     }
-    let (base, period) = match name.as_str().as_str() {
-        "tan" => (arctangent(&right), pi_times(1, 1)),
-        // Sine and cosine have two families, but at the extremes and at zero the
-        // two branches *coincide*, and then the answer really is one progression:
-        // `sin x = 1` is only `π/2 + 2kπ`, and `cos x = 0` is only `π/2 + kπ`.
-        // Everywhere else there are two, and those decline until `Solutions` can
-        // say "union".
-        "sin" => match integer_of(&right) {
-            Some(0) => (ExprNode::int(0), pi_times(1, 1)),
-            Some(1) => (pi_times(1, 2), pi_times(2, 1)),
-            Some(-1) => (pi_times(-1, 2), pi_times(2, 1)),
-            _ => return None,
-        },
-        "cos" => match integer_of(&right) {
-            Some(1) => (ExprNode::int(0), pi_times(2, 1)),
-            Some(-1) => (pi_times(1, 1), pi_times(2, 1)),
-            Some(0) => (pi_times(1, 2), pi_times(1, 1)),
-            _ => return None,
-        },
-        _ => return None,
-    };
-    Some(Solutions::Family {
+    let family = |base: Expr, period: Expr| Solutions::Family {
         base: add(vec![base]),
         period,
         param: SymbolId::intern("k"),
-    })
+    };
+    match name.as_str().as_str() {
+        "tan" => Some(family(arctangent(&right), pi_times(1, 1))),
+        // Sine and cosine have two branches. Where the branches coincide the
+        // answer is one progression, and where they do not it is their union —
+        // `sin x = ½` is `π/6 + 2kπ ∪ 5π/6 + 2kπ`, and answering only the first
+        // would be half an answer.
+        "sin" => {
+            let alpha = arcsine(&right)?;
+            match integer_of(&right) {
+                Some(0) => Some(family(ExprNode::int(0), pi_times(1, 1))),
+                Some(1) => Some(family(pi_times(1, 2), pi_times(2, 1))),
+                Some(-1) => Some(family(pi_times(-1, 2), pi_times(2, 1))),
+                _ => {
+                    let second = add(vec![pi_times(1, 1), mul([int(-1), alpha.clone()])]);
+                    Some(Solutions::Union(vec![
+                        family(alpha, pi_times(2, 1)),
+                        family(second, pi_times(2, 1)),
+                    ]))
+                }
+            }
+        }
+        "cos" => {
+            let alpha = arccosine(&right)?;
+            match integer_of(&right) {
+                Some(1) => Some(family(ExprNode::int(0), pi_times(2, 1))),
+                Some(-1) => Some(family(pi_times(1, 1), pi_times(2, 1))),
+                Some(0) => Some(family(pi_times(1, 2), pi_times(1, 1))),
+                _ => {
+                    let second = mul([int(-1), alpha.clone()]);
+                    Some(Solutions::Union(vec![
+                        family(alpha, pi_times(2, 1)),
+                        family(second, pi_times(2, 1)),
+                    ]))
+                }
+            }
+        }
+        _ => None,
+    }
+}
+
+/// `arcsin r`, exact at the half-turn values a course asks for.
+fn arcsine(number: &Number) -> Option<Expr> {
+    if number == &Number::ratio(1, 2) {
+        return Some(pi_times(1, 6));
+    }
+    if number == &Number::ratio(-1, 2) {
+        return Some(pi_times(-1, 6));
+    }
+    inverse_arc(number, "arcsin")
+}
+
+/// `arccos r`, exact at ±½.
+fn arccosine(number: &Number) -> Option<Expr> {
+    if number == &Number::ratio(1, 2) {
+        return Some(pi_times(1, 3));
+    }
+    if number == &Number::ratio(-1, 2) {
+        return Some(pi_times(2, 3));
+    }
+    inverse_arc(number, "arccos")
+}
+
+/// The exact function value, or a refusal when the number is outside `[−1, 1]`
+/// and the equation therefore has no real solution at all.
+fn inverse_arc(number: &Number, name: &str) -> Option<Expr> {
+    let value = number.to_f64();
+    if !(-1.0..=1.0).contains(&value) {
+        return None;
+    }
+    Some(ExprNode::fn_raw(
+        SymbolId::intern(name),
+        vec![ExprNode::num(number.clone())],
+    ))
 }
 
 /// `-1`, `0` or `1` as an integer, and nothing else.
@@ -195,11 +247,24 @@ mod tests {
     }
 
     #[test]
-    fn a_sine_declines_because_it_needs_two_families() {
-        // sin x = ½ has π/6 + 2kπ *and* 5π/6 + 2kπ, and one family cannot say it.
+    fn a_sine_of_a_half_is_two_families_and_they_are_both_there() {
+        // sin x = ½ → π/6 + 2kπ ∪ 5π/6 + 2kπ. One family would be half the answer.
         let equation = add(vec![
             ExprNode::fn_raw(SymbolId::intern("sin"), vec![sym("x")]),
             ExprNode::num(Number::ratio(-1, 2)),
+        ]);
+        let solutions = solve_trigonometric(&equation, var()).expect("two families");
+        let latex = solutions.to_latex();
+        assert!(latex.contains("\\cup"), "both branches: {latex}");
+        assert!(latex.contains("\\frac{\\pi}{6}"), "{latex}");
+    }
+
+    #[test]
+    fn a_sine_outside_the_range_has_no_solution() {
+        // sin x = 2 has none, and that is a refusal here rather than a family.
+        let equation = add(vec![
+            ExprNode::fn_raw(SymbolId::intern("sin"), vec![sym("x")]),
+            int(-2),
         ]);
         assert!(solve_trigonometric(&equation, var()).is_none());
     }
