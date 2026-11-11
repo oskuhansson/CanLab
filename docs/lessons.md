@@ -121,3 +121,26 @@ light. Neither is a compile error.
 
 
 
+
+## A rule that was right about z and wrong about 
+
+**What happened.** After x² + y² = z was fixed not to plot a slice, x² + y² = a
+stopped plotting at all:  was classified as a third coordinate, the equation
+was skipped as a surface, and the panel said "Nothing to plot yet."
+
+**Why the code did it.** The fix drew its line on structure — a bare symbol on one
+side, both variables on the other — and z and  are structurally identical.
+The rule was right about the case it was written for and wrong about its twin,
+which is the same shape of mistake as the original bug: a rule that is right for
+the case in hand and untested on its neighbour.
+
+**Why no test caught it.** The new test used z only. The neighbour was never
+written, so "the rule refuses a surface" passed while "the rule accepts a
+parameter" had no test at all.
+
+**What changed.** The refusal is now limited to the names that mean another
+coordinate (z, w); every other bare symbol becomes a parameter, whose value is
+visible on a slider. A test now covers x² + y² = a plotting with  as a
+parameter, next to the z test that keeps the refusal. **A rule drawn on
+structure needs a test on each side of the line it draws**, or the next symbol
+someone types will fall on the wrong side.

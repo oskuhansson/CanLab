@@ -569,16 +569,14 @@ impl CasApp {
 
     /// Symbols that are a whole side of an equation and are not on an axis.
     ///
-    /// The difference this draws is between a *family* and a *surface*.
-    /// `x² + y² = r²` is a family: `r` is inside a power, so it is a coefficient
-    /// and the radius belongs on a slider. `x² + y² = z` is a surface: `z` is a
-    /// whole side, so it is a coordinate of the relation, and inventing `z = 1`
-    /// does not plot the equation — it plots one slice of it and says nothing.
-    /// The test is structural on purpose: guessing from the letter (`z` versus
-    /// `r`) would be a rule that works until someone calls their radius `z`.
-    ///
-    /// A symbol the document assigns (`s = 1`) is not a coordinate: it has a
-    /// value, so it is a parameter with that value.
+    /// Structure alone cannot tell `x² + y² = z` from `x² + y² = a`: both have a
+    /// bare symbol on one side and both variables on the other. The difference is
+    /// what the symbol *means*, and the only signal for that is the name. So the
+    /// refusal is limited to the conventional third coordinate (`z`, and `w` after
+    /// it), and every other bare symbol becomes a **parameter** — a knob whose
+    /// value is shown on a slider, so a value that was invented is visible rather
+    /// than implied. `x² + y² = r²` stays a family because `r` is inside a power; a
+    /// symbol the document assigns (`s = 1`) is a parameter with that value.
     fn third_coordinate_symbols(&self) -> Vec<SymbolId> {
         let axes: Vec<SymbolId> = [self.x_axis, self.y_axis]
             .into_iter()
@@ -601,6 +599,9 @@ impl CasApp {
                     continue;
                 };
                 if axes.contains(&symbol) || assigned.iter().any(|(seen, _)| *seen == symbol) {
+                    continue;
+                }
+                if !is_coordinate_name(symbol) {
                     continue;
                 }
                 if !axis_or_constant(other) && !out.contains(&symbol) {
@@ -1550,6 +1551,16 @@ fn default_field() -> MathField {
     field
 }
 
+/// The names that mean nother coordinate rather than  constant.
+///
+/// `z` is the third spatial coordinate and `w` the fourth; a, b, k and t are
+/// constants in the notation this tool is used with. The list is a convention,
+/// not a proof - which is why a parameter always shows its value on a slider, so
+/// an invented value is visible rather than implied.
+fn is_coordinate_name(symbol: SymbolId) -> bool {
+    matches!(symbol.as_str().as_str(), "z" | "w")
+}
+
 /// The decimal beside an exact answer.
 ///
 /// None when the answer is already a whole number, and when it has a free
@@ -1892,6 +1903,24 @@ mod tests {
             }
             other => panic!("expected a solution, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_bare_symbol_that_is_not_a_coordinate_is_a_parameter() {
+        // `x² + y² = a` is a circle with a radius to turn, not a surface. The
+        // structure is identical to `x² + y² = z`, so the difference is the name
+        // and nothing else — which is why a parameter shows its value on a slider.
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex("x^2+y^2=a").expect("a circle with a radius");
+        app.recompute();
+        crate::panels::build_curve(&mut app);
+        assert_eq!(app.parameters.len(), 1, "note: {}", app.plot_note);
+        assert_eq!(app.parameters[0].name.as_str().to_string(), "a");
+        assert!(!app.curves.is_empty(), "note: {}", app.plot_note);
+        assert!(
+            app.third_coordinates.is_empty(),
+            "a is a knob, not a coordinate"
+        );
     }
 
     #[test]
