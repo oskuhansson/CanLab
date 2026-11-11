@@ -15,3 +15,6 @@ commit-msg.txt
 
 # Debug captures from a launch.
 win*.txt
+
+# Obsidian's own workspace state is the user's, not the project's.
+.obsidian/
