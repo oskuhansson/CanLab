@@ -41,7 +41,10 @@ pub enum Bound {
 /// Everything a backend can say about the solutions of one equation.
 ///
 /// See the module docs for why this is not a `Vec<Expr>`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+// No `Eq`: an [`Solutions::Approximation`] carries an `f64` residual, and a
+// float is not an equivalence class (`NaN` would break the reflexivity `Eq`
+// promises). `PartialEq` is what comparing two answers actually needs.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Solutions {
     /// The equation has no solutions at all.
     None,
@@ -49,6 +52,24 @@ pub enum Solutions {
     All,
     /// A finite list of exact solutions, in the order the backend found them.
     Values(Vec<Expr>),
+    /// One real root found numerically, with the evidence that it is one.
+    ///
+    /// This variant exists **because** a numeric root must never be presented
+    /// as exact. `x^4 - x - 1 = 0` has roots no exact path this solver has can
+    /// name, and an `f64` is not a number the CAS can prove anything about: it
+    /// is a point where the function is small, not a point where it is zero.
+    /// Keeping the residual beside the value is what lets a reader judge the
+    /// answer instead of trusting it, and it is why this is not a member of
+    /// [`Solutions::Values`]: a value in that list is exact by construction.
+    Approximation {
+        /// The root, as the number the scan found. It is a `Number::Float`, so
+        /// the tree itself already says "not exact".
+        value: Expr,
+        /// `|f(value)|` relative to the function's scale — the rule is
+        /// `canlab-num`'s, so two roots from one scan are comparable. A true
+        /// root lands far below `1e-10`; a sign change at a pole does not.
+        residual: f64,
+    },
     /// `base + k·period` for every integer `k`, where `param` is the name of
     /// `k`. For example `π/6 + 2kπ`.
     Family {
@@ -85,12 +106,16 @@ impl Solutions {
     /// [`Solutions::None`] and an empty [`Solutions::Values`] are both empty:
     /// the variant records how the backend said it, but the answer is the same.
     /// An [`Solutions::Inequality`] with no intervals is empty too. A family is
-    /// never empty; it has infinitely many members by construction.
+    /// never empty; it has infinitely many members by construction. An
+    /// approximation is never empty either: a root was found, however
+    /// approximate it is.
     pub fn is_empty(&self) -> bool {
         match self {
             Solutions::None => true,
             Solutions::All => false,
             Solutions::Values(values) => values.is_empty(),
+            // A numeric root is a member of the set, not a missing answer.
+            Solutions::Approximation { .. } => false,
             Solutions::Family { .. } => false,
             Solutions::Inequality { intervals, .. } => intervals.is_empty(),
             // A union is empty exactly when every member is.
@@ -103,6 +128,9 @@ impl Solutions {
     /// Each variant prints as the set it denotes: `\varnothing` for no
     /// solutions, `\mathbb{R}` for all of them, `\left\{…\right\}` for a finite
     /// list, `\frac{\pi}{6} + 2kπ` for a family and `(-1, 3]` for an interval.
+    /// An [`Solutions::Approximation`] prints its value and nothing else: the
+    /// `\approx` belongs to the caller, which is the layer that knows whether
+    /// the number is being presented as an answer or compared with another.
     /// The variable is part of the interval notation only through its endpoints;
     /// writing `x \in …` is the caller's job, because only the caller knew
     /// which variable was asked about.
@@ -122,6 +150,10 @@ impl Solutions {
                 out.push_str("\\right\\}");
                 out
             }
+            // The value alone. `\approx` is the caller's decision, because only
+            // the caller knows whether it is writing `x ≈ 1.2207` or comparing
+            // two answers; printing the relation here would decide for it.
+            Solutions::Approximation { value, .. } => canlab_tex::to_latex(value),
             Solutions::Family {
                 base,
                 period,
@@ -457,5 +489,34 @@ mod tests {
     fn a_vector_becomes_a_set_of_values() {
         let values = vec![int(2), int(-2)];
         assert_eq!(Solutions::from(values.clone()), Solutions::Values(values));
+    }
+
+    #[test]
+    fn an_approximation_prints_only_its_value() {
+        // The `\approx` is the caller's decision: this string may be written
+        // `x ≈ …` or compared with another answer, and the relation is not part
+        // of the value.
+        let approximate = Solutions::Approximation {
+            value: ExprNode::num(Number::float(1.25)),
+            residual: 1e-16,
+        };
+        assert_eq!(approximate.to_latex(), "1.25");
+        assert!(
+            !approximate.to_latex().contains("\\approx"),
+            "the sign belongs to the caller"
+        );
+    }
+
+    #[test]
+    fn an_approximation_is_never_empty() {
+        // A numeric root is a member of the answer set; `is_empty` asks whether
+        // anything solves the equation, and something does.
+        assert!(
+            !Solutions::Approximation {
+                value: ExprNode::num(Number::float(1.25)),
+                residual: 1e-16,
+            }
+            .is_empty()
+        );
     }
 }

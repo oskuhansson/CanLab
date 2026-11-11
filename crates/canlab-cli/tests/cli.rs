@@ -183,10 +183,12 @@ fn solve_all_prints_the_library_solution_set() {
 
 #[test]
 fn solve_all_reports_a_decline_with_its_reason() {
-    // Neither backend has a closed form for `x + sin x = 0`, and a decline is a
-    // normal answer: the command must refuse with the backend's reason and the
-    // equation it could not solve, not exit quietly or panic.
-    let (ok, stdout, stderr) = canlab(&["solve-all", r"x + \sin x", "-v", "x"]);
+    // `sin x − x² − 5` is below −4 everywhere: no closed form, and no root for
+    // the native numeric fallback to find either. A decline is a normal answer:
+    // the command must refuse with the backend's reason and the equation it
+    // could not solve, not exit quietly or panic. (`x + sin x = 0` used to be
+    // the example here; its root at zero is now found numerically.)
+    let (ok, stdout, stderr) = canlab(&["solve-all", r"\sin x - x^2 - 5", "-v", "x"]);
     assert!(!ok, "no backend solves this, yet stdout was {stdout:?}");
     assert!(
         stderr.contains("the solver could not give a solution set"),

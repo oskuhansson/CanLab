@@ -42,10 +42,11 @@ impl Backend {
                  closed forms, or needs assumptions this backend cannot guess.",
             ),
             (Backend::Native, JobKind::Solve) => String::from(
-                "This backend solves one equation in one variable, of degree 1 or 2, and \
-                 linear systems of any size. A higher power, a function of the variable, \
-                 or a non-linear system is beyond it. An inequality is charted when both \
-                 sides are polynomials, a ratio of polynomials, or absolute values of those.",
+                "This backend solves one equation in one variable: exactly when it is of \
+                 degree 1 or 2, numerically when a real root lies in [-32, 32], and as a \
+                 linear system of any size. A root outside that window, or a non-linear \
+                 system, is beyond it. An inequality is charted when both sides are \
+                 polynomials, a ratio of polynomials, or absolute values of those.",
             ),
             (Backend::Native, JobKind::Integrate) => String::from(
                 "This backend integrates sums of integer powers of one variable.",
@@ -463,17 +464,20 @@ mod tests {
 
     #[test]
     fn a_declined_solve_is_not_reported_as_a_failure() {
-        // `x³ − 2` has a real root and no rational one, which is outside the
-        // native backend's repertoire, and declining is a real answer: the UI
-        // must show "declined", not an error. (A cubic with a rational root is
-        // solved since W2.3, so `x³` itself is no longer a refusal.)
+        // `sin x − x² − 5` is below −4 everywhere: no closed form, and no root
+        // for the numeric scan to find. Declining is a real answer, and the UI
+        // must show "declined", not an error. (`x³ − 2` used to be the example
+        // here; the numeric fallback now answers it approximately, which is a
+        // different behaviour and a different test.)
+        let equation = canlab_core::add(vec![
+            canlab_core::ExprNode::fn_raw(SymbolId::intern("sin"), vec![sym("x")]),
+            canlab_core::mul(vec![int(-1), pow(sym("x"), int(2))]),
+            int(-5),
+        ]);
         let result = run(
             &NativeSolver,
             Backend::Native,
-            job(JobOp::Solve(
-                canlab_core::add(vec![pow(sym("x"), int(3)), int(-2)]),
-                SymbolId::intern("x"),
-            )),
+            job(JobOp::Solve(equation, SymbolId::intern("x"))),
         );
         assert!(result.kind.is_solve());
         match result.outcome {

@@ -1416,6 +1416,8 @@ impl CasApp {
                     canlab_solver::Solutions::Values(values) if values.len() == 1 => {
                         approximation_of(&values[0])
                     }
+                    // An approximation is already approximate: a second `≈ 1.22`
+                    // under `x ≈ 1.2207` would print the same number twice.
                     _ => None,
                 };
                 self.status = format!("{label}: {}", solution_count(&solutions));
@@ -1838,6 +1840,23 @@ fn approximation_of(expression: &Expr) -> Option<String> {
     canlab_core::approx::decimal_of(expression, 3).map(|decimal| format!("≈ {decimal}"))
 }
 
+/// The number an approximate answer shows, at the precision its residual supports.
+///
+/// A `f64` prints seventeen digits, but the scan stops when `|f|` is below
+/// `1e-10`, so the last dozen of them are noise dressed as precision. Five
+/// significant figures is the school convention this tool already uses for the
+/// decimal beside an exact answer, and the `≈` in front is what says the digits
+/// are rounded.
+fn approximation_value(value: &Expr) -> String {
+    match canlab_core::approx::value_of(value) {
+        Some(number) => canlab_core::approx::significant(number, 5),
+        // Not a number: print what the solver stored rather than a rounded
+        // stand-in. A value the scan made is always a number, but a renderer
+        // must not assume its input came from there.
+        None => to_latex(value),
+    }
+}
+
 /// One line per answer, in the notation the panels use.
 ///
 /// A set of values prints as `x = a` per value, because that is how it is read
@@ -1852,6 +1871,12 @@ fn solution_lines(solutions: &canlab_solver::Solutions, var: SymbolId) -> Vec<St
             .iter()
             .map(|value| format!("{name} = {}", to_latex(value)))
             .collect(),
+        // A numeric root is not exact, so it is written with `\approx` and
+        // never with `=`: the value is where the function is small, not where
+        // it is zero.
+        Solutions::Approximation { value, .. } => {
+            vec![format!("{name} \\approx {}", approximation_value(value))]
+        }
         Solutions::Family { .. } => vec![format!("{name} = {}", solutions.to_latex())],
         Solutions::Inequality { .. } => vec![format!("{name} \\in {}", solutions.to_latex())],
         // `sin x = ½` is two progressions; each is a line of its own, because
@@ -1871,6 +1896,9 @@ fn solution_count(solutions: &canlab_solver::Solutions) -> String {
             1 => String::from("1 solution"),
             n => format!("{n} solutions"),
         },
+        // One root, and the word "approximate" is the point: the status bar
+        // must not let a numeric answer pass for an exact one.
+        Solutions::Approximation { .. } => String::from("1 approximate solution"),
         Solutions::Family { .. } => String::from("a family of solutions"),
         Solutions::Inequality { .. } => String::from("an interval"),
         Solutions::Union(members) => format!("{} families", members.len()),
@@ -2144,6 +2172,121 @@ mod tests {
             "status: {}",
             app.status
         );
+    }
+
+    #[test]
+    fn a_numeric_root_is_shown_approximate_and_never_as_an_equals() {
+        // x⁴ − x − 1 has no exact answer this solver can name. The panel must
+        // say `x ≈ …`, not `x = …`: an approximate value shown with `=` would
+        // be a lie, and the status bar must say "approximate" as well.
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex("x^4-x-1=0").expect("a quartic");
+        app.recompute();
+        app.start_solve();
+
+        let ctx = egui::Context::default();
+        for _ in 0..400 {
+            app.poll_jobs(&ctx);
+            if !matches!(app.solve, SolveState::Idle) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let residual = match &app.solve {
+            SolveState::Solved {
+                solutions: canlab_solver::Solutions::Approximation { residual, .. },
+                ..
+            } => *residual,
+            other => panic!("expected an approximation, got {other:?}"),
+        };
+        assert!(residual.is_finite(), "residual {residual}");
+        let latex = app.result_latex.clone();
+        assert!(
+            latex.contains("\\approx"),
+            "the answer must be approximate: {latex}"
+        );
+        assert!(
+            !latex.contains('='),
+            "an approximate answer was written with '=': {latex}"
+        );
+        assert!(
+            app.status.contains("1 approximate solution"),
+            "status: {}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn an_exact_answer_is_not_shown_as_an_approximation() {
+        // x² = 4 is exactly ±2, and the numeric fallback must not touch it:
+        // the panel shows `=` for both values and never `≈`.
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex("x^2-4=0").expect("a quadratic");
+        app.recompute();
+        app.start_solve();
+
+        let ctx = egui::Context::default();
+        for _ in 0..400 {
+            app.poll_jobs(&ctx);
+            if !matches!(app.solve, SolveState::Idle) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        match &app.solve {
+            SolveState::Solved {
+                solutions: canlab_solver::Solutions::Values(values),
+                ..
+            } => assert_eq!(values.len(), 2, "both exact roots"),
+            other => panic!("expected exact values, got {other:?}"),
+        }
+        assert!(app.result_latex.contains('='), "{}", app.result_latex);
+        assert!(
+            !app.result_latex.contains("\\approx"),
+            "an exact answer was approximated: {}",
+            app.result_latex
+        );
+        assert!(app.status.contains("2 solutions"), "{}", app.status);
+    }
+
+    #[test]
+    fn an_equation_with_no_root_still_declines_in_the_panel() {
+        // sin x − x² − 5 is below −4 everywhere, so the scan finds nothing and
+        // the answer stays a decline; the panel must not invent a nearby root.
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex("\\sin x - x^2 - 5 = 0").expect("a transcendental");
+        app.recompute();
+        app.start_solve();
+
+        let ctx = egui::Context::default();
+        for _ in 0..400 {
+            app.poll_jobs(&ctx);
+            if !matches!(app.solve, SolveState::Idle) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            matches!(app.solve, SolveState::Declined { .. }),
+            "expected a decline, got {:?}",
+            app.solve
+        );
+        assert!(app.status.contains("declined"), "status: {}", app.status);
+    }
+
+    #[test]
+    fn an_approximation_whose_value_is_not_a_number_prints_what_it_was_given() {
+        // The solver only ever stores a float here, but the renderer must not
+        // panic or invent a number when it is handed something else.
+        let symbolic = canlab_solver::Solutions::Approximation {
+            value: canlab_core::sym("y"),
+            residual: 0.0,
+        };
+        assert_eq!(
+            solution_lines(&symbolic, SymbolId::intern("x")),
+            vec![String::from("x \\approx y")]
+        );
+        assert_eq!(solution_count(&symbolic), "1 approximate solution");
     }
 
     #[test]

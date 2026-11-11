@@ -42,6 +42,8 @@
 //! {"kind":"none"}                         no solutions
 //! {"kind":"all"}                          every value solves it
 //! {"kind":"values","values":[<expr>,…]}   a finite set
+//! {"kind":"approximation","value":<expr>,"residual":<number>}
+//!                                         one numeric root, with its residual
 //! {"kind":"family","base":<expr>,"period":<expr>,"param":"k"}
 //! {"kind":"inequality","var":"x","intervals":[
 //!     {"from":<expr>|null,"from_open":true,"to":<expr>|null,"to_open":false}]}
@@ -51,6 +53,11 @@
 //! is a separate boolean because `[1, 3)` and `(1, 3]` are different sets built
 //! from the same two endpoints; an infinite end is always open, and encoding it
 //! as closed is rejected rather than silently repaired.
+//!
+//! The `approximation` kind is encoded but **not decoded**. A numeric root is
+//! made in-process by the native backend, so no worker ever sends one back; the
+//! decoder refuses the kind by name rather than pretending it is unknown. The
+//! asymmetry is deliberate and documented, not a gap left by accident.
 //!
 //! # Hand-written on purpose
 //!
@@ -769,6 +776,18 @@ pub fn encode_solutions(solutions: &Solutions) -> String {
             out.push_str("]}");
             out
         }
+        // The residual is a JSON number, like the envelope's `id`/`order`: it is
+        // a measurement, not an expression, and the exact-number-as-string rule
+        // exists for the tree. It is finite by construction — `scan` refuses a
+        // non-finite sample — so this cannot emit the non-JSON `NaN`/`inf`.
+        Solutions::Approximation { value, residual } => {
+            let mut out = String::from(r#"{"kind":"approximation","value":"#);
+            write_expr(value, &mut out);
+            out.push_str(r#","residual":"#);
+            out.push_str(&format!("{residual:e}"));
+            out.push('}');
+            out
+        }
         Solutions::Family {
             base,
             period,
@@ -901,6 +920,15 @@ pub fn decode_solutions(text: &str) -> Result<Solutions, SolverError> {
                 intervals: parsed,
             })
         }
+        // Encoded but not decoded, on purpose: the numeric fallback runs
+        // in-process, so a worker never sends this kind back. Naming the
+        // decision is better than letting it fall into "unknown kind", which
+        // would read as a gap rather than a choice.
+        "approximation" => Err(SolverError::BadOutput(
+            "the \"approximation\" kind is encoded but not decoded: a numeric root is \
+             made locally, never sent back by a worker"
+                .into(),
+        )),
         other => Err(SolverError::BadOutput(format!(
             "unknown solution-set kind {other:?}"
         ))),
@@ -1284,6 +1312,31 @@ mod tests {
             }),
             r#"{"kind":"inequality","var":"x","intervals":[{"from":{"Num":"-1"},"from_open":true,"to":{"Num":"3"},"to_open":false},{"from":{"Num":"4"},"from_open":false,"to":null,"to_open":true}]}"#
         );
+    }
+
+    #[test]
+    fn an_approximation_encodes_its_value_and_its_residual() {
+        // The value is an expression like every other number on the wire; the
+        // residual is a measurement, so it stays a JSON number.
+        let solutions = Solutions::Approximation {
+            value: ExprNode::num(Number::float(1.25)),
+            residual: 1e-16,
+        };
+        assert_eq!(
+            encode_solutions(&solutions),
+            r#"{"kind":"approximation","value":{"Num":"1.25"},"residual":1e-16}"#
+        );
+    }
+
+    #[test]
+    fn the_approximation_kind_is_encoded_but_not_decoded() {
+        // The asymmetry is a decision: a numeric root is made in-process, so no
+        // worker sends one back. The refusal must name the decision instead of
+        // calling a kind this module knows "unknown".
+        let text = r#"{"kind":"approximation","value":{"Num":"1.25"},"residual":1e-16}"#;
+        let error = decode_solutions(text).expect_err("not decoded");
+        assert!(matches!(error, SolverError::BadOutput(_)), "{error:?}");
+        assert!(error.to_string().contains("not decoded"), "{error}");
     }
 
     #[test]

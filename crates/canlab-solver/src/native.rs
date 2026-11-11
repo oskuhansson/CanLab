@@ -5,10 +5,13 @@
 //! Variables panel with nothing to show. This backend is the honest step up: it
 //! solves the two cases that cover most school exercises and says nothing more.
 //!
-//! * **Solve** — a polynomial equation of degree 1 or 2 in one variable, exactly.
-//!   A quadratic with a rational square discriminant gives rational roots; a
-//!   negative discriminant gives *no real solutions*, which is an answer, not a
-//!   failure; anything else gives the exact surd `(-b ± √D) / 2a`.
+//! * **Solve** — the exact paths first: a polynomial equation of degree 1 or 2
+//!   (rational roots, or the exact surd `(-b ± √D) / 2a`; a negative
+//!   discriminant is *no real solutions*, which is an answer, not a failure),
+//!   then an exponential, a sum of logarithms, a trigonometric family and a
+//!   parametric answer. Only when every one of those declines does a numeric
+//!   scan look for one real root in `[-32, 32]`, and that answer carries its
+//!   residual — see [`Solutions::Approximation`].
 //! * **Integrate** — a sum of integer powers, term by term.
 //! * **Differentiate** — the same polynomials.
 //! * **Simplify** — already canonical, so it hands the expression back.
@@ -177,6 +180,125 @@ fn polynomial(terms: Vec<Expr>) -> Expr {
     }
 }
 
+/// The interval the numeric fallback scans.
+///
+/// `[-32, 32]` is the school window: a root outside it is not what an exercise
+/// is about, and a wider interval would spend the same 512 cells on a coarser
+/// grid. It is a constant because no caller has asked for a different one yet.
+const SCAN_INTERVAL: (f64, f64) = (-32.0, 32.0);
+
+/// The tolerance the numeric fallback hands to the scan.
+///
+/// `1e-12` is two orders below the `1e-10` residual the scan accepts, so the
+/// refinement is not what limits the answer; the residual check is.
+const SCAN_TOLERANCE: f64 = 1e-12;
+
+/// One real root of `eq`, found numerically, or a decline.
+///
+/// This is the last resort, after every exact path has declined. It reports
+/// **one** root even when the scan finds several — `x^4 - x - 1` has two real
+/// roots — because a [`Solutions::Approximation`] can carry one, and a list of
+/// one would look complete. The residual travels with the value, which is the
+/// whole reason the variant exists.
+///
+/// A [`canlab_num::RootError`] is a decline, never a root: the scan refusing an
+/// interval (a pole on the grid, a tree the evaluator cannot compile) says "I
+/// do not know", and answering the nearest number would be the one thing this
+/// backend must not do.
+fn approximate_root(eq: &Expr, var: SymbolId) -> Result<Solutions, SolverError> {
+    // `scan_expression` compiles the equation with `Program::compile(eq, &[var])`
+    // itself. This is the same call, made first so that a tree the evaluator
+    // cannot read is refused before a grid is spent on it — and so the refusal
+    // is a decision in this function rather than a side effect of an empty scan.
+    if canlab_core::Program::compile(eq, &[var]).is_none() {
+        return Err(SolverError::NotImplemented);
+    }
+    let roots = canlab_num::scan_expression(eq, var, SCAN_INTERVAL, SCAN_TOLERANCE)
+        .map_err(|_| SolverError::NotImplemented)?;
+    let Some(root) = roots.first() else {
+        // An empty scan is "no root here", not "the root is zero".
+        return Err(SolverError::NotImplemented);
+    };
+    Ok(Solutions::Approximation {
+        value: ExprNode::num(Number::float(root.value)),
+        residual: root.residual,
+    })
+}
+
+impl NativeSolver {
+    /// Every exact path, tried in the order that proves the most.
+    ///
+    /// A polynomial of degree 1 or 2 is answered by the quadratic formula; an
+    /// exponential, a sum of logarithms, a trigonometric family and a
+    /// parametric answer are each a closed form. Degree three and up are
+    /// answered only when they factor rationally — the leftover linear or
+    /// quadratic factor is finished exactly, so `(x−1)(x²−2)` still gives
+    /// `±√2`.
+    ///
+    /// [`SolverError::NotImplemented`] here means "no exact path knows this",
+    /// which is exactly when [`Solver::solve_all`] may try the numeric scan.
+    /// Nothing in this method guesses, so an exact answer can never be replaced
+    /// by a rounded one.
+    fn solve_exactly(&self, eq: &Expr, var: SymbolId) -> Result<Solutions, SolverError> {
+        let Some(map) = coefficients(eq, var) else {
+            if let Some(values) = crate::exponential::solve_exponential(self, eq, var) {
+                // An exponential whose right side is not positive has no real
+                // solution, which is `None` and not an empty set of values.
+                return if values.is_empty() {
+                    Ok(Solutions::None)
+                } else {
+                    Ok(Solutions::Values(values))
+                };
+            }
+            if let Some((kept, _rejected)) = crate::logarithmic::solve_logarithmic(self, eq, var) {
+                return if kept.is_empty() {
+                    Ok(Solutions::None)
+                } else {
+                    Ok(Solutions::Values(kept))
+                };
+            }
+            if let Some(solutions) = crate::trig::solve_trigonometric(eq, var) {
+                return Ok(solutions);
+            }
+            return crate::parametric::solve_parametric(eq, var)
+                .map(Solutions::Values)
+                .ok_or(SolverError::NotImplemented);
+        };
+        if map.keys().any(|power| *power < 0) {
+            return Err(SolverError::NotImplemented);
+        }
+        let coefficient = |power: i128| map.get(&power).cloned().unwrap_or_else(Number::zero);
+        let degree = map
+            .keys()
+            .copied()
+            .filter(|power| !coefficient(*power).is_zero())
+            .max();
+
+        match degree {
+            // The zero polynomial: every value of `var` solves it.
+            None => Ok(Solutions::All),
+            // A nonzero constant: no value does.
+            Some(0) => Ok(Solutions::None),
+            Some(1) | Some(2) => {
+                let values = self.solve(eq, var)?;
+                if values.is_empty() {
+                    // Among degrees 1 and 2 only a quadratic with a negative
+                    // discriminant reaches here, and that is a real answer.
+                    Ok(Solutions::None)
+                } else {
+                    Ok(Solutions::Values(values))
+                }
+            }
+            // Degree three and up: rational roots, and a clean refusal when
+            // there are none. `x^3 - 2` has a real root and no rational one;
+            // the numeric fallback is what answers it now.
+            Some(_) => higher_degree_roots(self, eq, var)
+                .map(Solutions::Values)
+                .ok_or(SolverError::NotImplemented),
+        }
+    }
+}
+
 impl Solver for NativeSolver {
     /// The expression is canonical, so there is nothing to *normalize* — but the
     /// rewrite rules know identities the canonical form does not: `ln e → 1`,
@@ -290,76 +412,26 @@ impl Solver for NativeSolver {
                 ])
             }
             // Degree three and up: rational roots, and a clean refusal when
-            // there are none. x³ − 2 has a real root and this backend does not
-            // claim to know it.
+            // there are none. `solve` answers with exact values only, so it
+            // refuses `x³ − 2`; `solve_all` is where the numeric fallback can
+            // answer it.
             Some(_) => higher_degree_roots(self, eq, var).ok_or(SolverError::NotImplemented),
         }
     }
 
     /// The real solutions of `eq == 0`, with the answers a list cannot say.
     ///
-    /// Degree 1 and 2 reuse [`NativeSolver::solve`], so a quadratic keeps its
-    /// roots and a negative discriminant becomes [`Solutions::None`] instead of
-    /// an empty list. A constant equation is the trichotomy every school
-    /// exercise has: `0 = 0` is every number, `0 = c` with `c ≠ 0` is none.
-    /// Higher degrees and anything that is not a polynomial in `var` stay
-    /// [`SolverError::NotImplemented`]; W2.3 and W2.5 will fill those in.
+    /// The exact paths run first, in `solve_exactly`: a polynomial, an
+    /// exponential, a sum of logarithms, a trigonometric family, a parametric
+    /// answer. Only when every one of them declines does the numeric scan run,
+    /// so `x² = 4` cannot come back as `2.0000`. A scan that errors or finds
+    /// nothing is still a decline: a [`canlab_num::RootError`] is never turned
+    /// into a root.
     fn solve_all(&self, eq: &Expr, var: SymbolId) -> Result<Solutions, SolverError> {
-        let Some(map) = coefficients(eq, var) else {
-            if let Some(values) = crate::exponential::solve_exponential(self, eq, var) {
-                // An exponential whose right side is not positive has no real
-                // solution, which is `None` and not an empty set of values.
-                return if values.is_empty() {
-                    Ok(Solutions::None)
-                } else {
-                    Ok(Solutions::Values(values))
-                };
-            }
-            if let Some((kept, _rejected)) = crate::logarithmic::solve_logarithmic(self, eq, var) {
-                return if kept.is_empty() {
-                    Ok(Solutions::None)
-                } else {
-                    Ok(Solutions::Values(kept))
-                };
-            }
-            if let Some(solutions) = crate::trig::solve_trigonometric(eq, var) {
-                return Ok(solutions);
-            }
-            return crate::parametric::solve_parametric(eq, var)
-                .map(Solutions::Values)
-                .ok_or(SolverError::NotImplemented);
-        };
-        if map.keys().any(|power| *power < 0) {
-            return Err(SolverError::NotImplemented);
-        }
-        let coefficient = |power: i128| map.get(&power).cloned().unwrap_or_else(Number::zero);
-        let degree = map
-            .keys()
-            .copied()
-            .filter(|power| !coefficient(*power).is_zero())
-            .max();
-
-        match degree {
-            // The zero polynomial: every value of `var` solves it.
-            None => Ok(Solutions::All),
-            // A nonzero constant: no value does.
-            Some(0) => Ok(Solutions::None),
-            Some(1) | Some(2) => {
-                let values = self.solve(eq, var)?;
-                if values.is_empty() {
-                    // Among degrees 1 and 2 only a quadratic with a negative
-                    // discriminant reaches here, and that is a real answer.
-                    Ok(Solutions::None)
-                } else {
-                    Ok(Solutions::Values(values))
-                }
-            }
-            // Degree three and up: rational roots, and a clean refusal when there
-            // are none. `x^3 - 2` has a real root and this backend does not claim
-            // to know it.
-            Some(_) => higher_degree_roots(self, eq, var)
-                .map(Solutions::Values)
-                .ok_or(SolverError::NotImplemented),
+        match self.solve_exactly(eq, var) {
+            Ok(solutions) => Ok(solutions),
+            Err(SolverError::NotImplemented) => approximate_root(eq, var),
+            Err(other) => Err(other),
         }
     }
 
@@ -403,7 +475,7 @@ impl Solver for NativeSolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use canlab_core::{add, expr::ExprNode, int, mul, pow, sym};
+    use canlab_core::{Hold, add, expr::ExprNode, int, mul, pow, sym};
 
     fn x() -> Expr {
         sym("x")
@@ -561,15 +633,97 @@ mod tests {
     }
 
     #[test]
-    fn solve_all_declines_a_cubic_it_cannot_factor() {
-        // `x^3 - 2` has a real root and this backend does not claim to know it.
+    fn solve_all_answers_a_quartic_with_no_exact_root() {
+        // x⁴ − x − 1 has two real roots and no exact form this backend can
+        // name. It used to decline; the numeric fallback now answers with one
+        // root, and substituting it back is what makes it a root rather than a
+        // guess.
+        let equation = add(vec![pow(x(), int(4)), mul(vec![int(-1), x()]), int(-1)]);
+        let solutions = NativeSolver
+            .solve_all(&equation, var())
+            .expect("a numeric root");
+        let Solutions::Approximation { value, residual } = &solutions else {
+            panic!("expected an approximation, got {solutions:?}");
+        };
+        assert!(*residual < 1e-9, "residual {residual}");
+        let at = canlab_core::approx::value_of(value).expect("a number");
+        let program = canlab_core::Program::compile(&equation, &[var()]).expect("compiles");
+        let at_root = program.eval(&[at]);
+        assert!(at_root.abs() < 1e-9, "f({at}) = {at_root}");
+    }
+
+    #[test]
+    fn solve_all_answers_a_cubic_with_only_irrational_roots() {
+        // x³ − 2 = 0 is x = ∛2. The exact paths find no rational root and
+        // decline, which used to be the whole answer; the scan finds the root
+        // and the residual says how well it does.
         let equation = add(vec![pow(x(), int(3)), int(-2)]);
+        let solutions = NativeSolver
+            .solve_all(&equation, var())
+            .expect("a numeric root");
+        let Solutions::Approximation { value, residual } = &solutions else {
+            panic!("expected an approximation, got {solutions:?}");
+        };
+        let at = canlab_core::approx::value_of(value).expect("a number");
+        assert!((at - 2.0_f64.cbrt()).abs() < 1e-9, "got {at}");
+        assert!(*residual < 1e-9, "residual {residual}");
+    }
+
+    #[test]
+    fn solve_all_declines_when_the_scan_finds_no_root() {
+        // sin x − x² − 5 is below −4 on the whole real line, so the scan finds
+        // nothing in its interval. An empty scan is a decline, not an answer:
+        // the nearest point is not a root.
+        let equation = add(vec![
+            ExprNode::fn_raw(SymbolId::intern("sin"), vec![x()]),
+            mul(vec![int(-1), pow(x(), int(2))]),
+            int(-5),
+        ]);
         let error = NativeSolver
             .solve_all(&equation, var())
-            .expect_err("no rational root");
+            .expect_err("no root in the interval");
         assert_eq!(error, SolverError::NotImplemented);
-        // A decline is a normal answer, not a failure: the caller keeps the
-        // equation rather than showing an error banner.
         assert!(error.is_declined());
+    }
+
+    #[test]
+    fn solve_all_does_not_turn_an_exact_answer_into_an_approximation() {
+        // x² − 4 is exactly ±2. The numeric fallback runs only after the exact
+        // paths decline, so this must stay a set of exact values rather than
+        // becoming `2.0000`.
+        let equation = add(vec![pow(x(), int(2)), int(-4)]);
+        let solutions = NativeSolver.solve_all(&equation, var()).expect("exact roots");
+        assert_eq!(solutions, Solutions::Values(vec![int(2), int(-2)]));
+        assert!(
+            !matches!(solutions, Solutions::Approximation { .. }),
+            "an exact answer was approximated"
+        );
+    }
+
+    #[test]
+    fn solve_all_declines_an_equation_the_evaluator_cannot_compile() {
+        // A held integral has no numerical value. The compile guard is what
+        // turns that into a decline instead of an empty scan or a panic.
+        let equation = ExprNode::hold(Hold::Integral {
+            body: x(),
+            var: var(),
+        });
+        let error = NativeSolver
+            .solve_all(&equation, var())
+            .expect_err("nothing to evaluate");
+        assert_eq!(error, SolverError::NotImplemented);
+    }
+
+    #[test]
+    fn a_scan_error_is_a_decline_and_never_a_root() {
+        // 1/x − 2 has the root 1/2, but the scan interval contains the pole at
+        // zero and the scan refuses the whole interval. That refusal must reach
+        // the caller as a decline: answering the nearest finite point would be
+        // a guessed root.
+        let equation = add(vec![pow(x(), int(-1)), int(-2)]);
+        let error = NativeSolver
+            .solve_all(&equation, var())
+            .expect_err("the pole is refused");
+        assert_eq!(error, SolverError::NotImplemented);
     }
 }

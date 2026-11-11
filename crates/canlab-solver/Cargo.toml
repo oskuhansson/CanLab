@@ -7,6 +7,11 @@ description = "Solver trait and JSON protocol bridging to an external CAS backen
 
 [dependencies]
 canlab-core = { path = "../canlab-core" }
+# The numeric fallback. `scan_expression` is the one bridge from an `Expr` to a
+# bracket, and its `Root` carries the residual that `Solutions::Approximation`
+# exists to keep; a second scanner here would be a second answer to "where is
+# the root".
+canlab-num = { path = "../canlab-num" }
 canlab-poly = { path = "../canlab-poly" }
 # A `Solutions` value is printed as LaTeX, and the printer already exists. A
 # second, narrower printer here would be a second answer to "what does this

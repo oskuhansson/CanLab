@@ -911,6 +911,33 @@ fn variables_body(app: &mut CasApp, ui: &mut Ui) {
                 Solutions::All => {
                     ui.label(RichText::new("Every number.").monospace().size(15.0));
                 }
+                // A numeric root is approximate by construction, so it is
+                // written with `\approx` and carries its residual: the number
+                // alone would look as certain as an exact answer.
+                Solutions::Approximation { value, residual } => {
+                    let name = to_latex(&canlab_core::sym(&var.as_str()));
+                    ui.label(
+                        RichText::new(format!(
+                            "{name} \\approx {}",
+                            crate::approximation_value(value)
+                        ))
+                        .monospace()
+                        .size(15.0),
+                    )
+                    .on_hover_text(format!(
+                        "found numerically: the relative residual is {residual:.1e}, so \
+                         |f(x)| is that fraction of the function's scale, not zero"
+                    ));
+                    ui.label(
+                        RichText::new(format!("residual {residual:.1e}"))
+                            .small()
+                            .color(crate::theme::weak()),
+                    )
+                    .on_hover_text(
+                        "|f(x)| at the root divided by the function's scale. A true root \
+                         lands far below 1e-10; a sign change at a pole does not.",
+                    );
+                }
                 _ => {
                     for line in crate::solution_lines(solutions, *var) {
                         ui.label(RichText::new(line).monospace().size(15.0));
