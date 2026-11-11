@@ -171,7 +171,7 @@ switch ($Action) {
             "command -v cargo-xwin || echo 'cargo-xwin: missing'"
             "nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo 'nvidia-smi: missing'"
         ) -join '; '
-        Invoke-Remote $script -AllowFailure | Out-Null
+        Invoke-Remote $script -AllowFailure
         exit $LASTEXITCODE
     }
 
