@@ -2848,6 +2848,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn an_inequality_typed_into_the_field_is_answered() {
+        // The whole trip: keys into the field, the relation reader, the job, the
+        // sign chart, the result panel. The dispatch was compile-checked only
+        // before this test, and a compile is not an answer.
+        let mut app = CasApp::new();
+        app.field = MathField::new();
+        app.field.type_str("|x-1|<2");
+        app.recompute();
+        solve_and_wait(&mut app);
+        match &app.solve {
+            SolveState::Solved { solutions, .. } => {
+                let latex = solutions.to_latex();
+                assert!(
+                    latex.contains("-1") && latex.contains("3"),
+                    "|x-1| < 2 is the interval (-1, 3), got {latex}"
+                );
+            }
+            other => panic!("the field's inequality was not answered: {other:?}"),
+        }
+    }
+
     /// Press Solve and wait for the background answer.
     fn solve_and_wait(app: &mut CasApp) {
         app.start_solve();
