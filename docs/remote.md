@@ -52,8 +52,39 @@ There is no `--offline` on the server. Its registry cache is its own, and the
 first build needs crates.io; the local `--offline` flag exists because this
 machine's shell cannot complete a TLS handshake, which is not true there.
 
+## Measured
+
+| Run | Time |
+|---|---|
+| Cold Windows cross-build (Bevy + our nine crates) | **3m 23s** at `-j 8` |
+| Incremental Windows cross-build (our crates only) | **5.7s** |
+| Test suite on Linux (`canlab-solver` + `canlab-poly`) | 136 passed, matching local |
+
+The incremental number is the point of the exercise: the edit → build → run loop
+is five seconds of server time, where the same link locally costs ten minutes and
+can run the machine out of memory. `~/canlab-target` is what makes that true, so
+it is a cache to keep, not to clean.
+
 ## Honest status
 
-Written and parse-checked, and `remote.ps1 status` reaches the sshd and is
-refused by key authentication, so the transport is right and the authorisation is
-the one step left. Nothing has been built on the server yet.
+Working end to end. Six bugs were found by running it rather than reasoning about
+it, and each is recorded in `scripts/remote.ps1` where it bit:
+
+1. `status` piped its own output into `Out-Null`, so it printed nothing.
+2. `setup` sourced `~/.cargo/env` under `set -e`; cargo is on the server's PATH
+   without that file, so the first line aborted the whole action.
+3. cargo writes progress to **stderr**, which PowerShell turns into an error
+   record, so a working build reported exit 1.
+4. Appending `2>&1` to a remote command redirects only its **last** command of an
+   `&&` chain; it must wrap the whole thing: `{ … ; } 2>&1`.
+5. bsdtar on Windows stamps `SCHILY.fflags`, which GNU tar warns about — the
+   archive is made with `git archive` now, from the commit, which also means a
+   remote failure names a revisable revision.
+6. An earlier extraction left the checkout root at mode 0555, so the next one
+   failed with `Cannot open: Permission denied` on whichever path sorted first
+   (`.cargo/config.toml`), which read like a corrupt archive for three rounds.
+   The unpack now `chmod -R u+w`s and passes `--no-same-permissions`.
+
+Still missing: a preflight that compares the workspace's `rust-version` with the
+server's `rustc` (the first cross-build failed on 1.96.0 vs a required 1.97.1),
+and printing a failed command's log before throwing.
