@@ -57,5 +57,26 @@ if ($offenders -gt 0) {
     exit 1
 }
 
-Write-Output ("{0} text file(s) checked: no control characters." -f $files.Count)
+# A .ps1 file must be pure ASCII. Windows PowerShell reads a BOM-less script as
+# ANSI, so one non-ASCII character (an em dash in a comment, say) swallows a quote
+# and the parser reports a syntax error on some *later* line. That cost a round:
+# `authorise-key.ps1` failed with "The token '&&' is not a valid statement
+# separator" while the real fault was an em dash three functions earlier.
+$nonAscii = 0
+foreach ($script in ($files | Where-Object { $_.Extension -eq '.ps1' })) {
+    $text = [System.IO.File]::ReadAllText($script.FullName)
+    foreach ($character in $text.ToCharArray()) {
+        if ([int]$character -gt 127) {
+            $nonAscii++
+            Write-Output ("{0}: non-ASCII character U+{1:X4} (a script must be ASCII; use '-' and '...')" -f $script.FullName, [int]$character)
+            break
+        }
+    }
+}
+if ($nonAscii -gt 0) {
+    Write-Output ("{0} script(s) contain non-ASCII characters; Windows PowerShell reads them as ANSI and mis-parses." -f $nonAscii)
+    exit 1
+}
+
+Write-Output ("{0} text file(s) checked: no control characters, every .ps1 ASCII." -f $files.Count)
 exit 0
