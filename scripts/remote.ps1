@@ -150,6 +150,11 @@ function Sync-Tree {
 # directory so the second run reuses the first one's objects.
 $cargoPrelude = @(
     "set -e"
+    # `~/.cargo/env` does not exist on every install, and the server's `$HOME`
+    # arrives wrong through this shell, so the cargo bin directory is added by
+    # absolute path from the login name. Without it `cargo xwin` is "missing" in
+    # one probe and found in another, which is a failure waiting to happen.
+    "export PATH=`"/home/`$(id -un)/.cargo/bin:`$PATH`""
     ". `"`$HOME/.cargo/env`" 2>/dev/null || true"
     "export CARGO_TARGET_DIR='$RemoteTarget'"
     "cd '$RemotePath'"
@@ -160,6 +165,7 @@ $cargoPrelude = @(
 switch ($Action) {
     'status' {
         $script = @(
+            "export PATH=`"/home/`$(id -un)/.cargo/bin:`$PATH`""
             "uname -srm"
             "nproc"
             "free -g | awk 'NR==1 || NR==2'"
