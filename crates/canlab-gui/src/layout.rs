@@ -445,6 +445,9 @@ fn show_leaf(
 
     let mut header = ui.new_child(
         UiBuilder::new()
+            // The tree path, not the panel kind: the dock can show two panels
+            // of the same kind, and each is its own instance.
+            .id_salt(("canlab-panel-header", path))
             .max_rect(header_rect.shrink2(vec2(9.0, 4.0)))
             .layout(UiLayout::left_to_right(Align::Center)),
     );
@@ -521,6 +524,13 @@ fn show_leaf(
     if body.width() > 16.0 && body.height() > 16.0 {
         let mut body_ui = ui.new_child(
             UiBuilder::new()
+                // Scoped by the leaf's path in the tree. Two body Uis made from
+                // one parent would otherwise share a stable id, and every
+                // persistent id a panel derives from it — a combo box, a
+                // scroll area, the math field — would be used twice in the
+                // frame. The kind is not enough: two PLOT panels are two views,
+                // so their state has to be per instance anyway.
+                .id_salt(("canlab-panel", path))
                 .max_rect(body)
                 .layout(UiLayout::top_down(Align::Min)),
         );
@@ -604,5 +614,54 @@ mod tests {
         let mut mutable = layout.clone();
         assert!(!mutable.close(&[7]));
         assert_eq!(mutable, layout);
+    }
+
+    /// Draw `layout` once and return every widget-id clash egui reported.
+    ///
+    /// egui 0.36 paints the warning itself, on its debug layer, so the text is
+    /// in the frame's shape list rather than in a counter. Scanning for the
+    /// words is what makes this a test of what a reader would have seen.
+    fn id_clashes(layout: &mut Layout) -> Vec<String> {
+        let ctx = egui::Context::default();
+        // Debug builds warn by default; set it explicitly so the test does not
+        // depend on the profile it was compiled in.
+        ctx.options_mut(|options| options.warn_on_id_clash = true);
+        let mut app = crate::CasApp::new();
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, vec2(900.0, 600.0));
+        let input = egui::RawInput {
+            screen_rect: Some(rect),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
+            layout.show(ui, rect, |ui, kind| app.show_panel(ui, kind));
+        });
+        output.textures_delta.clear();
+        output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => Some(text.galley.job.text.clone())
+                    .filter(|text| text.contains("use of widget ID")),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn two_panels_of_one_kind_do_not_share_widget_ids() {
+        // The dock can split, so one frame can hold two panels of the same
+        // kind. Every persistent id a panel allocates — a combo box, a scroll
+        // area, the math field — is derived from its body Ui, and two body Uis
+        // made from one parent are the same Ui unless the tree path is part of
+        // the id. egui then paints "First/Second use of widget ID" over both,
+        // which is the red text a split PLOT panel showed.
+        for kind in PanelKind::ALL {
+            let mut layout = row(0.5, leaf(kind), leaf(kind));
+            let clashes = id_clashes(&mut layout);
+            assert!(
+                clashes.is_empty(),
+                "two {kind:?} panels share widget ids: {clashes:?}"
+            );
+        }
     }
 }
