@@ -258,3 +258,77 @@ fn an_expression_coefficient_ring_works_too() {
     assert!(text.contains("Pow"), "expected a square in {text}");
     let _ = node(&printed);
 }
+
+#[test]
+fn a_missing_constant_term_does_not_hide_the_other_roots() {
+    // `x³ − x = x(x−1)(x+1)` has three roots. A search that stops when the
+    // constant term is zero reports one of them and calls it an answer.
+    let x = vars(&["x"]);
+    let polynomial = Poly::<Number>::from_expr(
+        &canlab_core::add(vec![
+            canlab_core::pow(sym("x"), int(3)),
+            canlab_core::mul(vec![int(-1), sym("x")]),
+        ]),
+        &x,
+    )
+    .expect("a cubic");
+    let mut roots: Vec<f64> = polynomial
+        .rational_roots()
+        .expect("a univariate polynomial")
+        .iter()
+        .map(Number::to_f64)
+        .collect();
+    roots.sort_by(f64::total_cmp);
+    assert_eq!(roots, vec![-1.0, 0.0, 1.0]);
+}
+
+#[test]
+fn deflation_divides_out_a_root_and_refuses_a_non_root() {
+    // x³ − x = x(x−1)(x+1). Dividing by (x − 1) leaves x² + x = x(x+1), and
+    // dividing by (x − 2), which is not a root, has to refuse: a quotient
+    // returned with a nonzero remainder is an answer that is quietly wrong.
+    let x = vars(&["x"]);
+    let polynomial = Poly::<Number>::from_expr(
+        &canlab_core::add(vec![
+            canlab_core::pow(sym("x"), int(3)),
+            canlab_core::mul(vec![int(-1), sym("x")]),
+        ]),
+        &x,
+    )
+    .expect("a cubic");
+    let quotient = polynomial.deflate(&Number::int(1)).expect("1 is a root");
+    let mut roots: Vec<f64> = quotient
+        .rational_roots()
+        .expect("a univariate polynomial")
+        .iter()
+        .map(Number::to_f64)
+        .collect();
+    roots.sort_by(f64::total_cmp);
+    assert_eq!(roots, vec![-1.0, 0.0]);
+    assert!(
+        polynomial.deflate(&Number::int(2)).is_none(),
+        "2 is not a root of x³ − x"
+    );
+}
+
+#[test]
+fn deflation_repeats_for_a_repeated_root() {
+    // (x − 1)²(x + 2) = x³ − 3x + 2. The double root takes two divisions, and
+    // the leftover is a linear factor that still has a root.
+    let x = vars(&["x"]);
+    let polynomial = Poly::<Number>::from_expr(
+        &canlab_core::add(vec![
+            canlab_core::pow(sym("x"), int(3)),
+            canlab_core::mul(vec![int(-3), sym("x")]),
+            int(2),
+        ]),
+        &x,
+    )
+    .expect("a cubic");
+    let once = polynomial.deflate(&Number::int(1)).expect("1 is a root");
+    let twice = once.deflate(&Number::int(1)).expect("1 is a double root");
+    assert!(
+        twice.deflate(&Number::int(-2)).is_some(),
+        "x + 2 must follow the double root"
+    );
+}

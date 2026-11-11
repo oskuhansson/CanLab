@@ -111,6 +111,22 @@ fn cases() -> Vec<Case> {
         case("3xy", "three factors", Expect::Reads),
         case("x2", "a digit after a letter", Expect::Simplified("2x")),
         case("abc", "a run of variables", Expect::Reads),
+        // An exponent binds to one base, but the field glues `5x` into one run.
+        // Reading the run as the base would make `5x^2` mean `25x^2`, which is
+        // what the corpus's quartic row caught: `x^4 - 5x^2 + 4 = 0` was read as
+        // `x^4 - 25x^2 + 4 = 0` and had no rational root. The pair below is the
+        // whole rule -- the run splits, and parentheses are how a student asks
+        // for the other reading.
+        case(
+            "5x^2",
+            "an exponent takes the run's last factor, not the run",
+            Expect::Simplified("5x^{2}"),
+        ),
+        case(
+            "(5x)^2",
+            "parentheses are how the other reading is written",
+            Expect::Simplified("\\left(5x\\right)^{2}"),
+        ),
         // ------------------------------------------------------------- units
         case("80°", "a degree marker is notation", Expect::Value(80.0)),
         case("50%", "so is a percent sign", Expect::Value(50.0)),

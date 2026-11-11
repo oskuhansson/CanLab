@@ -1,0 +1,11 @@
+# W2.3: a cubic with a missing constant term has a root at zero, and zero is the
+# root that a solver loses first -- `rational_roots` divides out powers of `x`
+# before it searches for divisors of the constant, because that constant is zero
+# and every divisor of zero would otherwise be a candidate.
+id = "cubic-three-roots"
+subject = "math"
+capability = "solve.cubic"
+source = "docs/corpus.md §5 — a contract row for the whole pipeline, not an exam problem"
+document = 'x^3 - x = 0'
+expect.exact = '\left\{-1, 0, 1\right\}'
+note = "Three real roots, one of them zero. A solver that only factorises `x^2 - 1` out of the whole polynomial answers two roots; this row asks for all three."

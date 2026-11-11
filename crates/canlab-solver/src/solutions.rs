@@ -104,7 +104,7 @@ impl Solutions {
             Solutions::Values(values) if values.is_empty() => String::from("\\varnothing"),
             Solutions::Values(values) => {
                 let mut out = String::from("\\left\\{");
-                for (index, value) in values.iter().enumerate() {
+                for (index, value) in ascending(values).iter().enumerate() {
                     if index > 0 {
                         out.push_str(", ");
                     }
@@ -171,6 +171,29 @@ impl Bound {
             Bound::NegInfinity | Bound::PosInfinity => true,
             Bound::Finite { open, .. } => *open,
         }
+    }
+}
+
+/// The values in ascending order, when they are all real numbers.
+///
+/// A finite answer set is a *set*: `\left\{1, -1, 2, -2\right\}` is the order the
+/// search found them in, and a reader has to sort it in their head to check it.
+/// When a value is not a number — a parameter, a radical the evaluator cannot
+/// reduce — the backend's order is kept, because ordering two exact expressions
+/// is a comparison this renderer does not promise. Ties (a repeated root) keep
+/// their order and contrast; the sort is stable.
+fn ascending(values: &[Expr]) -> Vec<&Expr> {
+    let numbers: Option<Vec<f64>> = values
+        .iter()
+        .map(canlab_core::approx::value_of)
+        .collect();
+    match numbers {
+        Some(numbers) if numbers.iter().all(|value| value.is_finite()) => {
+            let mut paired: Vec<(f64, &Expr)> = numbers.into_iter().zip(values).collect();
+            paired.sort_by(|left, right| left.0.total_cmp(&right.0));
+            paired.into_iter().map(|(_, value)| value).collect()
+        }
+        _ => values.iter().collect(),
     }
 }
 
@@ -358,10 +381,34 @@ mod tests {
     }
 
     #[test]
-    fn values_print_as_a_set() {
+    fn values_print_as_an_ascending_set() {
+        // The search finds roots in whatever order the deflation loop pops them.
+        // A set is a set either way, but `{-2, 2}` is the one a reader can check.
         assert_eq!(
             Solutions::Values(vec![int(2), int(-2)]).to_latex(),
-            "\\left\\{2, -2\\right\\}"
+            "\\left\\{-2, 2\\right\\}"
+        );
+        assert_eq!(
+            Solutions::Values(vec![int(3), int(-1), int(0), int(-1)]).to_latex(),
+            "\\left\\{-1, -1, 0, 3\\right\\}"
+        );
+    }
+
+    #[test]
+    fn a_value_that_is_not_a_number_keeps_the_backend_order() {
+        // `1 + y` and `1 - y` are a parametric pair; which is "smaller" depends
+        // on `y`, so the renderer must not invent an order.
+        let y = ExprNode::sym(SymbolId::intern("y"));
+        let plus = canlab_core::add(vec![int(1), y.clone()]);
+        let minus = canlab_core::add(vec![int(1), canlab_core::mul(vec![int(-1), y])]);
+        let expected = format!(
+            "\\left\\{{{}, {}\\right\\}}",
+            canlab_tex::to_latex(&plus),
+            canlab_tex::to_latex(&minus)
+        );
+        assert_eq!(
+            Solutions::Values(vec![plus, minus]).to_latex(),
+            expected
         );
     }
 

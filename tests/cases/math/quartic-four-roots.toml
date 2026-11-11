@@ -1,0 +1,10 @@
+# W2.3: four roots from a quartic whose roots are all rational. The cubic case
+# above shows the deflation loop finding three; this one shows it finding four,
+# and it is the point where the quartic formula stops being necessary.
+id = "quartic-four-roots"
+subject = "math"
+capability = "solve.quartic"
+source = "docs/corpus.md §5 — a contract row for the whole pipeline, not an exam problem"
+document = 'x^4 - 5x^2 + 4 = 0'
+expect.exact = '\left\{-2, -1, 1, 2\right\}'
+note = "Biquadratic in disguise: `u = x^2` gives `u^2 - 5u + 4`, so the roots are the square roots of 1 and 4. A quartic with an irrational or repeated root is still refused."

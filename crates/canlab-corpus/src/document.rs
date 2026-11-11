@@ -479,6 +479,27 @@ mod tests {
     }
 
     #[test]
+    fn a_quartic_document_is_solved_for_its_one_unknown() {
+        // `x^4 - 5x^2 + 4 = (x^2-1)(x^2-4)`. The coefficient in front of `x^2`
+        // is the point: the field stores `5x` as one run, and reading the run as
+        // the base of the exponent turned this into `x^4 - 25x^2 + 4`, which has
+        // no rational root at all and made the whole row decline.
+        let document = compile("x^4 - 5x^2 + 4 = 0").expect("compiled");
+        let Answer::Solutions(solutions) = ask(&document, &NativeSolver).expect("asked") else {
+            panic!("expected solutions");
+        };
+        let Solutions::Values(values) = solutions else {
+            panic!("expected four values");
+        };
+        let mut roots: Vec<f64> = values
+            .iter()
+            .filter_map(canlab_core::approx::value_of)
+            .collect();
+        roots.sort_by(f64::total_cmp);
+        assert_eq!(roots, vec![-2.0, -1.0, 1.0, 2.0]);
+    }
+
+    #[test]
     fn a_system_is_solved_as_a_system() {
         let document = compile("x + y = 8 || 2x - y = 1").expect("compiled");
         let Answer::System(assignments) = ask(&document, &NativeSolver).expect("asked") else {

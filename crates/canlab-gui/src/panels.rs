@@ -739,6 +739,32 @@ fn variables_body(app: &mut CasApp, ui: &mut Ui) {
         }
     }
 
+    // Values the page states, listed as values. `b = 3` is a statement, not a
+    // choice, so it is not a slider — and when the page says `a = 2b` the reader
+    // can see that the answer is 6 rather than a knob they did not touch.
+    let stated = app.document_assignments();
+    if !stated.is_empty() {
+        ui.add_space(10.0);
+        ui.label(
+            RichText::new("FROM THE DOCUMENT")
+                .small()
+                .strong()
+                .color(crate::theme::weak()),
+        );
+        ui.add_space(4.0);
+        for (symbol, value) in &stated {
+            ui.label(
+                RichText::new(format!(
+                    "{} = {}",
+                    symbol.as_str(),
+                    to_latex(value)
+                ))
+                .monospace()
+                .size(14.0),
+            );
+        }
+    }
+
     ui.add_space(12.0);
     ui.separator();
     ui.add_space(8.0);

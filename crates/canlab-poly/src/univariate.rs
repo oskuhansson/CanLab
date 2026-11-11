@@ -109,27 +109,47 @@ impl Poly<Number> {
     /// The rational root theorem: a root `p/q` in lowest terms has `p` dividing
     /// the constant term and `q` dividing the leading coefficient. Each distinct
     /// root appears once, which is what "the roots are" means.
+    ///
+    /// A missing constant term is a factor of `x`, and that factor is divided out
+    /// before the search: `x³ − x` has three roots, and reporting only `0` because
+    /// the constant term is zero would be half an answer.
     pub fn rational_roots(&self) -> Option<Vec<Number>> {
         if self.vars().len() != 1 {
             return None;
         }
-        let coefficients: BTreeMap<u32, Number> = self.univariate_coefficients()?;
+        let mut working = self.clone();
+        let mut roots: Vec<Number> = Vec::new();
+
+        loop {
+            let coefficients: BTreeMap<u32, Number> = working.univariate_coefficients()?;
+            if coefficients.is_empty() {
+                // The zero polynomial: every number is a root, which is not a
+                // list of roots and is the caller's business to report.
+                return None;
+            }
+            let constant = coefficients.get(&0).cloned().unwrap_or_else(Number::zero);
+            if !constant.is_zero() {
+                break;
+            }
+            roots.push(Number::zero());
+            working = divide_by_variable(&working)?;
+        }
+
+        let coefficients: BTreeMap<u32, Number> = working.univariate_coefficients()?;
         let degree = coefficients.keys().copied().max()?;
         if degree == 0 {
-            return None;
+            return Some(roots);
         }
         let leading = coefficients.get(&degree)?.clone();
         let constant = coefficients.get(&0).cloned().unwrap_or_else(Number::zero);
-        if constant.is_zero() {
-            return Some(vec![Number::zero()]);
-        }
         let numerator_divisors = divisors(&constant)?;
         let denominator_divisors = divisors(&leading)?;
-        let mut roots: Vec<Number> = Vec::new();
         for numerator in &numerator_divisors {
             for denominator in &denominator_divisors {
                 let candidate = numerator.div(denominator);
-                if self.evaluate(std::slice::from_ref(&candidate)).is_zero()
+                if working
+                    .evaluate(std::slice::from_ref(&candidate))
+                    .is_zero()
                     && !roots.contains(&candidate)
                 {
                     roots.push(candidate);
@@ -138,6 +158,55 @@ impl Poly<Number> {
         }
         Some(roots)
     }
+
+    /// Divide by `(x − root)`, when `root` is a root.
+    ///
+    /// Synthetic division: the quotient's coefficients are the running sums of
+    /// `aₖ + root·bₖ`, and the remainder is what the constant term leaves over.
+    /// A nonzero remainder means the divisor does not divide, and `None` says so
+    /// rather than returning a quotient that is off by a fraction.
+    ///
+    /// This is what lets a root search be *complete*: after dividing out the
+    /// rational roots, the leftover degree says how much is still unknown, and
+    /// `(x−1)(x²−2)` is `x² − 2` rather than "one root and three silent
+    /// coin-flips".
+    pub fn deflate(&self, root: &Number) -> Option<Poly<Number>> {
+        let coefficients: BTreeMap<u32, Number> = self.univariate_coefficients()?;
+        let degree = coefficients.keys().copied().max()?;
+        if degree < 1 {
+            return None;
+        }
+        let at = |power: u32| coefficients.get(&power).cloned().unwrap_or_else(Number::zero);
+
+        let mut quotient: Vec<Number> = vec![Number::zero(); degree as usize];
+        let mut carry = Number::zero();
+        for power in (1..=degree).rev() {
+            carry = at(power).add(&carry.mul(root));
+            quotient[(power - 1) as usize] = carry.clone();
+        }
+        let remainder = at(0).add(&carry.mul(root));
+        if !remainder.is_zero() {
+            return None;
+        }
+        Some(from_coefficients(self.vars().to_vec(), &quotient))
+    }
+}
+
+/// `poly / x`, when the constant term is zero.
+fn divide_by_variable(poly: &Poly<Number>) -> Option<Poly<Number>> {    let mut out = Poly::zero(poly.vars().to_vec());
+    for (monomial, coefficient) in poly.terms() {
+        let mut lowered = monomial.clone();
+        let first = lowered.0.first_mut()?;
+        if *first == 0 {
+            return None;
+        }
+        *first -= 1;
+        out.push(lowered, coefficient.clone());
+    }
+    if out.is_zero() {
+        return None;
+    }
+    Some(out)
 }
 
 /// The coefficient of the highest power present.

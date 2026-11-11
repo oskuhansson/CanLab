@@ -252,11 +252,28 @@ fn product(row: &Row, definitions: &crate::define::Definitions) -> Result<Expr, 
                 continue;
             }
         }
+        let atom_index = i;
         let mut e = atom(nodes[i], definitions)?;
         i += 1;
         while i < nodes.len() {
             match nodes[i] {
                 Node::Sup(sub) => {
+                    // An exponent binds to one base, but a run is notation for a
+                    // product: `5x^2` is `5·x²`, not `(5x)²`. The field glues
+                    // `5x` into one run (that is what makes `1/2x` put the whole
+                    // `2x` in the denominator), so the run is split here and the
+                    // exponent takes only its last factor. Only the superscript
+                    // directly after the run may split it: a second one applies
+                    // to the power just built.
+                    if i == atom_index + 1
+                        && let Node::Text(run) = nodes[atom_index]
+                    {
+                        let mut parts = text_run_factors(run)?;
+                        if parts.len() > 1 {
+                            e = parts.pop().expect("length checked");
+                            factors.extend(parts);
+                        }
+                    }
                     e = pow(e, build_with(sub, definitions)?);
                     i += 1;
                 }
@@ -373,6 +390,20 @@ fn int_of(e: &Expr) -> Option<i128> {
 /// a number and a chain of symbols, which is what a student means by `2x`, `3xy`
 /// or `2.5x`.
 fn text_expr(s: &str) -> Result<Expr, ToExprError> {
+    let mut factors = text_run_factors(s)?;
+    match factors.len() {
+        0 => Err(ToExprError::EmptySlot),
+        1 => Ok(factors.pop().expect("length checked")),
+        _ => Ok(mul(factors)),
+    }
+}
+
+/// The factors of one run, in order, before they are multiplied together.
+///
+/// Split out from [`text_expr`] because a following exponent needs the last
+/// factor on its own: `5x^2` is a run `5x` and a superscript, and the
+/// superscript applies to `x`.
+fn text_run_factors(s: &str) -> Result<Vec<Expr>, ToExprError> {
     if s.is_empty() {
         return Err(ToExprError::EmptySlot);
     }
@@ -405,11 +436,7 @@ fn text_expr(s: &str) -> Result<Expr, ToExprError> {
             return Err(ToExprError::UnexpectedText(s.to_string()));
         }
     }
-    match factors.len() {
-        0 => Err(ToExprError::EmptySlot),
-        1 => Ok(factors.pop().expect("length checked")),
-        _ => Ok(mul(factors)),
-    }
+    Ok(factors)
 }
 
 fn sym_expr(name: &str) -> Result<Expr, ToExprError> {

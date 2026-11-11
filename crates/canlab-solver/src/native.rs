@@ -20,6 +20,7 @@
 use std::collections::BTreeMap;
 
 use canlab_core::{Expr, ExprNode, Number, SymbolId, add, mul, pow};
+use canlab_poly::Poly;
 
 use crate::{Solutions, Solver, SolverError};
 
@@ -59,6 +60,75 @@ fn monomial(term: &Expr, var: SymbolId) -> Option<(Number, i128)> {
             }
             Some((coefficient, power))
         }
+        _ => None,
+    }
+}
+
+/// Rational roots of a polynomial of degree three or more.
+///
+/// None when the expression is not a polynomial in `var`, when the coefficients
+/// are not integers small enough to factor by counting, or when a factor is left
+/// that this backend cannot solve. All three are refusals, and the caller
+/// reports them as such.
+fn higher_degree_roots(solver: &NativeSolver, eq: &Expr, var: SymbolId) -> Option<Vec<Expr>> {
+    let mut working = Poly::<Number>::from_expr(eq, &[var])?;
+    let mut roots: Vec<Expr> = Vec::new();
+    let mut seen: Vec<Number> = Vec::new();
+
+    // Rational roots are divided out one at a time, repeatedly: `(x−1)²(x+2)`
+    // loses both copies of `1` but lists it once, because that is what "the roots
+    // are" means. Deflating rather than only *finding* is what makes the leftover
+    // degree trustworthy — without it a partial search answers `{1}` for
+    // `(x−1)(x²−2)` and drops two roots.
+    loop {
+        let found = working.rational_roots()?;
+        if found.is_empty() {
+            break;
+        }
+        let mut progressed = false;
+        for candidate in found {
+            let mut deflations = 0;
+            while let Some(deflated) = working.deflate(&candidate) {
+                working = deflated;
+                deflations += 1;
+            }
+            if deflations == 0 {
+                // `rational_roots` said this is a root and division disagrees,
+                // which is a contradiction rather than an answer.
+                return None;
+            }
+            progressed = true;
+            if !seen.contains(&candidate) {
+                seen.push(candidate.clone());
+                roots.push(ExprNode::num(candidate));
+            }
+        }
+        if !progressed {
+            break;
+        }
+    }
+
+    // What is left is a constant when the rational roots were the whole
+    // factorisation, and a linear or quadratic factor otherwise. The quadratic
+    // formula finishes those exactly, surds included: `(x−1)(x²−2)` answers
+    // `1, ±√2` instead of `1`.
+    let coefficients = working.univariate_coefficients()?;
+    let degree = coefficients.keys().copied().max().unwrap_or(0);
+    match degree {
+        0 => Some(roots),
+        1 | 2 => {
+            let terms: Vec<Expr> = coefficients
+                .iter()
+                .filter(|(_, coefficient)| !coefficient.is_zero())
+                .map(|(power, coefficient)| term(coefficient, i128::from(*power), var))
+                .collect();
+            let leftover = polynomial(terms);
+            let more = solver.solve(&leftover, var).ok()?;
+            roots.extend(more);
+            Some(roots)
+        }
+        // A cubic or higher with no rational root: real roots exist and this
+        // backend does not claim to know them.
         _ => None,
     }
 }
@@ -207,7 +277,10 @@ impl Solver for NativeSolver {
                     ]),
                 ])
             }
-            Some(_) => Err(SolverError::NotImplemented),
+            // Degree three and up: rational roots, and a clean refusal when
+            // there are none. x³ − 2 has a real root and this backend does not
+            // claim to know it.
+            Some(_) => higher_degree_roots(self, eq, var).ok_or(SolverError::NotImplemented),
         }
     }
 
@@ -250,7 +323,12 @@ impl Solver for NativeSolver {
                     Ok(Solutions::Values(values))
                 }
             }
-            Some(_) => Err(SolverError::NotImplemented),
+            // Degree three and up: rational roots, and a clean refusal when there
+            // are none. `x^3 - 2` has a real root and this backend does not claim
+            // to know it.
+            Some(_) => higher_degree_roots(self, eq, var)
+                .map(Solutions::Values)
+                .ok_or(SolverError::NotImplemented),
         }
     }
 
@@ -357,11 +435,97 @@ mod tests {
     }
 
     #[test]
-    fn solve_all_declines_a_cubic() {
-        let equation = pow(x(), int(3));
+    fn solve_all_answers_a_cubic_with_rational_roots() {
+        // `x^3 - x = x(x-1)(x+1)` has three roots, and a missing constant term
+        // must not hide two of them behind the zero.
+        let equation = add(vec![pow(x(), int(3)), mul(vec![int(-1), x()])]);
+        let solutions = NativeSolver
+            .solve_all(&equation, var())
+            .expect("three rational roots");
+        let Solutions::Values(values) = solutions else {
+            panic!("expected values");
+        };
+        let mut roots: Vec<f64> = values
+            .iter()
+            .filter_map(|value| value.as_number().map(Number::to_f64))
+            .collect();
+        roots.sort_by(f64::total_cmp);
+        assert_eq!(roots, vec![-1.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn solve_all_answers_a_quartic_with_four_rational_roots() {
+        // x⁴ - 5x² + 4 = (x²-1)(x²-4) has roots ±1 and ±2, and the rational
+        // root search has to find all four through a leading coefficient of one.
+        let equation = add(vec![
+            pow(x(), int(4)),
+            mul(vec![int(-5), pow(x(), int(2))]),
+            int(4),
+        ]);
+        let solutions = NativeSolver
+            .solve_all(&equation, var())
+            .expect("four rational roots");
+        let Solutions::Values(values) = solutions else {
+            panic!("expected values");
+        };
+        let mut roots: Vec<f64> = values
+            .iter()
+            .filter_map(|value| value.as_number().map(Number::to_f64))
+            .collect();
+        roots.sort_by(f64::total_cmp);
+        assert_eq!(roots, vec![-2.0, -1.0, 1.0, 2.0]);
+    }
+    #[test]
+    fn solve_all_finishes_a_cubic_with_surds_left_over() {
+        // (x−1)(x²−2) = x³ − x² − 2x + 2. One rational root, and the leftover
+        // quadratic gives ±√2 — answering `{1}` here would be a wrong answer
+        // rather than a partial one, which is why the leftover is solved instead
+        // of the rational roots being reported alone.
+        let equation = add(vec![
+            pow(x(), int(3)),
+            mul(vec![int(-1), pow(x(), int(2))]),
+            mul(vec![int(-2), x()]),
+            int(2),
+        ]);
+        let solutions = NativeSolver
+            .solve_all(&equation, var())
+            .expect("three real roots");
+        let Solutions::Values(values) = solutions else {
+            panic!("expected values");
+        };
+        let texts: Vec<String> = values.iter().map(canlab_tex::to_latex).collect();
+        assert_eq!(texts.len(), 3, "{texts:?}");
+        assert!(texts.iter().any(|text| text == "1"), "{texts:?}");
+        let surds = texts.iter().filter(|text| *text != "1").count();
+        assert_eq!(surds, 2, "both ±√2 roots are reported: {texts:?}");
+    }
+
+    #[test]
+    fn solve_all_lists_a_double_root_once() {
+        // (x−1)²(x+2) = x³ − 3x + 2: the answer is a *set*, so a repeated root is
+        // one member of it, not two.
+        let equation = add(vec![
+            pow(x(), int(3)),
+            mul(vec![int(-3), x()]),
+            int(2),
+        ]);
+        let solutions = NativeSolver
+            .solve_all(&equation, var())
+            .expect("two distinct roots");
+        let Solutions::Values(values) = solutions else {
+            panic!("expected values");
+        };
+        let texts: Vec<String> = values.iter().map(canlab_tex::to_latex).collect();
+        assert_eq!(texts.len(), 2, "{texts:?}");
+    }
+
+    #[test]
+    fn solve_all_declines_a_cubic_it_cannot_factor() {
+        // `x^3 - 2` has a real root and this backend does not claim to know it.
+        let equation = add(vec![pow(x(), int(3)), int(-2)]);
         let error = NativeSolver
             .solve_all(&equation, var())
-            .expect_err("a cubic is outside this backend's repertoire");
+            .expect_err("no rational root");
         assert_eq!(error, SolverError::NotImplemented);
         // A decline is a normal answer, not a failure: the caller keeps the
         // equation rather than showing an error banner.

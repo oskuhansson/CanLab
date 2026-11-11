@@ -546,25 +546,79 @@ impl CasApp {
     /// first plottable, so the plot must not treat `s` as a third coordinate when
     /// a row has already pinned it down.
     fn assigned_parameters(&self) -> Vec<(SymbolId, Number)> {
-        let mut out: Vec<(SymbolId, Number)> = Vec::new();
+        self.document_assignments()
+            .into_iter()
+            .filter_map(|(symbol, value)| value.as_number().cloned().map(|number| (symbol, number)))
+            .collect()
+    }
+
+    /// The values the document itself states, in the order they can be resolved.
+    ///
+    /// `b = 3` fixes `b`; `a = 2b` is only a number once `b` is one, so a single
+    /// pass is not enough and this resolves repeatedly until nothing changes. A
+    /// line whose symbol is still free afterwards fixes nothing — `r = 2s` with
+    /// `s` unknown stays symbolic — and a line that mentions its own symbol
+    /// (`s = s + 1`) is not iterated, because it has no value to reach.
+    ///
+    /// An **axis** variable is not an assignment: `x = 1` is a vertical line to
+    /// plot and an equation to solve, not a definition of `x`. That is the
+    /// difference between "the page pins a parameter" and "the page draws a
+    /// curve", and it is why the axes are excluded here.
+    pub fn document_assignments(&self) -> Vec<(SymbolId, Expr)> {
+        let axes: Vec<SymbolId> = [self.x_axis, self.y_axis]
+            .into_iter()
+            .flatten()
+            .collect();
+        let mut candidates: Vec<(SymbolId, Expr)> = Vec::new();
         for (left, right) in &self.equations {
             let Some(right) = right else {
                 continue;
             };
-            let assigned = match (left.as_symbol(), right.as_number()) {
-                (Some(symbol), Some(number)) => Some((symbol, number.clone())),
-                _ => match (left.as_number(), right.as_symbol()) {
-                    (Some(number), Some(symbol)) => Some((symbol, number.clone())),
-                    _ => None,
-                },
+            let (symbol, value) = match (left.as_symbol(), right.as_symbol()) {
+                (Some(symbol), _) => (symbol, right.clone()),
+                (None, Some(symbol)) => (symbol, left.clone()),
+                _ => continue,
             };
-            if let Some((symbol, number)) = assigned {
-                if !out.iter().any(|(seen, _)| *seen == symbol) {
-                    out.push((symbol, number));
-                }
+            if axes.contains(&symbol) {
+                continue;
+            }
+            // A value that mentions an axis is not a value the page states.
+            // `x² + y² = a` is a circle, not the definition `a = x² + y²`: read the
+            // other way, `a` becomes a function of the variables it is plotted
+            // against, and the circle's radius turns into a curve.
+            let mut value_symbols = Vec::new();
+            free_symbols(&value, &mut value_symbols);
+            if value_symbols.iter().any(|symbol| axes.contains(symbol)) {
+                continue;
+            }
+            // Two lines for one symbol: the first stated wins, as it does for a
+            // parameter's value today.
+            if !candidates.iter().any(|(seen, _)| *seen == symbol) {
+                candidates.push((symbol, value));
             }
         }
-        out
+
+        let mut known: Vec<(SymbolId, Expr)> = Vec::new();
+        loop {
+            let mut progressed = false;
+            for (symbol, value) in &candidates {
+                if known.iter().any(|(seen, _)| seen == symbol) {
+                    continue;
+                }
+                let substituted = substitute_all(value, &known);
+                let mut free = Vec::new();
+                free_symbols(&substituted, &mut free);
+                if !free.is_empty() {
+                    continue;
+                }
+                known.push((*symbol, substituted));
+                progressed = true;
+            }
+            if !progressed {
+                break;
+            }
+        }
+        known
     }
 
     /// Symbols that are a whole side of an equation and are not on an axis.
@@ -1021,20 +1075,72 @@ impl CasApp {
         if self.refuse_half_typed() {
             return;
         }
-        // A document with several equations is a *system*: solve it as one, or
-        // the answer would only cover the first line.
+        // A page of equations is not always a system to solve together. `a = 2b`
+        // and `b = 3` state two values; once they are substituted the rest of the
+        // page is *one* equation. Without this, `x² + y² = a` with `a` pinned by
+        // the page is a four-unknown nonlinear system, and the backend declines —
+        // which is what it used to show for an entirely ordinary exercise.
         if self.equations.len() > 1 {
-            let equations: Vec<Expr> = self
-                .equations
-                .iter()
-                .map(|(left, right)| match right {
+            let assignments = self.document_assignments();
+            let mut equations: Vec<Expr> = Vec::new();
+            for (left, right) in &self.equations {
+                // The line that stated a value has done its job.
+                if states_a_value(&assignments, left, right.as_ref()) {
+                    continue;
+                }
+                let left = substitute_all(left, &assignments);
+                let right = right
+                    .as_ref()
+                    .map(|right| substitute_all(right, &assignments));
+                if let Some(right) = &right
+                    && left == *right
+                {
+                    // `1 = 1`: the substitution consumed this line, and asking the
+                    // solver about it would answer "every number".
+                    continue;
+                }
+                equations.push(match right {
                     Some(right) => canlab_core::add(vec![
-                        left.clone(),
-                        canlab_core::mul(vec![canlab_core::int(-1), right.clone()]),
+                        left,
+                        canlab_core::mul(vec![canlab_core::int(-1), right]),
                     ]),
-                    None => left.clone(),
-                })
-                .collect();
+                    None => left,
+                });
+            }
+
+            if equations.is_empty() {
+                if assignments.is_empty() {
+                    self.status = String::from("nothing to solve: the page states no value");
+                } else {
+                    self.solve = SolveState::System { assignments };
+                    self.status = String::from("solved");
+                }
+                return;
+            }
+
+            if equations.len() == 1 {
+                let equation = equations.pop().expect("length checked");
+                let var = self
+                    .free_vars
+                    .iter()
+                    .copied()
+                    .find(|symbol| !assignments.iter().any(|(seen, _)| seen == symbol))
+                    .or_else(|| self.free_vars.first().copied())
+                    .unwrap_or_else(|| SymbolId::intern("x"));
+                let label = String::from("Solve the equation");
+                let generation = self.generation;
+                if self.jobs.submit(Job {
+                    label,
+                    op: JobOp::Solve(equation, var),
+                    generation,
+                }) {
+                    self.status = String::from("Solve the equation…");
+                } else {
+                    self.status = String::from("solver worker unavailable");
+                }
+                return;
+            }
+
             let label = format!("Solve {} equations", equations.len());
             let generation = self.generation;
             let status = format!("{label}…");
@@ -1506,7 +1612,49 @@ fn paste_lines(text: &str) -> Vec<String> {
         .collect()
 }
 
-fn free_symbols(expr: &Expr, out: &mut Vec<SymbolId>) {    match &**expr {
+/// Did this line state one of the values in `assignments`?
+///
+/// Only a line whose one side is the bare symbol counts: `a = 2b` stated `a`, but
+/// `a + 1 = 3` is an equation about `a` and stays in the system.
+fn states_a_value(
+    assignments: &[(SymbolId, Expr)],
+    left: &Expr,
+    right: Option<&Expr>,
+) -> bool {
+    // `s = e` states a value when `s` is one of the resolved symbols *and* the
+    // page says the same thing: `a = 2b` stated `a = 6`, while `x² + y² = a` only
+    // mentions `a` and stays an equation to solve.
+    let states = |symbol: SymbolId, value: &Expr| {
+        assignments
+            .iter()
+            .find(|(seen, _)| *seen == symbol)
+            .is_some_and(|(_, stated)| substitute_all(value, assignments) == *stated)
+    };
+    let Some(right) = right else {
+        return false;
+    };
+    match (left.as_symbol(), right.as_symbol()) {
+        (Some(symbol), _) => match right.as_symbol() {
+            // `s = s`: both sides are the symbol, which states nothing.
+            Some(other) if other == symbol => false,
+            _ => states(symbol, right),
+        },
+        (None, Some(symbol)) => states(symbol, left),
+        (None, None) => false,
+    }
+}
+
+/// Replace every symbol in `known` by its value, in order.
+fn substitute_all(expression: &Expr, known: &[(SymbolId, Expr)]) -> Expr {
+    known
+        .iter()
+        .fold(expression.clone(), |current, (symbol, value)| {
+            canlab_solver::system::substitute(&current, *symbol, value)
+        })
+}
+
+fn free_symbols(expr: &Expr, out: &mut Vec<SymbolId>) {
+    match &**expr {
         ExprNode::Num(_) => {}
         ExprNode::Sym(s) => {
             if !matches!(s.as_str().as_str(), "pi" | "e" | "tau") && !out.contains(s) {
@@ -1551,7 +1699,7 @@ fn default_field() -> MathField {
     field
 }
 
-/// The names that mean nother coordinate rather than  constant.
+/// The names that mean another coordinate rather than a constant.
 ///
 /// `z` is the third spatial coordinate and `w` the fourth; a, b, k and t are
 /// constants in the notation this tool is used with. The list is a convention,
@@ -2620,5 +2768,126 @@ mod tests {
             "{:?}",
             app.error
         );
+    }
+
+    /// Press Solve and wait for the background answer.
+    fn solve_and_wait(app: &mut CasApp) {
+        app.start_solve();
+        let ctx = egui::Context::default();
+        for _ in 0..400 {
+            app.poll_jobs(&ctx);
+            if !matches!(app.solve, SolveState::Idle) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("the solve never answered: {}", app.status);
+    }
+
+    #[test]
+    fn a_circle_pinned_by_two_assignments_is_solved_not_declined() {
+        // The exercise from the screenshot: a circle whose radius the page states,
+        // through one intermediate line so the substitution has to be in order.
+        // Before this, the page was sent as a four-unknown nonlinear system, the
+        // backend declined, and the result panel showed the document's own
+        // description back as if that were the answer.
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex_lines(&[
+            String::from("x^2+y^2=a"),
+            String::from("a=2b"),
+            String::from("b=3"),
+        ])
+        .expect("a three-line document");
+        app.recompute();
+        solve_and_wait(&mut app);
+        match &app.solve {
+            SolveState::Solved { var, solutions } => {
+                assert_eq!(var.as_str(), "x");
+                let latex = solutions.to_latex();
+                assert!(
+                    latex.contains("6") && latex.contains("y^{2}"),
+                    "the circle has radius √6 and the answer is in x and y: {latex}"
+                );
+                // Two branches, and the constant is the substituted `a = 2·3`.
+                assert_eq!(solutions.to_latex().matches("sqrt").count(), 2, "{latex}");
+            }
+            other => panic!("expected the parametric answer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_page_states_its_own_parameters_in_dependency_order() {
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex_lines(&[
+            String::from("x^2+y^2=a"),
+            String::from("a=2b"),
+            String::from("b=3"),
+        ])
+        .expect("a three-line document");
+        app.recompute();
+        let stated: Vec<(String, String)> = app
+            .document_assignments()
+            .into_iter()
+            .map(|(symbol, value)| (symbol.as_str().to_string(), to_latex(&value)))
+            .collect();
+        // `a = 2b` is only a number once `b` is one, so both are resolved and `a`
+        // is 6 rather than the `2b` that was typed.
+        assert_eq!(
+            stated,
+            vec![
+                (String::from("b"), String::from("3")),
+                (String::from("a"), String::from("6")),
+            ]
+        );
+        // And the plot's parameter list takes the page's value over the default.
+        let a = app
+            .parameters
+            .iter()
+            .find(|parameter| parameter.name.as_str() == "a")
+            .expect("a is still a parameter");
+        assert_eq!(a.value, 6.0);
+    }
+
+    #[test]
+    fn an_equation_is_not_an_assignment_of_the_symbol_on_its_side() {
+        // `x² + y² = a` mentions `a` but states nothing about it: the value side
+        // mentions an axis, so `a` stays a parameter with a slider. Reading it as
+        // `a = x² + y²` would turn the circle into a curve of `a`.
+        let mut app = CasApp::new();
+        app.field =
+            MathField::from_latex_lines(&[String::from("x^2+y^2=a")]).expect("one line");
+        app.recompute();
+        assert!(
+            app.document_assignments().is_empty(),
+            "{:?}",
+            app.document_assignments()
+        );
+        let a = app
+            .parameters
+            .iter()
+            .find(|parameter| parameter.name.as_str() == "a")
+            .expect("a is a parameter");
+        assert_eq!(a.value, 1.0);
+    }
+
+    #[test]
+    fn a_line_that_merely_mentions_a_stated_symbol_is_still_an_equation() {
+        // `b = 3` states `b`; `x² + y² = b` is about the circle. The first line of
+        // the pair must not be swallowed as "the line that stated b".
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex_lines(&[
+            String::from("x^2+y^2=b"),
+            String::from("b=3"),
+        ])
+        .expect("two lines");
+        app.recompute();
+        solve_and_wait(&mut app);
+        match &app.solve {
+            SolveState::Solved { solutions, .. } => {
+                let latex = solutions.to_latex();
+                assert!(latex.contains("3"), "{latex}");
+            }
+            other => panic!("expected the circle in x, got {other:?}"),
+        }
     }
 }

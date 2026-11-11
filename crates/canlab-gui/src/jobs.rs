@@ -438,12 +438,17 @@ mod tests {
 
     #[test]
     fn a_declined_solve_is_not_reported_as_a_failure() {
-        // A cubic is outside the native backend's repertoire, and declining is a
-        // real answer: the UI must show "declined", not an error.
+        // `x³ − 2` has a real root and no rational one, which is outside the
+        // native backend's repertoire, and declining is a real answer: the UI
+        // must show "declined", not an error. (A cubic with a rational root is
+        // solved since W2.3, so `x³` itself is no longer a refusal.)
         let result = run(
             &NativeSolver,
             Backend::Native,
-            job(JobOp::Solve(pow(sym("x"), int(3)), SymbolId::intern("x"))),
+            job(JobOp::Solve(
+                canlab_core::add(vec![pow(sym("x"), int(3)), int(-2)]),
+                SymbolId::intern("x"),
+            )),
         );
         assert!(result.kind.is_solve());
         match result.outcome {
