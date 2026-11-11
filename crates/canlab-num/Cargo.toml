@@ -1,0 +1,9 @@
+[package]
+name = "canlab-num"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Numerical root finding: Brent bracketing, a scan for every root, and a residual on every answer"
+
+[dependencies]
+canlab-core = { path = "../canlab-core" }
