@@ -14,5 +14,4 @@ plot.svg
 commit-msg.txt
 
 # Debug captures from a launch.
-*.txt
-!Cargo.lock
+win*.txt

@@ -1,9 +1,0 @@
-2026-11-11T16:32:24.048931Z  INFO bevy_diagnostic::system_information_diagnostics_plugin::internal: SystemInfo { os: "Windows 11 Education", kernel: "26100", cpu: "13th Gen Intel(R) Core(TM) i3-1315U", core_count: "6", memory: "7.7 GiB" }
-2026-11-11T16:32:24.655260Z  INFO bevy_render::renderer: AdapterInfo { name: "Intel(R) UHD Graphics", vendor: 32902, device: 42921, device_type: IntegratedGpu, device_pci_bus_id: "", driver: "Intel Corporation", driver_info: "101.6733", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 32, transient_saves_memory: Some(false), limit_bucket: None }
-2026-11-11T16:32:25.027640Z  INFO bevy_pbr::cluster: GPU clustering is supported on this device.
-2026-11-11T16:32:25.028379Z  INFO bevy_render::batching::gpu_preprocessing: GPU preprocessing is fully supported on this device.
-2026-11-11T16:32:25.030764Z  INFO bevy_egui::render: Using bindless_mode_array_size 16 (Device maximum 1048576)
-2026-11-11T16:32:25.031683Z  INFO bevy_winit::system: Creating new window CanLab — LaTeX algebra (67v0)
-frame 0: content_rect=[[0.0 0.0] - [1770.0 1140.0]] ppp=1.5 window=Some((1770, 1140, 1.5))
-frame 1: content_rect=[[0.0 0.0] - [1180.0 760.0]] ppp=1.5 window=Some((1770, 1140, 1.5))
-frame 2: content_rect=[[0.0 0.0] - [1180.0 760.0]] ppp=1.5 window=Some((1770, 1140, 1.5))
