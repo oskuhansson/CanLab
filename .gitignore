@@ -12,3 +12,7 @@ plot.svg
 
 # A commit message file lives here while a commit is being written.
 commit-msg.txt
+
+# Debug captures from a launch.
+*.txt
+!Cargo.lock
