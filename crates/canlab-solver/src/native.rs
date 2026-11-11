@@ -215,13 +215,25 @@ fn approximate_root(eq: &Expr, var: SymbolId) -> Result<Solutions, SolverError> 
     }
     let roots = canlab_num::scan_expression(eq, var, SCAN_INTERVAL, SCAN_TOLERANCE)
         .map_err(|_| SolverError::NotImplemented)?;
-    let Some(root) = roots.first() else {
+    if roots.is_empty() {
         // An empty scan is "no root here", not "the root is zero".
         return Err(SolverError::NotImplemented);
-    };
-    Ok(Solutions::Approximation {
-        value: ExprNode::num(Number::float(root.value)),
-        residual: root.residual,
+    }
+    // **Every** root the scan found, not just the first. `x⁴ − x − 1` has two
+    // real roots and reporting one of them is the kind of half-answer this
+    // project treats as a bug: the scan already returns all of them, and a union
+    // of approximations says so. One root is still one approximation, because a
+    // one-member union prints as its member.
+    let approximations: Vec<Solutions> = roots
+        .into_iter()
+        .map(|root| Solutions::Approximation {
+            value: ExprNode::num(Number::float(root.value)),
+            residual: root.residual,
+        })
+        .collect();
+    Ok(match approximations.len() {
+        1 => approximations.into_iter().next().expect("length checked"),
+        _ => Solutions::Union(approximations),
     })
 }
 
@@ -634,22 +646,27 @@ mod tests {
 
     #[test]
     fn solve_all_answers_a_quartic_with_no_exact_root() {
-        // x⁴ − x − 1 has two real roots and no exact form this backend can
-        // name. It used to decline; the numeric fallback now answers with one
-        // root, and substituting it back is what makes it a root rather than a
-        // guess.
+        // x⁴ − x − 1 has **two** real roots and no exact form this backend can
+        // name. It used to decline; the numeric fallback answers both, and
+        // substituting each back is what makes them roots rather than guesses.
         let equation = add(vec![pow(x(), int(4)), mul(vec![int(-1), x()]), int(-1)]);
         let solutions = NativeSolver
             .solve_all(&equation, var())
-            .expect("a numeric root");
-        let Solutions::Approximation { value, residual } = &solutions else {
-            panic!("expected an approximation, got {solutions:?}");
+            .expect("numeric roots");
+        let Solutions::Union(members) = &solutions else {
+            panic!("two real roots are a union, got {solutions:?}");
         };
-        assert!(*residual < 1e-9, "residual {residual}");
-        let at = canlab_core::approx::value_of(value).expect("a number");
+        assert_eq!(members.len(), 2, "{members:?}");
         let program = canlab_core::Program::compile(&equation, &[var()]).expect("compiles");
-        let at_root = program.eval(&[at]);
-        assert!(at_root.abs() < 1e-9, "f({at}) = {at_root}");
+        for member in members {
+            let Solutions::Approximation { value, residual } = member else {
+                panic!("a member is not an approximation: {member:?}");
+            };
+            assert!(*residual < 1e-9, "residual {residual}");
+            let at = canlab_core::approx::value_of(value).expect("a number");
+            let at_root = program.eval(&[at]);
+            assert!(at_root.abs() < 1e-9, "f({at}) = {at_root}");
+        }
     }
 
     #[test]

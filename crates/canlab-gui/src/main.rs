@@ -1881,7 +1881,13 @@ fn solution_lines(solutions: &canlab_solver::Solutions, var: SymbolId) -> Vec<St
         Solutions::Inequality { .. } => vec![format!("{name} \\in {}", solutions.to_latex())],
         // `sin x = ½` is two progressions; each is a line of its own, because
         // `x = π/6 + 2kπ, x = 5π/6 + 2kπ` is how it is read aloud.
-        Solutions::Union(_) => vec![format!("{name} = {}", solutions.to_latex())],
+        // A union is a list of answers, so it reads as one line per member: an
+        // approximation inside it must keep its `≈` instead of being flattened
+        // into the union's LaTeX and losing the fact that it is approximate.
+        Solutions::Union(members) => members
+            .iter()
+            .flat_map(|member| solution_lines(member, var))
+            .collect(),
         Solutions::None => vec![String::from("no solutions")],
         Solutions::All => vec![String::from("every number")],
     }
@@ -1901,7 +1907,24 @@ fn solution_count(solutions: &canlab_solver::Solutions) -> String {
         Solutions::Approximation { .. } => String::from("1 approximate solution"),
         Solutions::Family { .. } => String::from("a family of solutions"),
         Solutions::Inequality { .. } => String::from("an interval"),
-        Solutions::Union(members) => format!("{} families", members.len()),
+        // A union of approximations is still approximate, and the status bar must
+        // say so rather than calling them "families".
+        Solutions::Union(members) => {
+            let approximate = members
+                .iter()
+                .filter(|member| {
+                    matches!(member, canlab_solver::Solutions::Approximation { .. })
+                })
+                .count();
+            if approximate == members.len() && approximate > 0 {
+                match approximate {
+                    1 => String::from("1 approximate solution"),
+                    n => format!("{n} approximate solutions"),
+                }
+            } else {
+                format!("{} families", members.len())
+            }
+        }
         Solutions::None => String::from("no solutions"),
         Solutions::All => String::from("every number"),
     }
@@ -2197,6 +2220,25 @@ mod tests {
                 solutions: canlab_solver::Solutions::Approximation { residual, .. },
                 ..
             } => *residual,
+            // x⁴ − x − 1 has **two** real roots, so the answer is a union of
+            // approximations; every member must be one, because a member shown
+            // with `=` would be the lie this test exists to prevent.
+            SolveState::Solved {
+                solutions: canlab_solver::Solutions::Union(members),
+                ..
+            } => {
+                assert_eq!(members.len(), 2, "{members:?}");
+                let mut first = None;
+                for member in members {
+                    match member {
+                        canlab_solver::Solutions::Approximation { residual, .. } => {
+                            first = Some(*residual);
+                        }
+                        other => panic!("a union member is not an approximation: {other:?}"),
+                    }
+                }
+                first.expect("a member")
+            }
             other => panic!("expected an approximation, got {other:?}"),
         };
         assert!(residual.is_finite(), "residual {residual}");
@@ -2210,7 +2252,7 @@ mod tests {
             "an approximate answer was written with '=': {latex}"
         );
         assert!(
-            app.status.contains("1 approximate solution"),
+            app.status.contains("2 approximate solutions"),
             "status: {}",
             app.status
         );
