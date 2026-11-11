@@ -65,17 +65,33 @@ fn draw_frame(mut contexts: EguiContexts, mut open: ResMut<OpenApp>) {
         open.theme_installed = true;
         theme::install(ctx);
     }
-    // `CasApp::draw` wants a `Ui`, and a panel is what turns a context into one.
-    // An `Area` pinned to the corner and sized to the window is the closest thing
-    // to the full-screen `Ui` that eframe used to hand over.
+    draw_root(&mut open.app, ctx);
+}
+
+/// Draw the application as the root of an egui context, and report the rectangle
+/// it was laid out in.
+///
+/// The rectangle is returned for the regression test: an `Area` remembers its
+/// size between passes, so the first pass of a Bevy window — which happens before
+/// `bevy_egui` knows the scale factor and reported a 1770×1140 screen for a
+/// 1180×760 window — left the whole interface laid out for a window that did not
+/// exist, and the right-hand column was simply off screen.
+fn draw_root(app: &mut CasApp, ctx: &egui::Context) -> egui::Rect {
     let screen = ctx.content_rect();
+    let mut laid_out = screen;
     egui::Area::new(egui::Id::new("canlab-root"))
         .fixed_pos(screen.min)
         .order(egui::Order::Background)
         .show(ctx, |ui| {
-            ui.set_min_size(screen.size());
-            open.app.draw(ui);
+            // Explicit, every frame: this is what makes the Area follow the
+            // window instead of its own memory of the last size.
+            ui.set_width(screen.width());
+            ui.set_height(screen.height());
+            ui.set_clip_rect(screen);
+            laid_out = ui.max_rect();
+            app.draw(ui);
         });
+    laid_out
 }
 
 fn main() {
@@ -110,7 +126,10 @@ pub enum SolveState {
     Idle,
     Solved {
         var: SymbolId,
-        values: Vec<Expr>,
+        /// Every kind of answer the solver can give, not just a list of values.
+        /// `sin x = ½` is two families, `x² + 1 = 0` is none, and an inequality is
+        /// an interval — all of them are answers, so the panel holds the whole set.
+        solutions: canlab_solver::Solutions,
     },
     Declined {
         /// What was asked, e.g. "Solve for x".
@@ -1097,27 +1116,23 @@ impl CasApp {
                 self.status = format!("{label}: done");
                 self.push_history(&label, self.result_latex.clone());
             }
-            JobOutcome::Solutions(values) => {
+            JobOutcome::Solutions(solutions) => {
                 let Some(var) = var else {
                     self.status = String::from("solver returned solutions without a variable");
                     return;
                 };
                 let name = to_latex(&canlab_core::sym(&var.as_str()));
-                if values.is_empty() {
-                    self.result_latex = String::from("\\varnothing");
-                    self.result_plain = String::from("no solutions");
-                    self.status = format!("{label}: no solutions");
-                } else {
-                    let latex: Vec<String> = values
-                        .iter()
-                        .map(|value| format!("{name} = {}", to_latex(value)))
-                        .collect();
-                    self.result_latex = latex.join(",\\quad ");
-                    self.result_plain = latex.join(", ");
-                    let suffix = if values.len() == 1 { "" } else { "s" };
-                    self.status = format!("{label}: {} solution{suffix}", values.len());
-                }
-                self.solve = SolveState::Solved { var, values };
+                self.result_latex = match &solutions {
+                    canlab_solver::Solutions::None => String::from("\\varnothing"),
+                    canlab_solver::Solutions::All => String::from("\\mathbb{R}"),
+                    canlab_solver::Solutions::Inequality { .. } => {
+                        format!("{name} \\in {}", solutions.to_latex())
+                    }
+                    _ => solution_lines(&solutions, var).join(",\\quad "),
+                };
+                self.result_plain = solution_lines(&solutions, var).join(", ");
+                self.status = format!("{label}: {}", solution_count(&solutions));
+                self.solve = SolveState::Solved { var, solutions };
                 self.push_history(&label, self.result_latex.clone());
             }
             JobOutcome::Assignments(assignments) => {
@@ -1472,6 +1487,43 @@ fn default_field() -> MathField {
     field
 }
 
+/// One line per answer, in the notation the panels use.
+///
+/// A set of values prints as `x = a` per value, because that is how it is read
+/// aloud. A family keeps its parameter (`x = π/6 + 2kπ`), an inequality is
+/// membership (`x ∈ (-1, 3)`), and the two degenerate answers are words rather
+/// than symbols — `\varnothing` in a monospace row is a puzzle, not an answer.
+fn solution_lines(solutions: &canlab_solver::Solutions, var: SymbolId) -> Vec<String> {
+    use canlab_solver::Solutions;
+    let name = to_latex(&canlab_core::sym(&var.as_str()));
+    match solutions {
+        Solutions::Values(values) => values
+            .iter()
+            .map(|value| format!("{name} = {}", to_latex(value)))
+            .collect(),
+        Solutions::Family { .. } => vec![format!("{name} = {}", solutions.to_latex())],
+        Solutions::Inequality { .. } => vec![format!("{name} \\in {}", solutions.to_latex())],
+        Solutions::None => vec![String::from("no solutions")],
+        Solutions::All => vec![String::from("every number")],
+    }
+}
+
+/// How many answers, in words, for the status bar.
+fn solution_count(solutions: &canlab_solver::Solutions) -> String {
+    use canlab_solver::Solutions;
+    match solutions {
+        Solutions::Values(values) => match values.len() {
+            0 => String::from("no solutions"),
+            1 => String::from("1 solution"),
+            n => format!("{n} solutions"),
+        },
+        Solutions::Family { .. } => String::from("a family of solutions"),
+        Solutions::Inequality { .. } => String::from("an interval"),
+        Solutions::None => String::from("no solutions"),
+        Solutions::All => String::from("every number"),
+    }
+}
+
 /// A short explanation for a field that is structurally valid LaTeX but not a
 /// value the algebra engine can consume.
 fn friendly_error(error: &ToExprError) -> String {
@@ -1574,6 +1626,40 @@ mod tests {
         );
         assert_eq!(app.field.to_latex(), "x^2+1");
         assert!(app.expr.is_some(), "{:?}", app.error);
+    }
+
+    #[test]
+    fn the_root_layout_follows_a_window_that_is_reported_too_big() {
+        // The first frame of a Bevy window arrives before the scale factor is
+        // known, so `content_rect` says 1770×1140 for a 1180×760 window. An
+        // `Area` keeps the size it was born with, so that first frame used to
+        // leave the dock three columns wide inside a window two-thirds that
+        // size, with the variables panel off the right edge.
+        let ctx = egui::Context::default();
+        let mut app = CasApp::new();
+        let pass = |app: &mut CasApp, width: f32, height: f32| {
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height));
+            let input = egui::RawInput {
+                screen_rect: Some(rect),
+                ..Default::default()
+            };
+            // The rectangle must come from *inside* the pass: a call made after
+            // it would return the default and the assertion would pass for the
+            // wrong reason.
+            let mut laid_out = egui::Rect::NOTHING;
+            let mut output = ctx.run_ui(input, |ui| {
+                laid_out = crate::draw_root(app, ui.ctx());
+            });
+            output.textures_delta.clear();
+            laid_out
+        };
+        let big = pass(&mut app, 1770.0, 1140.0);
+        assert!((big.width() - 1770.0).abs() < 0.5, "the first pass: {big:?}");
+        let laid_out = pass(&mut app, 1180.0, 760.0);
+        assert!(
+            (laid_out.width() - 1180.0).abs() < 0.5 && (laid_out.height() - 760.0).abs() < 0.5,
+            "the interface is laid out in {laid_out:?}, not the window"
+        );
     }
 
     #[test]
@@ -1722,7 +1808,10 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         match &app.solve {
-            SolveState::Solved { values, .. } => {
+            SolveState::Solved {
+                solutions: canlab_solver::Solutions::Values(values),
+                ..
+            } => {
                 assert_eq!(values.len(), 1);
                 assert_eq!(values[0].to_string(), "-3");
             }
@@ -2028,7 +2117,10 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         match &app.solve {
-            SolveState::Solved { values, .. } => {
+            SolveState::Solved {
+                solutions: canlab_solver::Solutions::Values(values),
+                ..
+            } => {
                 assert_eq!(values.len(), 1);
                 assert_eq!(values[0].to_string(), "5", "y = f(2) is y = 5");
             }

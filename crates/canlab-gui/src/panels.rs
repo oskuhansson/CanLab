@@ -846,21 +846,30 @@ fn variables_body(app: &mut CasApp, ui: &mut Ui) {
                     .color(crate::theme::weak()),
             );
         }
-        SolveState::Solved { var, values } => {
-            if values.is_empty() {
-                ui.label(
-                    RichText::new("No solutions.")
-                        .small()
-                        .color(crate::theme::weak()),
-                );
-            } else {
-                let name = to_latex(&canlab_core::sym(&var.as_str()));
-                for value in values {
+        SolveState::Solved { var, solutions } => {
+            use canlab_solver::Solutions;
+            match solutions {
+                Solutions::Values(values) if values.is_empty() => {
                     ui.label(
-                        RichText::new(format!("{name} = {}", to_latex(value)))
-                            .monospace()
-                            .size(15.0),
+                        RichText::new("No solutions.")
+                            .small()
+                            .color(crate::theme::weak()),
                     );
+                }
+                Solutions::None => {
+                    ui.label(
+                        RichText::new("No solutions.")
+                            .small()
+                            .color(crate::theme::weak()),
+                    );
+                }
+                Solutions::All => {
+                    ui.label(RichText::new("Every number.").monospace().size(15.0));
+                }
+                _ => {
+                    for line in crate::solution_lines(solutions, *var) {
+                        ui.label(RichText::new(line).monospace().size(15.0));
+                    }
                 }
             }
         }

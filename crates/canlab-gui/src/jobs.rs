@@ -127,8 +127,9 @@ pub struct Job {
 pub enum JobOutcome {
     /// A single expression (simplify, integrate).
     Value(Expr),
-    /// All solutions of an equation (solve).
-    Solutions(Vec<Expr>),
+    /// Every kind of solution of an equation (solve): none, all, values, a
+    /// family, or an interval.
+    Solutions(canlab_solver::Solutions),
     /// One value per variable, from solving a system (solve).
     Assignments(Vec<(SymbolId, Expr)>),
     /// The backend understood the request and declined, with a line saying what
@@ -323,7 +324,10 @@ fn run(solver: &dyn Solver, backend: Backend, job: Job) -> JobResult {
             (JobKind::Integrate, Some(var), outcome, fatal)
         }
         JobOp::Solve(expr, var) => {
-            let (outcome, fatal) = match solver.solve(&expr, var) {
+            // `solve_all` rather than `solve`: the panel can show none, all, a
+            // family and an interval, and a plain list of values would throw
+            // three of those away before the answer reached the screen.
+            let (outcome, fatal) = match solver.solve_all(&expr, var) {
                 Ok(solutions) => (JobOutcome::Solutions(solutions), false),
                 Err(err) => declined_or_failed(err, JobKind::Solve, backend),
             };
@@ -424,11 +428,11 @@ mod tests {
         ]);
         let result = run(&NativeSolver, Backend::Native, job(JobOp::Solve(equation, SymbolId::intern("x"))));
         match result.outcome {
-            JobOutcome::Solutions(values) => {
+            JobOutcome::Solutions(canlab_solver::Solutions::Values(values)) => {
                 assert_eq!(values.len(), 1);
                 assert_eq!(values[0].to_string(), "3");
             }
-            other => panic!("expected solutions, got {}", describe(&other)),
+            other => panic!("expected a set of values, got {}", describe(&other)),
         }
     }
 
