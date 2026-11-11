@@ -75,19 +75,43 @@ fn equals(equation: &Expr) -> Option<(SymbolId, Expr, Number)> {
 /// Solve a trigonometric equation whose answer is a single family.
 pub fn solve_trigonometric(equation: &Expr, var: SymbolId) -> Option<Solutions> {
     let (name, argument, right) = equals(equation)?;
-    if name.as_str() != "tan" {
-        // `sin` and `cos` have two families; see the module comment.
-        return None;
-    }
     if !mentions(&argument, var) {
         return None;
     }
-    let base = add(vec![arctangent(&right)]);
+    let (base, period) = match name.as_str().as_str() {
+        "tan" => (arctangent(&right), pi_times(1, 1)),
+        // Sine and cosine have two families, but at the extremes and at zero the
+        // two branches *coincide*, and then the answer really is one progression:
+        // `sin x = 1` is only `π/2 + 2kπ`, and `cos x = 0` is only `π/2 + kπ`.
+        // Everywhere else there are two, and those decline until `Solutions` can
+        // say "union".
+        "sin" => match integer_of(&right) {
+            Some(0) => (ExprNode::int(0), pi_times(1, 1)),
+            Some(1) => (pi_times(1, 2), pi_times(2, 1)),
+            Some(-1) => (pi_times(-1, 2), pi_times(2, 1)),
+            _ => return None,
+        },
+        "cos" => match integer_of(&right) {
+            Some(1) => (ExprNode::int(0), pi_times(2, 1)),
+            Some(-1) => (pi_times(1, 1), pi_times(2, 1)),
+            Some(0) => (pi_times(1, 2), pi_times(1, 1)),
+            _ => return None,
+        },
+        _ => return None,
+    };
     Some(Solutions::Family {
-        base,
-        period: pi_times(1, 1),
+        base: add(vec![base]),
+        period,
         param: SymbolId::intern("k"),
     })
+}
+
+/// `-1`, `0` or `1` as an integer, and nothing else.
+fn integer_of(number: &Number) -> Option<i64> {
+    match number {
+        Number::Int(value) => i64::try_from(*value).ok(),
+        _ => None,
+    }
 }
 
 fn mentions(expression: &Expr, var: SymbolId) -> bool {
@@ -145,6 +169,29 @@ mod tests {
         let solutions = solve_trigonometric(&tangent_of_x_minus(Number::int(-2)), var())
             .expect("a tangent equation");
         assert!(solutions.to_latex().contains("arctan"), "{}", solutions.to_latex());
+    }
+
+    #[test]
+    fn a_sine_at_its_extreme_is_one_family() {
+        // sin x = 1 → π/2 + 2kπ: the two branches coincide, so this is complete.
+        let equation = add(vec![
+            ExprNode::fn_raw(SymbolId::intern("sin"), vec![sym("x")]),
+            int(-1),
+        ]);
+        let solutions = solve_trigonometric(&equation, var()).expect("one family");
+        let latex = solutions.to_latex();
+        assert!(latex.contains("\\frac{\\pi}{2}"), "{latex}");
+        assert!(latex.contains("2"), "the period is a full turn: {latex}");
+    }
+
+    #[test]
+    fn a_cosine_at_zero_is_one_half_turn_family() {
+        // cos x = 0 → π/2 + kπ.
+        let equation = add(vec![
+            ExprNode::fn_raw(SymbolId::intern("cos"), vec![sym("x")]),
+        ]);
+        let solutions = solve_trigonometric(&equation, var()).expect("one family");
+        assert!(solutions.to_latex().contains("\\pi k"), "{}", solutions.to_latex());
     }
 
     #[test]
