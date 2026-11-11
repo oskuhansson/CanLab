@@ -1,0 +1,10 @@
+# W2.5 on the cosine side: cos x = -1/2 is 2pi/3 + 2k pi and -2pi/3 + 2k pi. The
+# negative angle is a separate branch, not a mirror the reader is expected to
+# supply, and 2pi/3 is the arccos table's answer rather than arccos(-0.5).
+id = "cos-two-branches"
+subject = "math"
+capability = "solve.trigonometric"
+source = "docs/corpus.md §5 — a contract row for the whole pipeline, not an exam problem"
+document = '\cos x = -1/2'
+expect.exact = '\frac{2\pi}{3} + 2k\pi \cup -\frac{2\pi}{3} + 2k\pi'
+note = 'Both branches, joined by a union. tan x = c needs one family and is covered by tan-one-family; this row is the union path end to end.'
