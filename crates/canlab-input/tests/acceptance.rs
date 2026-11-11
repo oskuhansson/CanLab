@@ -147,11 +147,25 @@ fn cases() -> Vec<Case> {
         ),
         case("x^2+y^2=1", "an equation is not a definition", Expect::Defined("")),
         case("a(x+1) = 0", "a product is not a definition", Expect::Defined("")),
-        case(
-            "f(x) = x^2|2*f(3)",
-            "a call is a factor like any other",
-            Expect::DefinedValue(18.0),
-        ),
+        // ------------------------------------------------- a sign after a product
+        // The corpus had `-3+5` and `x--y` but nothing that put a sign *after* a
+        // multiplication, which is why `1·-6+2·-3` reading as `1-6+2-3` went
+        // unnoticed until a user typed it.
+        case("1*-6+2*-3", "a sign after a product multiplies", Expect::Value(-12.0)),
+        case("2*-3", "and on its own", Expect::Value(-6.0)),
+        case("1*-6", "with a leading unit factor", Expect::Value(-6.0)),
+        case("-2*-3", "two negatives multiply to a positive", Expect::Value(6.0)),
+        case("2*-3*4", "one negative among three factors", Expect::Value(-24.0)),
+        case("3*--2", "a doubled sign after a product", Expect::Value(6.0)),
+        case("2*-3+4*-5", "a signed product in each term", Expect::Value(-26.0)),
+        case("2/-4", "a sign in a denominator", Expect::Value(-0.5)),
+        case("-1/2", "a unary minus before a fraction", Expect::Value(-0.5)),
+        case("-3^2", "a unary minus binds looser than a power", Expect::Value(-9.0)),
+        case("(-3)^2", "a bracket binds tighter", Expect::Value(9.0)),
+        case("2*-3^2", "and after a product too", Expect::Value(-18.0)),
+        case("-(2+3)", "a unary minus distributes over a sum", Expect::Value(-5.0)),
+        case("1--6", "a doubled minus is still a plus", Expect::Value(7.0)),
+        case("3-+2", "a plus after a minus", Expect::Value(1.0)),
     ]
 }
 

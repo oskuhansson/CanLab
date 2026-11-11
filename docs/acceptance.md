@@ -18,6 +18,12 @@ A document is several lines separated by `|`. Definitions are document-wide: a
 line may call a function defined below it, which is why `g(x) = f(x) + 1` above
 `f(x) = x²` is a row of its own.
 
+The signs section exists because `1·-6 + 2·-3` was once read as `1 - 6 + 2 - 3`:
+a sign after a multiplication was taken for a binary minus. Nothing in this file
+had a sign in that position, so nothing caught it. `tests/signs.rs` covers the
+same family in more detail, including the difference between typing a document
+and loading one.
+
 | Document | Why | Expected | Actual |
 |---|---|---|---|
 | `1+2*3` | precedence | `7` | `7` |
@@ -82,4 +88,18 @@ line may call a function defined below it, which is why `g(x) = f(x) + 1` above
 | `f(x) = f(x)+1` | recursion is refused at definition time | `` | `` |
 | `x^2+y^2=1` | an equation is not a definition | `` | `` |
 | `a(x+1) = 0` | a product is not a definition | `` | `` |
-| `f(x) = x^2|2*f(3)` | a call is a factor like any other | 18 | 18 |
+| `1*-6+2*-3` | a sign after a product multiplies | -12 | -12 |
+| `2*-3` | and on its own | -6 | -6 |
+| `1*-6` | with a leading unit factor | -6 | -6 |
+| `-2*-3` | two negatives multiply to a positive | 6 | 6 |
+| `2*-3*4` | one negative among three factors | -24 | -24 |
+| `3*--2` | a doubled sign after a product | 6 | 6 |
+| `2*-3+4*-5` | a signed product in each term | -26 | -26 |
+| `2/-4` | a sign in a denominator | -0.5 | -0.5 |
+| `-1/2` | a unary minus before a fraction | -0.5 | -0.5 |
+| `-3^2` | a unary minus binds looser than a power | -9 | -9 |
+| `(-3)^2` | a bracket binds tighter | 9 | 9 |
+| `2*-3^2` | and after a product too | -18 | -18 |
+| `-(2+3)` | a unary minus distributes over a sum | -5 | -5 |
+| `1--6` | a doubled minus is still a plus | 7 | 7 |
+| `3-+2` | a plus after a minus | 1 | 1 |

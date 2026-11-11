@@ -202,6 +202,17 @@ impl Parser {
         // A script absorbs the following *run*, not one character: `x^23` is
         // x²³ and `x^2y` is x^(2y), exactly as typing behaves.
         let mut run = String::new();
+        // A sign belongs to the argument, not to what follows it. Typing `2/-4`
+        // puts `-4` in the denominator and `x^-2` puts `-2` in the exponent,
+        // because the cursor is already inside the slot when the sign is typed;
+        // loading must not produce an empty slot with the sign left outside.
+        let sign = match self.peek() {
+            Some(c @ ('+' | '-')) => {
+                self.pos += 1;
+                Some(c)
+            }
+            _ => None,
+        };
         while let Some(c) = self.peek() {
             if crate::tree::is_word_char(c) {
                 run.push(c);
@@ -211,6 +222,9 @@ impl Parser {
             }
         }
         let mut row = Vec::new();
+        if let Some(sign) = sign {
+            row.push(Node::text(sign.to_string()));
+        }
         if !run.is_empty() && run != "X" {
             row.push(Node::text(run));
         }

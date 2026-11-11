@@ -73,7 +73,20 @@ pub fn build_with(row: &Row, definitions: &crate::define::Definitions) -> Result
         match node {
             Node::Text(s) if s == "+" || s == "-" => {
                 let sign_negative = s == "-";
-                if current.is_empty() {
+                // A sign directly after a multiplication multiplies by a negative
+                // number: `1·-6` is `1·(-6)`, not `1 - 6`. Toggling the term's sign
+                // is the same thing, because a term is a product — and it keeps the
+                // precedence right, since a term ends at `+` or `-`, not at `·`.
+                //
+                // Without this the sign was read as a *binary* one, so
+                // `1·-6 + 2·-3` came out as `1 - 6 + 2 - 3`, i.e. `-6` instead of
+                // `-12`. Nothing in the corpus put a sign after a multiplication,
+                // which is why nothing caught it.
+                let after_product = matches!(
+                    current.last(),
+                    Some(Node::Sym(name)) if name == "\\cdot"
+                );
+                if current.is_empty() || after_product {
                     // A sign with nothing before it is a *unary* sign for the
                     // term that follows: `-x` inside a superscript, or the `-1`
                     // in `x+-1`. Toggling is what makes `x--y` read as `x + y`.
