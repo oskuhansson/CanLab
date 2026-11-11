@@ -21,6 +21,19 @@
 
 use super::*;
 
+/// One GPU frame at a time.
+///
+/// These tests share an integrated GPU with the rest of the process, and a
+/// renderer created while another one is mid-frame is how a suite becomes
+/// flaky: the second device is asked for the same resources and one of them
+/// comes back with a different image. A lock makes the three of them a queue,
+/// which costs a second and removes the only source of nondeterminism here.
+static FRAME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn frame_lock() -> std::sync::MutexGuard<'static, ()> {
+    FRAME_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// One frame of the whole app at the shipping window size.
 ///
 /// The theme is installed on the harness context, exactly as `main` installs it
@@ -58,6 +71,7 @@ fn draw_frames(harness: &mut egui_kittest::Harness<'_>, frames: usize) {
 
 #[test]
 fn the_default_document_draws() {
+    let _frame = frame_lock();
     let mut app = CasApp::new();
     let mut harness = harness_for(&mut app);
     draw_frames(&mut harness, 6);
@@ -66,6 +80,7 @@ fn the_default_document_draws() {
 
 #[test]
 fn a_circle_draws_its_curve() {
+    let _frame = frame_lock();
     let mut app = CasApp::new();
     app.field = MathField::from_latex("x^2+y^2=1").expect("a circle");
     app.recompute();
@@ -81,6 +96,7 @@ fn a_circle_draws_its_curve() {
 
 #[test]
 fn a_surface_says_so_instead_of_drawing_a_slice() {
+    let _frame = frame_lock();
     // The bug this guards: `x² + y² = z` used to draw the circle at `z = 1`.
     // The image is the assertion — the note has to be readable on screen.
     let mut app = CasApp::new();

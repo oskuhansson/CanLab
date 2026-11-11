@@ -498,11 +498,32 @@ be passed to the other, so the whole UI stack moves to 0.36 and `egui_kittest`,
 `egui_wgpu::Callback` — sits on the same egui, so nothing is paid twice if the
 Bevy build turns out not to fit on this machine.
 
-**C9 — Compile times: the RAM is the binding constraint, not the linker.**
-Dynamic linking helps, and `[profile.dev.package."*"] opt-level = 3` plus
-`debug = "line-tables-only"` (or `0`) is the biggest single win on Windows,
-because debug info dominates link time. But this machine builds with `-j 1` to
-avoid exhausting commit charge, so a Bevy cold build is a real risk — measure it.
+**C9 — Compile times, now measured.** The first draft of this comment guessed. The
+numbers from this machine (6 cores, 7.6 GiB, `-j 1`), all for one changed file in
+`canlab-gui`:
+
+| Configuration | Time |
+|---|---|
+| Full debug info, `link.exe` | 79.7 s |
+| `debug = "line-tables-only"`, `link.exe` | 40.5 s |
+| `debug = "line-tables-only"`, `rust-lld` | 37.3 s |
+
+So debug info was half the cost and the linker is worth 8%, not the 3× that
+"use lld" folklore promises — because the remaining time is dominated by writing
+and scanning a ~1 GB executable, not by the linker's algorithm. `rust-lld` is
+kept because it is free, not because it is dramatic.
+
+The one big lever left is `bevy/dynamic_linking`, and it does not link on Windows
+without the performance profiles: `link.exe` fails with **LNK1189, too many
+exported symbols**. The recipe is `[profile.dev] opt-level = 1` plus
+`[profile.dev.package."*"] opt-level = 3`, which rebuilds the dependency tree
+once and then links in seconds — worth doing when a milestone starts, not in the
+middle of one. Every test binary also needs the Bevy dylib on `PATH` afterwards.
+
+What does not help: `sccache` cannot cache crates that invoke the linker (`bin`,
+`dylib`, `cdylib`, `proc-macro`), which is exactly what a test binary is, so a
+remote compile cache speeds up the 500 dependencies on a cold build and nothing
+in the daily loop.
 
 **C10 — Simulation tests should assert physics, not numbers.** "RK4 error falls
 16× when `h` halves", "energy drifts less than 0.1%", "`R + T = 1`", "the ray in
