@@ -270,6 +270,47 @@ mod tests {
     }
 
     #[test]
+    fn every_family_holds_at_k_between_minus_two_and_two() {
+        // The plan's spot-check for W2.5: sample each family and confirm the
+        // original equation still holds. This is what catches a wrong period —
+        // `2kπ` written as `kπ` would pass every rendering test and fail here.
+        let equation = add(vec![
+            ExprNode::fn_raw(SymbolId::intern("sin"), vec![sym("x")]),
+            ExprNode::num(Number::ratio(-1, 2)),
+        ]);
+        let solutions = solve_trigonometric(&equation, var()).expect("two families");
+        let members: Vec<&Solutions> = match &solutions {
+            Solutions::Union(members) => members.iter().collect(),
+            other => vec![other],
+        };
+        assert_eq!(members.len(), 2, "sine has two branches");
+        for member in members {
+            let Solutions::Family {
+                base,
+                period,
+                param,
+            } = member
+            else {
+                panic!("a member of a union is a family");
+            };
+            for k in -2i64..=2 {
+                let shifted = add(vec![base.clone(), mul([int(k), period.clone()])]);
+                let at_k = crate::system::substitute(
+                    &shifted,
+                    *param,
+                    &ExprNode::num(Number::int(i128::from(k))),
+                );
+                let value = canlab_core::approx::value_of(&at_k).expect("a number");
+                let residual = value.sin() - 0.5;
+                assert!(
+                    residual.abs() < 1e-9,
+                    "k = {k}: x = {value}, sin x - 1/2 = {residual}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_tangent_of_a_constant_is_not_about_the_unknown() {
         // tan 2 = 0 is not an equation in x.
         let equation = add(vec![
