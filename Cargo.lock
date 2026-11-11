@@ -2312,6 +2312,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "canlab-poly"
+version = "0.1.0"
+dependencies = [
+ "canlab-core",
+]
+
+[[package]]
 name = "canlab-solver"
 version = "0.1.0"
 dependencies = [
