@@ -187,9 +187,14 @@ fn product(row: &Row, definitions: &crate::define::Definitions) -> Result<Expr, 
         // only useful reading for a CAS. **[INFERRED]**
         if let Node::Sym(name) = nodes[i] {
             if let Some(func) = function_of(name) {
-                // `\log_2(x)` — the subscript on a function token is its *base*,
-                // not a decoration on a variable. Read as a ratio of natural
-                // logs, which is what it means and what the evaluator can do.
+                // `\log_2(x)` — the subscript on a *logarithm* is its base, not
+                // a decoration on a variable. Read as a ratio of natural logs,
+                // which is what it means and what the evaluator can do.
+                //
+                // A base means nothing on any other function: reading
+                // `\sin_2 x` as `ln x / ln 2` supplied a value the user did not
+                // type, so that is refused with the same reason as any other
+                // subscript. `canlab-parse` makes the same distinction.
                 //
                 // A script keeps absorbing what follows it, so `\log_2(10)` can
                 // arrive with the argument *inside* the subscript. When it does,
@@ -198,6 +203,9 @@ fn product(row: &Row, definitions: &crate::define::Definitions) -> Result<Expr, 
                 let mut base: Option<Expr> = None;
                 let mut argument_in_subscript: Option<Expr> = None;
                 if let Some(Node::Sub(base_row)) = nodes.get(next) {
+                    if func != "log" {
+                        return Err(ToExprError::Subscript);
+                    }
                     if base_row.len() > 1 {
                         base = Some(build_with(&base_row[..1].to_vec(), definitions)?);
                         argument_in_subscript = Some(build_with(&base_row[1..].to_vec(), definitions)?);

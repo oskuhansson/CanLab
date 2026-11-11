@@ -18,6 +18,8 @@ mod layout;
 mod panels;
 mod persist;
 mod shot;
+#[cfg(test)]
+mod snapshot;
 mod theme;
 mod undo;
 
@@ -152,6 +154,12 @@ struct CasApp {
     definition_problems: Vec<(String, String)>,
     /// Values for the variables that are not on an axis.
     parameters: Vec<Parameter>,
+    /// Symbols that are a whole side of an equation and not on an axis.
+    ///
+    /// `x² + y² = z` defines a surface: `z` is the third coordinate, not a knob.
+    /// The 2D plot must leave that equation out rather than invent `z = 1` and
+    /// draw the slice as if it were the graph.
+    third_coordinates: Vec<SymbolId>,
     /// Points where two curves of a system cross, refined to a coordinate.
     intersections: Vec<Intersection>,
     /// Undo history for the document.
@@ -195,6 +203,7 @@ impl CasApp {
             definitions: Definitions::default(),
             definition_problems: Vec::new(),
             parameters: Vec::new(),
+            third_coordinates: Vec::new(),
             intersections: Vec::new(),
             undo: undo::Undo::new(),
             dirty_since: None,
@@ -468,18 +477,58 @@ impl CasApp {
         out
     }
 
+    /// Symbols that are a whole side of an equation and are not on an axis.
+    ///
+    /// The difference this draws is between a *family* and a *surface*.
+    /// `x² + y² = r²` is a family: `r` is inside a power, so it is a coefficient
+    /// and the radius belongs on a slider. `x² + y² = z` is a surface: `z` is a
+    /// whole side, so it is a coordinate of the relation, and inventing `z = 1`
+    /// does not plot the equation — it plots one slice of it and says nothing.
+    /// The test is structural on purpose: guessing from the letter (`z` versus
+    /// `r`) would be a rule that works until someone calls their radius `z`.
+    fn third_coordinate_symbols(&self) -> Vec<SymbolId> {
+        let axes: Vec<SymbolId> = [self.x_axis, self.y_axis]
+            .into_iter()
+            .flatten()
+            .collect();
+        let axis_or_constant = |expression: &Expr| {
+            expression
+                .as_symbol()
+                .is_some_and(|symbol| axes.contains(&symbol))
+                || expression.as_number().is_some()
+        };
+        let mut out: Vec<SymbolId> = Vec::new();
+        for (left, right) in &self.equations {
+            let Some(right) = right else {
+                continue;
+            };
+            for (side, other) in [(left, right), (right, left)] {
+                let Some(symbol) = side.as_symbol() else {
+                    continue;
+                };
+                if !axes.contains(&symbol) && !axis_or_constant(other) && !out.contains(&symbol) {
+                    out.push(symbol);
+                }
+            }
+        }
+        out
+    }
+
     /// Recompute the parameter list: every free variable that is not on an axis.
     ///
     /// Values the user has set are kept; a new variable starts at 1, which is
-    /// what it used to be forced to whether anyone wanted it or not.
+    /// what it used to be forced to whether anyone wanted it or not. A symbol
+    /// that is a whole side of an equation is not a parameter at all — see
+    /// [`Self::third_coordinate_symbols`] — so it gets no value and no slider.
     pub fn refresh_parameters(&mut self) {
+        let coordinates = self.third_coordinate_symbols();
         let axes: Vec<SymbolId> = [self.x_axis, self.y_axis]
             .into_iter()
             .flatten()
             .collect();
         let mut next: Vec<Parameter> = Vec::new();
         for variable in &self.free_vars {
-            if axes.contains(variable) {
+            if axes.contains(variable) || coordinates.contains(variable) {
                 continue;
             }
             let value = self
@@ -492,6 +541,7 @@ impl CasApp {
                 value,
             });
         }
+        self.third_coordinates = coordinates;
         self.parameters = next;
     }
 
@@ -1758,6 +1808,62 @@ mod tests {
         assert_eq!(names, vec![String::from("a"), String::from("b")]);
         assert!(app.parameters.iter().all(|parameter| parameter.value == 1.0));
         assert!(app.plot_note.contains("a = 1"), "plot note: {}", app.plot_note);
+    }
+
+    #[test]
+    fn a_third_coordinate_does_not_plot_a_slice() {
+        // `x² + y² = z` is a surface. It used to plot the circle at `z = 1`,
+        // which is a slice of it: the picture looked like the graph of the
+        // equation, and the only clue was a `z = 1.00` chip in the overlay.
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex("x^2+y^2=z").expect("a surface");
+        app.recompute();
+        crate::panels::build_curve(&mut app);
+        assert!(app.curves.is_empty(), "note: {}", app.plot_note);
+        assert!(
+            app.parameters.is_empty(),
+            "z is a coordinate, not a knob: {:?}",
+            app.parameters
+        );
+        assert!(app.plot_note.contains('z'), "note: {}", app.plot_note);
+        assert!(
+            app.plot_note.contains("third coordinate"),
+            "the note must say why there is no picture: {}",
+            app.plot_note
+        );
+    }
+
+    #[test]
+    fn a_radius_squared_equation_keeps_its_slider() {
+        // The guard against over-refusing: `r` is inside a power, so it is a
+        // coefficient and the radius belongs on a slider. This is the form the
+        // circle is actually written in, and it must keep working.
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex("x^2+y^2=r^2").expect("a circle");
+        app.recompute();
+        crate::panels::build_curve(&mut app);
+        assert_eq!(app.parameters.len(), 1, "note: {}", app.plot_note);
+        assert_eq!(app.parameters[0].name.as_str().to_string(), "r");
+        assert!(!app.curves.is_empty(), "note: {}", app.plot_note);
+    }
+
+    #[test]
+    fn a_line_with_slope_and_intercept_keeps_both_sliders() {
+        // `m` is a term of the right-hand side but not a side of its own, so it
+        // stays a parameter. If this ever refused, the fix for the surface case
+        // would have cost every line with a slider.
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex("y=k*x+m").expect("a line");
+        app.recompute();
+        crate::panels::build_curve(&mut app);
+        let mut names: Vec<String> = app
+            .parameters
+            .iter()
+            .map(|parameter| parameter.name.as_str().to_string())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec![String::from("k"), String::from("m")]);
+        assert!(!app.curves.is_empty(), "note: {}", app.plot_note);
     }
 
     #[test]

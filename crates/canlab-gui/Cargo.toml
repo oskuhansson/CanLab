@@ -26,3 +26,9 @@ eframe = "0.37.0"
 [features]
 default = []
 glow = ["eframe/glow"]
+
+[dev-dependencies]
+# A headless frame: `egui_kittest` renders into an offscreen texture through
+# `wgpu`, so a snapshot test needs no window and no desktop. That is the whole
+# reason it is here — see `src/snapshot.rs`.
+egui_kittest = { version = "0.37.0", features = ["wgpu", "snapshot"] }

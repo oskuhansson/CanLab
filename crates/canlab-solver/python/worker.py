@@ -21,12 +21,17 @@ Requests
     {"id": 5, "op": "limit",     "expr": <expr>, "var": "x", "at": <expr>}
     {"id": 6, "op": "series",    "expr": <expr>, "var": "x", "at": <expr>,
                                  "order": 4}
+    {"id": 7, "op": "solve_all", "eq":   <expr>, "var": "x"}
 
 Responses
 ---------
 
     {"id": 1, "ok": <expr>}          # most ops
     {"id": 4, "ok": [<expr>, ...]}   # solve
+    {"id": 7, "ok": {"kind": "none"}}                    # solve_all:
+    {"id": 7, "ok": {"kind": "all"}}                     #   no solution,
+    {"id": 7, "ok": {"kind": "values", "values": [...]}} #   every number,
+                                                         #   a finite set
     {"id": 1, "err": "not_implemented"}
     {"id": 1, "err": "ValueError: ..."}
 
@@ -199,6 +204,30 @@ def dump_variable(expr):
     raise NotImplementedError("integration variable must be a symbol, got %r" % (expr,))
 
 
+def dump_solutions(equation, variable):
+    """Answer ``solve_all`` with a tagged solution set.
+
+    ``solveset`` is the only SymPy entry point that promises a *set*: it returns
+    every solution of the equation over the reals, or an unevaluated
+    ``ConditionSet`` it declines to name. ``solve`` returns a list, and for a
+    trigonometric equation that list is the principal values rather than the
+    family, so relabelling it as the complete answer would be a lie.
+
+    A set this worker can name is encoded: the empty set, the whole real line,
+    and a finite set of values the tagged AST can represent. Families and
+    intervals wait for the workstreams that add them on the Rust side; until
+    then they are declined, which is a normal answer.
+    """
+    solutions = sp.solveset(equation, variable, domain=sp.S.Reals)
+    if solutions == sp.S.EmptySet:
+        return {"kind": "none"}
+    if solutions == sp.S.Reals:
+        return {"kind": "all"}
+    if isinstance(solutions, sp.FiniteSet):
+        return {"kind": "values", "values": [dump(value) for value in solutions]}
+    raise NotImplementedError("cannot encode the solution set %r" % (solutions,))
+
+
 def float_text(value):
     """Decimal text that the Rust decoder will read back as a float."""
     if value != value:  # NaN
@@ -249,6 +278,9 @@ def handle(request):
         equation = load(required(request, "eq"))
         solutions = sp.solve(equation, symbol(request, "var"))
         return [dump(solution) for solution in solutions]
+
+    if op == "solve_all":
+        return dump_solutions(load(required(request, "eq")), symbol(request, "var"))
 
     if op == "limit":
         return dump(

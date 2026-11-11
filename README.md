@@ -141,6 +141,7 @@ result. `SolverError::NotImplemented` travels all the way to the screen.
 - `canlab-input/tests/acceptance.rs` is a corpus of student documents and their
   expected typed form, value or number. It prints the Markdown table kept in
   `docs/acceptance.md`, so the document and the test cannot drift.
+- The exam corpus format and the `canlab corpus run` contract are specified in [docs/corpus.md](docs/corpus.md); the runner is W0.4 and does not exist yet.
 - `canlab-gui` paints whole frames headlessly with a real `egui::Context`, which
   is what would catch a panic that shows up as a blank window.
 

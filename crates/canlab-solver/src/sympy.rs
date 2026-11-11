@@ -38,7 +38,7 @@ use canlab_core::{Expr, SymbolId};
 
 use crate::json;
 use crate::session::Session;
-use crate::{Solver, SolverError};
+use crate::{Solutions, Solver, SolverError};
 
 /// How long one request may take before the worker is killed.
 ///
@@ -303,6 +303,20 @@ impl Solver for SympyWorker {
     fn solve(&self, eq: &Expr, var: SymbolId) -> Result<Vec<Expr>, SolverError> {
         let answer = self.call("solve", &payload_solve(eq, var))?;
         json::decode_array(&answer)
+    }
+
+    /// The whole solution set, in the tagged answer shape of [`Solutions`].
+    ///
+    /// A separate op rather than a flag on `solve`: the worker builds the
+    /// answer with `solveset`, which can say "no solution" or "every number"
+    /// and declines a set it cannot name, where `solve` can only hand back a
+    /// list. The request body is the same `eq`/`var` pair; the op is what tells
+    /// the worker which answer shape to produce. A worker that predates the op
+    /// reports an error, which is a failure of that backend — not a list the
+    /// client is left to guess the meaning of.
+    fn solve_all(&self, eq: &Expr, var: SymbolId) -> Result<Solutions, SolverError> {
+        let answer = self.call("solve_all", &payload_solve(eq, var))?;
+        json::decode_solutions(&answer)
     }
 
     fn limit(&self, e: &Expr, var: SymbolId, at: &Expr) -> Result<Expr, SolverError> {
@@ -754,6 +768,44 @@ mod tests {
             .solve(&pow(sym("x"), int(2)), SymbolId::intern("x"))
             .expect("two roots");
         assert_eq!(solutions, vec![int(1), int(-1)]);
+    }
+
+    #[test]
+    fn solve_all_sends_the_new_op_and_reads_a_tagged_answer() {
+        let log = SharedBuffer::default();
+        let worker = SympyWorker::scripted(
+            "{\"id\":1,\"ok\":{\"kind\":\"values\",\"values\":[{\"Num\":\"1\"},{\"Num\":\"-1\"}]}}\n",
+            log.clone(),
+        );
+        let solutions = worker
+            .solve_all(&pow(sym("x"), int(2)), SymbolId::intern("x"))
+            .expect("two roots");
+        assert_eq!(solutions, Solutions::Values(vec![int(1), int(-1)]));
+        // The request is the old `solve` body under a new op: an older worker
+        // can still parse it, and the client does not have to encode twice.
+        assert_eq!(
+            log.text(),
+            "{\"id\":1,\"op\":\"solve_all\",\"eq\":{\"Pow\":{\"base\":{\"Sym\":\"x\"},\"exp\":{\"Num\":\"2\"}}},\"var\":\"x\"}\n"
+        );
+    }
+
+    #[test]
+    fn an_old_style_array_is_not_accepted_as_a_tagged_answer() {
+        // A worker that answers the new op with the old shape is a protocol
+        // disagreement; guessing `values` from it would be exactly the
+        // ambiguity `Solutions` exists to remove.
+        let worker = SympyWorker::scripted(
+            "{\"id\":1,\"ok\":[{\"Num\":\"1\"}]}\n",
+            SharedBuffer::default(),
+        );
+        let error = worker
+            .solve_all(&sym("x"), SymbolId::intern("x"))
+            .expect_err("a bare array is not a tagged answer");
+        assert!(matches!(error, SolverError::BadOutput(_)));
+        assert!(
+            error.to_string().contains("must be a JSON object"),
+            "the refusal should name the missing tag: {error}"
+        );
     }
 
     #[test]

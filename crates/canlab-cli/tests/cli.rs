@@ -19,7 +19,11 @@ fn canlab(args: &[&str]) -> (bool, String, String) {
 }
 
 fn temp_svg(name: &str) -> PathBuf {
-    std::env::temp_dir().join(name)
+    // `CARGO_TARGET_TMPDIR` is inside the workspace. `std::env::temp_dir()` is
+    // not: the suite passed for months and then failed with "Access is denied"
+    // on a machine that does not allow writes to `%TEMP%`, which is a property
+    // of the machine and nothing to do with plotting.
+    PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name)
 }
 
 #[test]
@@ -53,6 +57,43 @@ fn parse_error_is_reported_not_panicked() {
         stderr.to_lowercase().contains("error"),
         "expected a diagnostic, got: {stderr}"
     );
+}
+
+#[test]
+fn eval_refuses_a_subscript_on_a_variable() {
+    // `x_1` used to print `x` and exit 0: the subscript was parsed and thrown
+    // away, so `v_1` and `v_2` in a document both meant `v`. The field has
+    // always refused it; `eval` must give the field's reason, not an answer.
+    let (ok, stdout, stderr) = canlab(&["eval", "x_1"]);
+    assert!(!ok, "eval accepted `x_1` and printed {stdout:?}");
+    assert!(
+        stderr.contains("subscripts are not expressions"),
+        "the field's reason is missing: {stderr}"
+    );
+    assert!(
+        stdout.is_empty(),
+        "a refused expression must print nothing, got {stdout:?}"
+    );
+}
+
+#[test]
+fn tex_and_plot_refuse_the_same_subscript() {
+    // `tex` and `plot` read LaTeX through the same parser, so a refusal that
+    // held in `eval` but not here would be a second silent reader.
+    for args in [["tex", "x_1"], ["plot", "x_1"]] {
+        let (ok, stdout, stderr) = canlab(&args);
+        assert!(!ok, "`{}` accepted `x_1`", args[0]);
+        assert!(
+            stderr.contains("subscripts are not expressions"),
+            "`{}` gave the wrong reason: {stderr}",
+            args[0]
+        );
+        assert!(
+            stdout.is_empty(),
+            "`{}` printed something for a refused expression: {stdout:?}",
+            args[0]
+        );
+    }
 }
 
 #[test]
@@ -115,4 +156,48 @@ fn help_is_available() {
     let (ok, stdout, _stderr) = canlab(&["help"]);
     assert!(ok);
     assert!(stdout.contains("USAGE"));
+}
+
+#[test]
+fn solve_all_prints_the_library_solution_set() {
+    // The binary must print exactly what `Solutions::to_latex` produced, not a
+    // second formatting of the same answer. The expected value is computed
+    // through the same backend choice `main.rs` makes, so the test also holds on
+    // a machine where SymPy is installed.
+    use canlab_core::{SymbolId, add, int, pow, sym};
+    use canlab_solver::{NativeSolver, Solver};
+
+    let var = SymbolId::intern("x");
+    let equation = add([pow(sym("x"), int(2)), int(-4)]);
+    let expected = match canlab_solver::sympy::open() {
+        Ok(worker) => worker.solve_all(&equation, var),
+        Err(_) => NativeSolver.solve_all(&equation, var),
+    }
+    .expect("x^2 - 4 has two real roots")
+    .to_latex();
+
+    let (ok, stdout, stderr) = canlab(&["solve-all", "x^2 - 4", "-v", "x"]);
+    assert!(ok, "solve-all failed: {stderr}");
+    assert_eq!(stdout.trim(), expected, "the CLI and the library disagree");
+}
+
+#[test]
+fn solve_all_reports_a_decline_with_its_reason() {
+    // Neither backend has a closed form for `x + sin x = 0`, and a decline is a
+    // normal answer: the command must refuse with the backend's reason and the
+    // equation it could not solve, not exit quietly or panic.
+    let (ok, stdout, stderr) = canlab(&["solve-all", r"x + \sin x", "-v", "x"]);
+    assert!(!ok, "no backend solves this, yet stdout was {stdout:?}");
+    assert!(
+        stderr.contains("the solver could not give a solution set"),
+        "the refusal is missing: {stderr}"
+    );
+    assert!(
+        stderr.contains("declined"),
+        "the reason is missing: {stderr}"
+    );
+    assert!(
+        stderr.contains("\\sin"),
+        "the equation is missing: {stderr}"
+    );
 }

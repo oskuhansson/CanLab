@@ -23,6 +23,49 @@
 
 use eframe::egui::{self, Color32, CornerRadius, FontId, Margin, Stroke, TextStyle, Visuals, vec2};
 
+/// Add a system font that covers the symbols the palette draws.
+///
+/// egui bundles Ubuntu-Light and its own icon font, and neither has `ϑ`, `∢`,
+/// `≢`, `∝` or the typographic ellipsis — so a palette of mathematics renders as
+/// boxes. The headless frame test found this by panicking on the first missing
+/// glyph; a reader would have found it by staring at `□`.
+///
+/// The font is read from the operating system rather than bundled, because a
+/// redistribution of Segoe UI Symbol is not ours to make. If the file is not
+/// there the app still runs, with the same boxes it had before, and that is the
+/// only behaviour this function is allowed to promise.
+fn install_symbol_fallback(ctx: &egui::Context) {
+    const CANDIDATES: [(&str, &str); 3] = [
+        ("seguisym", r"C:\Windows\Fonts\seguisym.ttf"),
+        ("segoeui", r"C:\Windows\Fonts\segoeui.ttf"),
+        ("dejavu", r"C:\Windows\Fonts\DejaVuSans.ttf"),
+    ];
+    let mut fonts = egui::FontDefinitions::default();
+    let mut added = false;
+    for (name, path) in CANDIDATES {
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
+        fonts.font_data.insert(
+            String::from(name),
+            std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+        );
+        // Last in the chain: the bundled fonts stay primary, so the typography
+        // does not change, and only the glyphs they lack come from here.
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            fonts
+                .families
+                .entry(family)
+                .or_default()
+                .push(String::from(name));
+        }
+        added = true;
+    }
+    if added {
+        ctx.set_fonts(fonts);
+    }
+}
+
 /// Which background a palette is designed for.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Mode {
@@ -346,6 +389,7 @@ pub fn nearest(dark: bool, accent: Color32) -> &'static Palette {
 
 /// Install the fonts, sizes and the default palette.
 pub fn install(ctx: &egui::Context) {
+    install_symbol_fallback(ctx);
     // Both themes get the typography: a palette pins one of them, but the style
     // store is per theme and a switch must not fall back to egui's defaults.
     for mode in [Mode::Dark, Mode::Light] {

@@ -32,6 +32,26 @@
 //! its number grammar conflates `2` and `2.0`, which is precisely the
 //! distinction [`canlab_core::Number`] exists to keep.
 //!
+//! # Solution sets
+//!
+//! A `solve_all` answer wraps that tree in an explicit tag, because a list of
+//! roots and a periodic family are different answers and a decoder must never
+//! guess between them:
+//!
+//! ```text
+//! {"kind":"none"}                         no solutions
+//! {"kind":"all"}                          every value solves it
+//! {"kind":"values","values":[<expr>,…]}   a finite set
+//! {"kind":"family","base":<expr>,"period":<expr>,"param":"k"}
+//! {"kind":"inequality","var":"x","intervals":[
+//!     {"from":<expr>|null,"from_open":true,"to":<expr>|null,"to_open":false}]}
+//! ```
+//!
+//! An interval end is an expression, or `null` for the unbounded end. Openness
+//! is a separate boolean because `[1, 3)` and `(1, 3]` are different sets built
+//! from the same two endpoints; an infinite end is always open, and encoding it
+//! as closed is rejected rather than silently repaired.
+//!
 //! # Hand-written on purpose
 //!
 //! The workspace has no network and therefore no `serde`. A parser for the
@@ -43,6 +63,7 @@
 use canlab_core::{Expr, ExprNode, Hold, Number, SymbolId, add, mul, normalize, pow};
 
 use crate::SolverError;
+use crate::solutions::{Bound, Solutions};
 
 /// Maximum container nesting accepted by the parser.
 ///
@@ -77,6 +98,14 @@ impl Json {
     pub(crate) fn as_str(&self) -> Option<&str> {
         match self {
             Json::Str(text) => Some(text),
+            _ => None,
+        }
+    }
+
+    /// The boolean payload, if this is `true` or `false`.
+    pub(crate) fn as_bool(&self) -> Option<bool> {
+        match self {
+            Json::Bool(value) => Some(*value),
             _ => None,
         }
     }
@@ -702,6 +731,198 @@ fn expr_list(value: &Json, tag: &str) -> Result<Vec<Expr>, SolverError> {
     items.iter().map(expr_from_value).collect()
 }
 
+// ---------------------------------------------------------------------------
+// Solution sets <-> JSON
+// ---------------------------------------------------------------------------
+
+/// Encode a whole answer, preserving which kind of answer it is.
+///
+/// The output is compact and deterministic, like [`encode`]: the same
+/// [`Solutions`] always produces the same bytes, so a transcript can be diffed
+/// and an older client can be told exactly what changed.
+pub fn encode_solutions(solutions: &Solutions) -> String {
+    match solutions {
+        Solutions::None => String::from(r#"{"kind":"none"}"#),
+        Solutions::All => String::from(r#"{"kind":"all"}"#),
+        Solutions::Values(values) => {
+            let mut out = String::from(r#"{"kind":"values","values":["#);
+            for (index, value) in values.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                write_expr(value, &mut out);
+            }
+            out.push_str("]}");
+            out
+        }
+        Solutions::Family {
+            base,
+            period,
+            param,
+        } => {
+            let mut out = String::from(r#"{"kind":"family","base":"#);
+            write_expr(base, &mut out);
+            out.push_str(r#","period":"#);
+            write_expr(period, &mut out);
+            out.push_str(r#","param":"#);
+            out.push_str(&quote(&param.as_str()));
+            out.push('}');
+            out
+        }
+        Solutions::Inequality { var, intervals } => {
+            let mut out = String::from(r#"{"kind":"inequality","var":"#);
+            out.push_str(&quote(&var.as_str()));
+            out.push_str(r#","intervals":["#);
+            for (index, (lower, upper)) in intervals.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                out.push_str(r#"{"from":"#);
+                write_bound(lower, &mut out);
+                out.push_str(r#","from_open":"#);
+                out.push_str(if lower.is_open() { "true" } else { "false" });
+                out.push_str(r#","to":"#);
+                write_bound(upper, &mut out);
+                out.push_str(r#","to_open":"#);
+                out.push_str(if upper.is_open() { "true" } else { "false" });
+                out.push('}');
+            }
+            out.push_str("]}");
+            out
+        }
+    }
+}
+
+/// One interval end: the expression, or `null` for the infinite end.
+fn write_bound(bound: &Bound, out: &mut String) {
+    match bound {
+        Bound::NegInfinity | Bound::PosInfinity => out.push_str("null"),
+        Bound::Finite { value, .. } => write_expr(value, out),
+    }
+}
+
+/// Decode one tagged solution set.
+///
+/// Strict where guessing would change the answer: the `kind` tag is required,
+/// every member that tag promises must be present and of the right type, and an
+/// infinite end may not be marked closed. The result is normalized, like
+/// [`decode`], so a worker cannot smuggle in a non-canonical value.
+pub fn decode_solutions(text: &str) -> Result<Solutions, SolverError> {
+    let value = parse(text)?;
+    let members = value.as_object().ok_or_else(|| {
+        SolverError::BadOutput("a solution set must be a JSON object with a \"kind\"".into())
+    })?;
+    let kind = member_of(members, "kind")
+        .and_then(Json::as_str)
+        .ok_or_else(|| {
+            SolverError::BadOutput("a solution set is missing a string \"kind\"".into())
+        })?;
+
+    match kind {
+        "none" => Ok(Solutions::None),
+        "all" => Ok(Solutions::All),
+        "values" => {
+            let values = member_of(members, "values")
+                .ok_or_else(|| SolverError::BadOutput("\"values\" is missing".into()))?;
+            let values = expr_list(values, "\"values\"")?
+                .iter()
+                .map(normalize)
+                .collect();
+            Ok(Solutions::Values(values))
+        }
+        "family" => {
+            let base = member_of(members, "base")
+                .ok_or_else(|| SolverError::BadOutput("family is missing \"base\"".into()))?;
+            let period = member_of(members, "period")
+                .ok_or_else(|| SolverError::BadOutput("family is missing \"period\"".into()))?;
+            let param = member_of(members, "param")
+                .and_then(Json::as_str)
+                .ok_or_else(|| {
+                    SolverError::BadOutput("family is missing a string \"param\"".into())
+                })?;
+            Ok(Solutions::Family {
+                base: normalize(&expr_from_value(base)?),
+                period: normalize(&expr_from_value(period)?),
+                param: SymbolId::intern(param),
+            })
+        }
+        "inequality" => {
+            let var = member_of(members, "var")
+                .and_then(Json::as_str)
+                .ok_or_else(|| {
+                    SolverError::BadOutput("inequality is missing a string \"var\"".into())
+                })?;
+            let intervals = member_of(members, "intervals")
+                .and_then(Json::as_array)
+                .ok_or_else(|| {
+                    SolverError::BadOutput("inequality is missing an \"intervals\" array".into())
+                })?;
+            let mut parsed = Vec::with_capacity(intervals.len());
+            for interval in intervals {
+                let fields = object_body(interval, "an inequality interval")?;
+                let from = member_of(fields, "from").ok_or_else(|| {
+                    SolverError::BadOutput("an interval is missing \"from\"".into())
+                })?;
+                let to = member_of(fields, "to").ok_or_else(|| {
+                    SolverError::BadOutput("an interval is missing \"to\"".into())
+                })?;
+                let from_open = member_of(fields, "from_open")
+                    .and_then(Json::as_bool)
+                    .ok_or_else(|| {
+                        SolverError::BadOutput(
+                            "an interval is missing a boolean \"from_open\"".into(),
+                        )
+                    })?;
+                let to_open = member_of(fields, "to_open")
+                    .and_then(Json::as_bool)
+                    .ok_or_else(|| {
+                        SolverError::BadOutput(
+                            "an interval is missing a boolean \"to_open\"".into(),
+                        )
+                    })?;
+                parsed.push((lower_bound(from, from_open)?, upper_bound(to, to_open)?));
+            }
+            Ok(Solutions::Inequality {
+                var: SymbolId::intern(var),
+                intervals: parsed,
+            })
+        }
+        other => Err(SolverError::BadOutput(format!(
+            "unknown solution-set kind {other:?}"
+        ))),
+    }
+}
+
+/// Decode the lower end of an interval: `null` means unbounded below.
+fn lower_bound(value: &Json, open: bool) -> Result<Bound, SolverError> {
+    match value {
+        Json::Null if open => Ok(Bound::NegInfinity),
+        // `(-∞, 3]` is the only reading of a null from-end; a closed -∞ is a
+        // disagreement between the two fields, not something to repair.
+        Json::Null => Err(SolverError::BadOutput(
+            "an interval cannot be closed at negative infinity".into(),
+        )),
+        finite => Ok(Bound::Finite {
+            value: normalize(&expr_from_value(finite)?),
+            open,
+        }),
+    }
+}
+
+/// Decode the upper end of an interval: `null` means unbounded above.
+fn upper_bound(value: &Json, open: bool) -> Result<Bound, SolverError> {
+    match value {
+        Json::Null if open => Ok(Bound::PosInfinity),
+        Json::Null => Err(SolverError::BadOutput(
+            "an interval cannot be closed at positive infinity".into(),
+        )),
+        finite => Ok(Bound::Finite {
+            value: normalize(&expr_from_value(finite)?),
+            open,
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -957,5 +1178,162 @@ mod tests {
             compact(&value),
             r#"{"a":null,"b":true,"c":false,"d":[1,-2.5e3,"s"],"e":{}}"#
         );
+    }
+
+    /// The five answer kinds, built once so the encoding and the round trip
+    /// cannot drift apart.
+    fn every_kind() -> Vec<Solutions> {
+        vec![
+            Solutions::None,
+            Solutions::All,
+            Solutions::Values(vec![int(2), int(-2)]),
+            Solutions::Family {
+                base: mul([ratio(1, 6), sym("pi")]),
+                period: mul([int(2), sym("pi")]),
+                param: SymbolId::intern("k"),
+            },
+            Solutions::Inequality {
+                var: SymbolId::intern("x"),
+                intervals: vec![
+                    (
+                        Bound::Finite {
+                            value: int(-1),
+                            open: true,
+                        },
+                        Bound::Finite {
+                            value: int(3),
+                            open: false,
+                        },
+                    ),
+                    (
+                        Bound::Finite {
+                            value: int(4),
+                            open: false,
+                        },
+                        Bound::PosInfinity,
+                    ),
+                ],
+            },
+        ]
+    }
+
+    #[test]
+    fn solution_sets_round_trip_every_kind() {
+        for solutions in every_kind() {
+            let text = encode_solutions(&solutions);
+            let decoded = decode_solutions(&text).expect(&format!("{text} decodes"));
+            assert_eq!(decoded, solutions, "text={text}");
+            // A decoded answer encodes to the same bytes: the wire form is
+            // stable, not merely readable.
+            assert_eq!(encode_solutions(&decoded), text);
+        }
+    }
+
+    #[test]
+    fn solution_sets_encode_with_an_explicit_tag() {
+        assert_eq!(encode_solutions(&Solutions::None), r#"{"kind":"none"}"#);
+        assert_eq!(encode_solutions(&Solutions::All), r#"{"kind":"all"}"#);
+        assert_eq!(
+            encode_solutions(&Solutions::Values(vec![int(2), int(-2)])),
+            r#"{"kind":"values","values":[{"Num":"2"},{"Num":"-2"}]}"#
+        );
+        assert_eq!(
+            encode_solutions(&Solutions::Family {
+                base: mul([ratio(1, 6), sym("pi")]),
+                period: mul([int(2), sym("pi")]),
+                param: SymbolId::intern("k"),
+            }),
+            r#"{"kind":"family","base":{"Mul":[{"Num":"1/6"},{"Sym":"pi"}]},"period":{"Mul":[{"Num":"2"},{"Sym":"pi"}]},"param":"k"}"#
+        );
+        assert_eq!(
+            encode_solutions(&Solutions::Inequality {
+                var: SymbolId::intern("x"),
+                intervals: vec![
+                    (
+                        Bound::Finite {
+                            value: int(-1),
+                            open: true,
+                        },
+                        Bound::Finite {
+                            value: int(3),
+                            open: false,
+                        },
+                    ),
+                    (
+                        Bound::Finite {
+                            value: int(4),
+                            open: false,
+                        },
+                        Bound::PosInfinity
+                    ),
+                ],
+            }),
+            r#"{"kind":"inequality","var":"x","intervals":[{"from":{"Num":"-1"},"from_open":true,"to":{"Num":"3"},"to_open":false},{"from":{"Num":"4"},"from_open":false,"to":null,"to_open":true}]}"#
+        );
+    }
+
+    #[test]
+    fn a_truncated_or_mis_tagged_solution_set_is_bad_output() {
+        // Every case pairs the wire text with a fragment of the reason the
+        // decoder gives: a refusal that cannot say why is as bad as a panic,
+        // and a decoder that guesses is worse than both.
+        let cases: &[(&str, &str)] = &[
+            ("", "unexpected end of input"),
+            ("   ", "unexpected end of input"),
+            // Truncated.
+            (
+                r#"{"kind":"values","values":[{"Num":"1"}"#,
+                "expected ',' or ']'",
+            ),
+            (r#"{"kind":"values"}"#, "\"values\" is missing"),
+            (r#"{"kind":"values","values":{}}"#, "array of expressions"),
+            (r#"{"kind":"values","values":[7]}"#, "must be a JSON object"),
+            // A family with a piece missing.
+            (
+                r#"{"kind":"family","base":{"Num":"1"}}"#,
+                "missing \"period\"",
+            ),
+            (
+                r#"{"kind":"family","base":{"Num":"1"},"period":{"Num":"2"},"param":7}"#,
+                "string \"param\"",
+            ),
+            // An inequality whose pieces disagree.
+            (r#"{"kind":"inequality","var":"x"}"#, "\"intervals\" array"),
+            (
+                r#"{"kind":"inequality","var":"x","intervals":[{"from":{"Num":"1"},"from_open":true,"to":{"Num":"2"}}]}"#,
+                "boolean \"to_open\"",
+            ),
+            (
+                r#"{"kind":"inequality","var":"x","intervals":[{"from":null,"from_open":false,"to":{"Num":"2"},"to_open":false}]}"#,
+                "negative infinity",
+            ),
+            (
+                r#"{"kind":"inequality","var":"x","intervals":[{"from":{"Num":"1"},"from_open":"yes","to":{"Num":"2"},"to_open":false}]}"#,
+                "boolean \"from_open\"",
+            ),
+            (
+                r#"{"kind":"inequality","var":"x","intervals":[7]}"#,
+                "must hold a JSON object",
+            ),
+            // Mis-tagged, or not tagged at all.
+            (r#"{"kind":"surprise"}"#, "unknown solution-set kind"),
+            (r#"{"values":[]}"#, "missing a string \"kind\""),
+            (r#"{"kind":7}"#, "missing a string \"kind\""),
+            // The old `solve` array is not a tagged answer.
+            (r#"[{"Num":"1"}]"#, "must be a JSON object"),
+            (r#"{"kind":"none"} trailing"#, "trailing characters"),
+        ];
+        for (case, reason) in cases {
+            let error = decode_solutions(case).expect_err(&format!("{case:?} must be rejected"));
+            assert!(
+                matches!(error, SolverError::BadOutput(_)),
+                "{case:?} produced {error:?}"
+            );
+            let message = error.to_string();
+            assert!(
+                message.contains(reason),
+                "{case:?} refused with {message:?}, expected {reason:?}"
+            );
+        }
     }
 }

@@ -23,6 +23,12 @@ of a session, spawn one agent per owner from the briefs below and then reuse it.
 ## Conventions every owner follows
 
 - Build with `-j 1`: `$env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"; cargo test -p <crate> --offline -j 1`.
+- If the shell runs inside the file sandbox, load the env script first —
+  `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force; . .\scripts\env.ps1` —
+  so `TMP`, `TEMPORARY` and the session file stay inside `target/`. Without it a
+  test that writes to `std::env::temp_dir()` fails with "Access is denied" for a
+  reason that has nothing to do with the code. See
+  [lessons.md](lessons.md).
 - `cargo clean -p windows -p pxfm -p icu_normalizer -p eframe` if a build runs out of memory.
 - Kill `canlab-gui.exe` before rebuilding it; Windows holds the executable.
 - Tests are the deliverable, not an extra: a behaviour change without one is not
@@ -31,3 +37,9 @@ of a session, spawn one agent per owner from the briefs below and then reuse it.
   cross-crate wiring change.
 - Comments say why, in the project's voice, and must not claim more than the code
   does — a stale comment is a bug that the reviewer will file.
+- **Every guard gets a refusal test.** If the code can decide not to draw, not to
+  solve, or not to evaluate, a test asserts the refusal *and* the reason it gives.
+  A feature that supplies a value the user did not type must justify it
+  structurally — never positionally. See [lessons.md](lessons.md) for the bug that
+  put this rule here.
+

@@ -29,16 +29,17 @@ USAGE:
     canlab tex    <latex>           print LaTeX only
     canlab plot   <latex> [opts]    render a plot to SVG
     canlab int    <latex> [opts]    integrate (uses SymPy when it is installed)
+    canlab solve-all <latex> [opts] solve <latex> = 0 and print the solution set
     canlab solver [--probe]         report the SymPy backend, or test it
 
 OPTIONS:
     -o, --out <file>             output file for plot (default: plot.svg)
         --xmin <f> --xmax <f>    plot domain (default: -10 10)
-    -v, --var <name>             variable for integration (default: guess)
+    -v, --var <name>             variable for integration or solve-all (default: guess)
         --probe                  really start the worker and make it answer
 
 REPL COMMANDS:
-    :help  :quit  :tex  :plot  :int  :solver
+    :help  :quit  :tex  :plot  :int  :solve-all  :solver
 ";
 
 fn main() -> ExitCode {
@@ -62,6 +63,7 @@ fn main() -> ExitCode {
         "tex" => tex_command(&args[1..]),
         "plot" => plot_command(&args[1..]),
         "int" | "integrate" => integrate_command(&args[1..]),
+        "solve-all" => solve_all_command(&args[1..]),
         "solver" => solver_command(&args[1..]),
         other => Err(format!("unknown command `{other}`\n\n{USAGE}")),
     };
@@ -214,6 +216,52 @@ fn integrate_command(args: &[String]) -> Result<(), String> {
     }
 }
 
+/// `canlab solve-all` — solve `<latex> = 0` and print the whole solution set.
+///
+/// The argument is the left-hand side with zero on the right, the same
+/// convention `int` uses for its integrand: `x^2 - 4` means `x^2 - 4 = 0`.
+fn solve_all_command(args: &[String]) -> Result<(), String> {
+    let source = args.first().ok_or("solve-all needs a LaTeX expression")?;
+    let expr = parse_or_err(source)?;
+
+    let mut var: Option<SymbolId> = None;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-v" | "--var" => {
+                i += 1;
+                let name = args.get(i).ok_or("--var needs a name")?;
+                var = Some(SymbolId::intern(name));
+            }
+            other => return Err(format!("unknown solve-all option `{other}`")),
+        }
+        i += 1;
+    }
+
+    let var = match var {
+        Some(v) => v,
+        None => {
+            let mut vars = Vec::new();
+            free_symbols(&expr, &mut vars);
+            *vars.first().ok_or("no variable to solve for")?
+        }
+    };
+
+    // The answer type, not a list of roots: "no solution", "every number", a
+    // family and an interval all have a LaTeX form, and this is the one place
+    // the CLI can show all of them.
+    match backend().solve_all(&expr, var) {
+        Ok(solutions) => {
+            println!("{}", solutions.to_latex());
+            Ok(())
+        }
+        Err(err) => Err(format!(
+            "the solver could not give a solution set ({err}); the equation is\n  {} = 0",
+            to_latex(&expr)
+        )),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The backend
 // ---------------------------------------------------------------------------
@@ -222,7 +270,7 @@ fn integrate_command(args: &[String]) -> Result<(), String> {
 ///
 /// SymPy is the real thing but it needs a Python installation; the native backend
 /// needs nothing and covers school algebra. Choosing here rather than at each call
-/// site means the REPL, `int` and the GUI all make the same choice.
+/// site means the REPL, `int`, `solve-all` and the GUI all make the same choice.
 fn backend() -> Box<dyn Solver> {
     match canlab_solver::sympy::open() {
         Ok(worker) => Box::new(worker),
@@ -275,6 +323,7 @@ fn repl() -> Result<(), String> {
                 "tex" => report(tex_command(&[argument.to_string()])),
                 "plot" => report(plot_command(&[argument.to_string()])),
                 "int" | "integrate" => report(integrate_command(&[argument.to_string()])),
+                "solve-all" => report(solve_all_command(&[argument.to_string()])),
                 "solver" => report(solver_command(&[argument.to_string()])),
                 other => eprintln!("unknown command `:{other}` (try :help)"),
             }

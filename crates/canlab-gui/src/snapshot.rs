@@ -1,0 +1,96 @@
+//! A frame rendered to a file, with no window.
+//!
+//! `egui_kittest` runs a `Ui` pass and renders the result through `wgpu` into an
+//! offscreen texture. Nothing is presented to a surface, so nothing appears on
+//! the desktop: no window, no focus steal, no `CANLAB_SHOT`, no `glow` build.
+//!
+//! The images live in `tests/snapshots/`. The first run creates them:
+//!
+//! ```text
+//! $env:UPDATE_SNAPSHOTS = '1'; cargo test -p canlab-gui --offline -j 1 snapshot
+//! ```
+//!
+//! and every later run compares against them. A comparison failure writes
+//! `*.new.png` and `*.diff.png` next to the reference, which are ignored by git.
+//!
+//! These tests are deliberately few and coarse. A pixel test proves a colour or a
+//! layout moved; it cannot prove the maths is right, and a suite full of them
+//! fails for reasons that are not bugs. Three frames cover what the rest of the
+//! suite cannot see: that the app draws at all, that a document draws its curve,
+//! and that the plot refuses a surface in a way a reader can see.
+
+use super::*;
+
+/// One frame of the whole app at the shipping window size.
+///
+/// The theme is installed on the harness context, exactly as `main` installs it
+/// on the real one: without it the test renders with egui's default styles and
+/// fonts, which is a different picture from the one a reader sees — and it was
+/// the theme's font fallback that the first missing-glyph panic was asking for.
+fn harness_for(app: &mut CasApp) -> egui_kittest::Harness<'_> {
+    egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1180.0, 760.0))
+        .with_context_setup(|ctx| {
+            crate::theme::install(ctx);
+            // No easing. An animation asks for another frame until it finishes,
+            // and a headless pass has no clock to finish it on: without this the
+            // harness runs to its step limit chasing a fading highlight.
+            ctx.all_styles_mut(|style| style.animation_time = 0.0);
+        })
+        .build_ui(|ui| app.draw(ui))
+}
+
+/// A fixed number of frames, then stop.
+///
+/// `Harness::run` steps until nothing asks for another frame, and this interface
+/// never stops asking: the caret blinks, the autosave debounce counts down, and
+/// the plot resamples on a timer. A headless pass has no wall clock for those to
+/// finish on, so a snapshot takes a fixed number of steps instead — enough for
+/// the app's own four warm-up paints plus the layout that follows them. The image
+/// is then a picture of a stable state even though the app is not idle.
+fn draw_frames(harness: &mut egui_kittest::Harness<'_>, frames: usize) {
+    for _ in 0..frames {
+        harness.step();
+    }
+}
+
+#[test]
+fn the_default_document_draws() {
+    let mut app = CasApp::new();
+    let mut harness = harness_for(&mut app);
+    draw_frames(&mut harness, 6);
+    harness.snapshot("default");
+}
+
+#[test]
+fn a_circle_draws_its_curve() {
+    let mut app = CasApp::new();
+    app.field = MathField::from_latex("x^2+y^2=1").expect("a circle");
+    app.recompute();
+    assert!(
+        !app.curves.is_empty(),
+        "the picture this test is about is missing: {}",
+        app.plot_note
+    );
+    let mut harness = harness_for(&mut app);
+    draw_frames(&mut harness, 6);
+    harness.snapshot("circle");
+}
+
+#[test]
+fn a_surface_says_so_instead_of_drawing_a_slice() {
+    // The bug this guards: `x² + y² = z` used to draw the circle at `z = 1`.
+    // The image is the assertion — the note has to be readable on screen.
+    let mut app = CasApp::new();
+    app.field = MathField::from_latex("x^2+y^2=z").expect("a surface");
+    app.recompute();
+    assert!(app.curves.is_empty(), "a slice was drawn: {}", app.plot_note);
+    assert!(
+        app.plot_note.contains("third coordinate"),
+        "the panel must say why it is empty: {}",
+        app.plot_note
+    );
+    let mut harness = harness_for(&mut app);
+    draw_frames(&mut harness, 6);
+    harness.snapshot("surface_refused");
+}

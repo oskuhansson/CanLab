@@ -525,9 +525,9 @@ fn axis_picker(app: &mut CasApp, ui: &mut Ui, label: &str, axis: Axis) -> bool {
         Axis::Vertical => app.y_axis,
     };
     let mut changed = false;
-    ui.label(RichText::new(label).small().strong());
+    let label_response = ui.label(RichText::new(label).small().strong());
     let selected = current.map_or_else(|| String::from("—"), |v| v.as_str().to_string());
-    egui::ComboBox::from_id_salt(("axis", label))
+    let combo = egui::ComboBox::from_id_salt(("axis", label))
         .selected_text(RichText::new(selected).monospace().size(12.0))
         .width(52.0)
         .show_ui(ui, |ui| {
@@ -542,6 +542,11 @@ fn axis_picker(app: &mut CasApp, ui: &mut Ui, label: &str, axis: Axis) -> bool {
                 }
             }
         });
+    // The letter beside the box is the box's name. Without this the combo has no
+    // accessible name at all: a screen reader says "combo box" and the headless
+    // frame test refuses the picture (kittest checks for unnamed inputs), which
+    // is how this was found.
+    combo.response.labelled_by(label_response.id);
     changed
 }
 
@@ -1534,17 +1539,34 @@ fn plot_equations(
         y_max,
     };
 
-    // `left − right`, so the curve is where the equation holds.
-    let expressions: Vec<canlab_core::Expr> = equations
-        .iter()
-        .map(|(left, right)| match right {
+    // `left − right`, so the curve is where the equation holds. An equation whose
+    // third coordinate is a whole side is a *surface*, and the 2D view cannot draw
+    // one: it is counted and named, never sliced at an invented value. Plotting
+    // `x² + y² = z` at `z = 1` answers a question nobody asked, and the picture
+    // does not say so.
+    let mut expressions: Vec<canlab_core::Expr> = Vec::new();
+    let mut surfaces = 0usize;
+    for (left, right) in equations {
+        let mut symbols = Vec::new();
+        crate::free_symbols(left, &mut symbols);
+        if let Some(right) = right {
+            crate::free_symbols(right, &mut symbols);
+        }
+        if symbols
+            .iter()
+            .any(|symbol| app.third_coordinates.contains(symbol))
+        {
+            surfaces += 1;
+            continue;
+        }
+        expressions.push(match right {
             Some(right) => canlab_core::add(vec![
                 left.clone(),
                 canlab_core::mul(vec![canlab_core::int(-1), right.clone()]),
             ]),
             None => left.clone(),
-        })
-        .collect();
+        });
+    }
 
     // The parameters, in the order the compiled programs expect them.
     let parameter_names: Vec<canlab_core::SymbolId> =
@@ -1650,39 +1672,54 @@ fn plot_equations(
         }
     }
 
-    let parameters_label = if parameter_names.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "; {}",
-            app.parameters
-                .iter()
-                .map(|parameter| format!(
-                    "{} = {}",
-                    parameter.name.as_str(),
-                    short_number(parameter.value)
-                ))
-                .collect::<Vec<String>>()
-                .join(", ")
-        )
-    };
+    let parameters: Vec<String> = app
+        .parameters
+        .iter()
+        .map(|parameter| {
+            format!(
+                "{} = {}",
+                parameter.name.as_str(),
+                short_number(parameter.value)
+            )
+        })
+        .collect();
     let intersections = app.intersections.len();
-    let equations_label = match (plotted, skipped) {
-        (0, _) => format!("no curve found in this window ({axes_label})"),
-        (n, 0) => format!("{n} equation curve(s), {axes_label}"),
-        (n, s) => format!("{n} equation curve(s), {s} skipped, {axes_label}"),
-    };
-    let mut note = equations_label;
+
+    let mut parts: Vec<String> = Vec::new();
+    if plotted > 0 || skipped > 0 {
+        parts.push(match (plotted, skipped) {
+            (0, s) => format!("no curve found in this window ({axes_label}), {s} skipped"),
+            (n, 0) => format!("{n} equation curve(s), {axes_label}"),
+            (n, s) => format!("{n} equation curve(s), {s} skipped, {axes_label}"),
+        });
+    }
     if intersections > 0 {
         let suffix = if intersections == 1 { "" } else { "s" };
-        note = format!("{intersections} intersection{suffix}, {note}");
+        parts.push(format!("{intersections} intersection{suffix}"));
     }
-    note.push_str(&parameters_label);
+    if surfaces > 0 {
+        let names: Vec<String> = app
+            .third_coordinates
+            .iter()
+            .map(|symbol| symbol.as_str().to_string())
+            .collect();
+        let verb = if names.len() == 1 {
+            "is a third coordinate"
+        } else {
+            "are third coordinates"
+        };
+        parts.push(format!(
+            "{} {verb}: that equation is a surface, and the 2D view draws two variables",
+            names.join(", ")
+        ));
+    }
+    if !parameters.is_empty() {
+        parts.push(parameters.join(", "));
+    }
     if let Some(fragment) = definitions.first() {
-        note.push_str("; ");
-        note.push_str(fragment);
+        parts.push(fragment.clone());
     }
-    app.plot_note = note;
+    app.plot_note = parts.join("; ");
 }
 
 /// A number with its trailing zeros trimmed: `1`, `0.5`, `-2.25`.

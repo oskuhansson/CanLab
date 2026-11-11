@@ -7,3 +7,8 @@ description = "Solver trait and JSON protocol bridging to an external CAS backen
 
 [dependencies]
 canlab-core = { path = "../canlab-core" }
+# A `Solutions` value is printed as LaTeX, and the printer already exists. A
+# second, narrower printer here would be a second answer to "what does this
+# expression look like", which is exactly the kind of drift this crate is
+# supposed to avoid.
+canlab-tex = { path = "../canlab-tex" }

@@ -40,13 +40,15 @@ use canlab_core::{Expr, SymbolId};
 pub mod json;
 pub mod mock;
 pub mod native;
+pub mod solutions;
 pub mod system;
 pub mod session;
 pub mod sympy;
 
-pub use json::{decode, decode_array, encode};
+pub use json::{decode, decode_array, decode_solutions, encode, encode_solutions};
 pub use mock::MockSolver;
 pub use native::NativeSolver;
+pub use solutions::{Bound, Solutions};
 pub use system::{solve_system, substitute, variables_of};
 pub use session::Session;
 pub use sympy::{Discovery, Interpreter, SympyWorker, discover, discovery, probe};
@@ -134,7 +136,28 @@ pub trait Solver: Send + Sync {
     ///
     /// An empty vector is a real answer ("no solutions"); a backend that
     /// cannot solve the equation returns [`SolverError::NotImplemented`].
+    ///
+    /// [`Solver::solve_all`] asks the same question with an answer type that
+    /// can also carry "every number", a family and an interval; new callers
+    /// should prefer it and fall back to this only when they specifically want
+    /// a list.
     fn solve(&self, eq: &Expr, var: SymbolId) -> Result<Vec<Expr>, SolverError>;
+
+    /// All solutions of `eq == 0` in `var`, as an answer that can say more
+    /// than a list can.
+    ///
+    /// The default maps [`Solver::solve`] into [`Solutions::Values`], so a
+    /// backend written against the older signature keeps working without a
+    /// change and keeps exactly the answer it used to give. A backend that can
+    /// tell "no solution" from "every number", or answer with a family or an
+    /// interval, overrides this.
+    ///
+    /// An empty [`Solutions::Values`] is the old `solve` contract's "no
+    /// solutions"; [`Solutions::is_empty`] treats it like [`Solutions::None`]
+    /// when only the answer, not the wording, matters.
+    fn solve_all(&self, eq: &Expr, var: SymbolId) -> Result<Solutions, SolverError> {
+        self.solve(eq, var).map(Solutions::Values)
+    }
 
     /// `lim(var -> at) e`.
     fn limit(&self, e: &Expr, var: SymbolId, at: &Expr) -> Result<Expr, SolverError>;
@@ -189,5 +212,59 @@ mod tests {
     fn solver_error_is_a_std_error() {
         fn takes_error(_: &dyn std::error::Error) {}
         takes_error(&SolverError::NotImplemented);
+    }
+
+    /// A backend that only knows the answer type this crate had before
+    /// `solve_all` existed. It exists to pin the default implementation.
+    struct OnlySolve;
+
+    impl Solver for OnlySolve {
+        fn simplify(&self, _e: &Expr) -> Result<Expr, SolverError> {
+            Err(SolverError::NotImplemented)
+        }
+
+        fn diff(&self, _e: &Expr, _var: SymbolId) -> Result<Expr, SolverError> {
+            Err(SolverError::NotImplemented)
+        }
+
+        fn integrate(&self, _e: &Expr, _var: SymbolId) -> Result<Expr, SolverError> {
+            Err(SolverError::NotImplemented)
+        }
+
+        fn solve(&self, _eq: &Expr, _var: SymbolId) -> Result<Vec<Expr>, SolverError> {
+            Ok(vec![canlab_core::int(2), canlab_core::int(-2)])
+        }
+
+        fn limit(&self, _e: &Expr, _var: SymbolId, _at: &Expr) -> Result<Expr, SolverError> {
+            Err(SolverError::NotImplemented)
+        }
+
+        fn series(
+            &self,
+            _e: &Expr,
+            _var: SymbolId,
+            _at: &Expr,
+            _order: usize,
+        ) -> Result<Expr, SolverError> {
+            Err(SolverError::NotImplemented)
+        }
+    }
+
+    #[test]
+    fn the_default_solve_all_keeps_the_old_answer() {
+        let var = SymbolId::intern("x");
+        assert_eq!(
+            OnlySolve.solve_all(&canlab_core::sym("x"), var),
+            Ok(Solutions::Values(vec![
+                canlab_core::int(2),
+                canlab_core::int(-2)
+            ]))
+        );
+        // A decline stays a decline; the default must not turn "I cannot" into
+        // an empty answer.
+        assert_eq!(
+            MockSolver.solve_all(&canlab_core::sym("x"), var),
+            Err(SolverError::NotImplemented)
+        );
     }
 }

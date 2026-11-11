@@ -33,10 +33,16 @@
 //! * **`\sin^2 x` is `(sin x)^2`.** The superscript belongs to the function
 //!   application, exactly as LaTeX renders it.
 //! * **Decimals are exact.** `3.5` is the rational `7/2`, never a float.
-//! * **Subscripts are parsed and discarded.** `x_1` is `x` and `\log_2 x` is
-//!   `log(x)`. This is a documented limitation: [`canlab_core::Expr`] has no node
-//!   for an indexed symbol yet, and rejecting the syntax would make
-//!   `\int_0^1`-style input fail before the integrator ever sees it.
+//! * **A subscript is refused, unless it is a logarithm's base.** `x_1` has no
+//!   expression form, because [`canlab_core::Expr`] has no indexed symbol;
+//!   silently dropping the subscript made `v_1` and `v_2` both mean `v`, and
+//!   nothing downstream could tell that a variable had gone missing. The math
+//!   field refuses it too, and both give the same reason word for word.
+//!   `\log_2 x` is not decoration: the subscript is the base, so it is lowered
+//!   to `ln(x)/ln(2)`, again as the field does. A subscript on any other
+//!   function (`\sin_2 x`) is refused. `\int_0^1` is unaffected — `\int` is not
+//!   a command this parser knows yet, and when it is, its limits will be read
+//!   rather than dropped.
 //! * **`!` is rejected.** There is no factorial node, and silently dropping
 //!   the operator would be worse than saying so.
 //! * **`\frac` arguments are one atom or one braced group.** `\frac{1}{2}` and
@@ -131,7 +137,7 @@ pub fn parse_latex(src: &str) -> Result<canlab_core::Expr, ParseError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use canlab_core::{add, int, mul, pow, sym, Expr};
+    use canlab_core::{Expr, ExprNode, SymbolId, add, int, mul, pow, sym};
 
     fn parse(src: &str) -> Expr {
         parse_latex(src).unwrap_or_else(|err| panic!("{src:?} should parse: {err}"))
@@ -242,11 +248,39 @@ mod tests {
     }
 
     #[test]
-    fn subscripts_are_parsed_and_discarded() {
-        assert_eq!(parse("x_1").to_string(), "x");
-        assert_eq!(parse("x_1 + x_2").to_string(), "2*x");
-        assert_eq!(parse("x_{i+1}^2").to_string(), "x^2");
-        assert_eq!(parse(r"\log_2 x").to_string(), "log(x)");
+    fn subscripts_are_refused_not_discarded() {
+        // `x_1` used to parse as `x`. Then `v_1` and `v_2` in one document meant
+        // `v` twice, and nothing downstream could tell that a variable had been
+        // dropped — the worst kind of wrong answer, because it looks like an
+        // answer. The field has always refused it; the parser now gives the same
+        // reason, so the two readers of a document cannot disagree. The
+        // capability (an indexed symbol) is W11.3 in the plan, not a parser
+        // decision to make in passing.
+        for source in ["x_1", "x_1 + x_2", "x_{i+1}^2", r"\sin_2 x"] {
+            let err = parse_err(source);
+            assert_eq!(
+                err.message, "subscripts are not expressions",
+                "{source} must give the field's reason"
+            );
+        }
+        assert_eq!(parse_err("x_1").position, 1, "the error points at `_`");
+        assert_eq!(parse_err(r"\sin_2 x").position, 4);
+
+        // The one subscript that is not decoration: the base of a logarithm.
+        // The field reads it as a ratio of natural logs; refusing it here would
+        // put the two readers back into disagreement about an input the field
+        // already defines.
+        assert_eq!(
+            parse(r"\log_2 8"),
+            mul([
+                ExprNode::fn_raw(SymbolId::intern("ln"), vec![int(8)]),
+                pow(
+                    ExprNode::fn_raw(SymbolId::intern("ln"), vec![int(2)]),
+                    int(-1)
+                ),
+            ])
+        );
+        assert_eq!(parse(r"\log_{2} 8"), parse(r"\log_2 8"));
     }
 
     // -- numbers, symbols, functions ---------------------------------------

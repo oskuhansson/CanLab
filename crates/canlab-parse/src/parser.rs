@@ -43,6 +43,12 @@ const FUNCTIONS: &[&str] = &[
     "tanh", "abs",
 ];
 
+/// What the field says when its `ToExprError::Subscript` is displayed, word for
+/// word: the two readers of a document must give the same reason for the same
+/// input, and this crate cannot depend on `canlab-input` to borrow the string.
+/// A test in `canlab-input` compares the two.
+const SUBSCRIPT_REFUSAL: &str = "subscripts are not expressions";
+
 /// Greek command names. The symbol is interned under the name without the
 /// backslash, so `\pi` is the symbol `pi`.
 const GREEK_NAMES: &[&str] = &[
@@ -107,7 +113,9 @@ enum Infix {
     /// Juxtaposition: `2x`, `\frac{1}{2}x`, `(x)(y)`.
     Implicit,
     Pow,
-    /// `_`: parsed for syntax, then thrown away.
+    /// `_`: refused, because `Expr` has no indexed symbol. The one subscript
+    /// with a meaning — the base of `\log` — is read by `parse_function`
+    /// before this loop ever sees it.
     Subscript,
     /// `!`: rejected with a message, not silently dropped.
     Factorial,
@@ -262,9 +270,11 @@ impl Parser {
                 Ok(pow(lhs, rhs))
             }
             Infix::Subscript => {
-                // Documented limitation: subscripts are parsed and discarded.
-                self.parse_script(BP_POW + 1, "_", "subscript", op_pos)?;
-                Ok(lhs)
+                // A subscript has no expression form: `Expr` has no indexed
+                // symbol, and dropping it made `v_1` and `v_2` both mean `v`.
+                // The base of a logarithm is the one subscript that carries a
+                // value, and `parse_function` reads it before this loop runs.
+                Err(ParseError::new(SUBSCRIPT_REFUSAL, op_pos))
             }
             Infix::Factorial => {
                 Err(ParseError::new("factorial `!` is not supported", op_pos))
@@ -549,6 +559,7 @@ impl Parser {
     /// for diagnostics.
     fn parse_function(&mut self, name: &str, name_pos: usize) -> Result<Expr, ParseError> {
         let mut exponent = None;
+        let mut base = None;
         loop {
             let token = self.peek().clone();
             match token.kind {
@@ -560,17 +571,41 @@ impl Parser {
                 }
                 TokenKind::Underscore => {
                     self.advance();
-                    self.parse_script(BP_POW + 1, "_", "subscript", token.pos)?;
+                    // `\log_2 x` is the one function subscript that carries a
+                    // value: the base. On any other function it is decoration,
+                    // and a parser that dropped it would change the answer —
+                    // the field refuses the same input, and so does this.
+                    if name != "log" {
+                        return Err(ParseError::new(SUBSCRIPT_REFUSAL, token.pos));
+                    }
+                    if base.is_some() {
+                        return Err(ParseError::new(
+                            "a logarithm has only one base",
+                            token.pos,
+                        ));
+                    }
+                    base = Some(self.parse_script(BP_POW + 1, "_", "subscript", token.pos)?);
                 }
                 _ => break,
             }
         }
 
         let argument = self.parse_function_argument(name, name_pos)?;
-        let applied = normalize(&ExprNode::fn_raw(SymbolId::intern(name), vec![argument]));
+        let value = match base {
+            // `\log_b x` is `ln(x)/ln(b)`, the same lowering the field uses for
+            // the same input. Reading it as a natural log would be a different
+            // number, and refusing it would put the two readers back into
+            // disagreement about an input the field already defines.
+            Some(base) => {
+                let upper = ExprNode::fn_raw(SymbolId::intern("ln"), vec![argument]);
+                let lower = ExprNode::fn_raw(SymbolId::intern("ln"), vec![base]);
+                mul([upper, pow(lower, ExprNode::int(-1))])
+            }
+            None => normalize(&ExprNode::fn_raw(SymbolId::intern(name), vec![argument])),
+        };
         Ok(match exponent {
-            Some(exponent) => pow(applied, exponent),
-            None => applied,
+            Some(exponent) => pow(value, exponent),
+            None => value,
         })
     }
 
@@ -763,9 +798,28 @@ mod tests {
     }
 
     #[test]
-    fn subscript_before_power_keeps_the_power() {
-        // `x_1^2` -> `x^2`: the discarded subscript must not eat the `^`.
-        assert_eq!(parse_ok("x_1^2").to_string(), "x^2");
+    fn a_subscript_is_refused_before_it_can_swallow_a_power() {
+        // `x_1^2` used to parse as `x^2`: the subscript was consumed and thrown
+        // away, so the power silently attached to a different expression than
+        // the one written. It is refused at the `_` now.
+        let err = parse("x_1^2").expect_err("a subscript has no expression form");
+        assert_eq!(err.position, 1);
+        assert_eq!(err.message, SUBSCRIPT_REFUSAL);
+        // A plain power still parses, which is the other half of the old test.
+        assert_eq!(parse_ok("x^2").to_string(), "x^2");
+    }
+
+    #[test]
+    fn a_logarithm_with_two_bases_is_refused() {
+        // `\log_2_3 x` has no meaning: the base is read once, and a second `_`
+        // on the same name would otherwise be dropped.
+        let err = parse(r"\log_2_3 x").expect_err("a logarithm has one base");
+        assert_eq!(err.position, 6);
+        assert!(
+            err.message.contains("only one base"),
+            "message was {}",
+            err.message
+        );
     }
 
     #[test]

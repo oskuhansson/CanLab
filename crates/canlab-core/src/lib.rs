@@ -19,7 +19,7 @@ pub mod symbol;
 
 pub mod diff;
 pub use diff::{differentiate, differentiate_n};
-pub use eval::{Op, Program};
+pub use eval::{INLINE_STACK, Op, Program};
 pub use expr::{Expr, ExprNode, FuncId, Hold, int, ratio, sym};
 pub use normalize::{add, mul, normalize, pow};
 pub use number::Number;

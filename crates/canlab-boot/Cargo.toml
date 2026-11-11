@@ -1,0 +1,12 @@
+[package]
+name = "canlab-boot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Bevy + egui boot probe: one window, one panel, and a measurement"
+
+[dependencies]
+# Default features on purpose: the measurement is of the stack we would ship,
+# not of a trimmed one that turns out to be missing a subsystem later.
+bevy = "0.20.1"
+bevy_egui = "0.43.1"

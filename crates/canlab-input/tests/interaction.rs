@@ -691,6 +691,16 @@ fn a_logarithm_with_a_base_is_a_ratio_of_natural_logs() {
 }
 
 #[test]
+fn a_subscript_on_a_function_other_than_log_is_refused() {
+    // A base means something only for a logarithm. `\sin_2 x` used to be read as
+    // `ln x / ln 2`, a value nobody typed; `canlab-parse` refuses it with the
+    // same reason, so the two readers stay in step.
+    assert_eq!(typed("\\sin_2 x").build_expr(), Err(ToExprError::Subscript));
+    // The one meaningful function subscript keeps working.
+    assert!(typed("\\log_2(8)").build_expr().is_ok());
+}
+
+#[test]
 fn a_unit_marker_is_notation_and_the_number_still_reads() {
     // `80°` is a perfectly good thing to write in an exam answer. The degree
     // sign is not an operator, so it must not make the whole field unreadable.
@@ -881,6 +891,24 @@ fn to_expr_refuses_a_subscript() {
     assert_eq!(typed("x_1").build_expr(), Err(ToExprError::Subscript));
     // `x_1^2` is `x_{1^2}`, so it is a subscript too.
     assert_eq!(typed("x_1^2").build_expr(), Err(ToExprError::Subscript));
+}
+
+#[test]
+fn the_field_and_the_parser_refuse_a_subscript_with_the_same_reason() {
+    // Two readers of the same document: the math field and `canlab-parse`.
+    // They must not disagree about what `x_1` means, and "no expression form"
+    // has to be said in the same words or the two paths will drift again.
+    let field = typed("x_1")
+        .build_expr()
+        .expect_err("the field refuses a subscript");
+    let parser = canlab_parse::parse_latex("x_1").expect_err("the parser refuses a subscript");
+
+    assert_eq!(field.to_string(), "subscripts are not expressions");
+    assert_eq!(
+        parser.message,
+        field.to_string(),
+        "the field and the parser give different reasons"
+    );
 }
 
 #[test]

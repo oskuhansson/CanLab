@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 
 use canlab_core::{Expr, ExprNode, Number, SymbolId, add, mul, pow};
 
-use crate::{Solver, SolverError};
+use crate::{Solutions, Solver, SolverError};
 
 /// The native backend. Stateless, so a unit struct.
 pub struct NativeSolver;
@@ -202,6 +202,45 @@ impl Solver for NativeSolver {
         }
     }
 
+    /// The real solutions of `eq == 0`, with the answers a list cannot say.
+    ///
+    /// Degree 1 and 2 reuse [`NativeSolver::solve`], so a quadratic keeps its
+    /// roots and a negative discriminant becomes [`Solutions::None`] instead of
+    /// an empty list. A constant equation is the trichotomy every school
+    /// exercise has: `0 = 0` is every number, `0 = c` with `c ≠ 0` is none.
+    /// Higher degrees and anything that is not a polynomial in `var` stay
+    /// [`SolverError::NotImplemented`]; W2.3 and W2.5 will fill those in.
+    fn solve_all(&self, eq: &Expr, var: SymbolId) -> Result<Solutions, SolverError> {
+        let map = coefficients(eq, var).ok_or(SolverError::NotImplemented)?;
+        if map.keys().any(|power| *power < 0) {
+            return Err(SolverError::NotImplemented);
+        }
+        let coefficient = |power: i128| map.get(&power).cloned().unwrap_or_else(Number::zero);
+        let degree = map
+            .keys()
+            .copied()
+            .filter(|power| !coefficient(*power).is_zero())
+            .max();
+
+        match degree {
+            // The zero polynomial: every value of `var` solves it.
+            None => Ok(Solutions::All),
+            // A nonzero constant: no value does.
+            Some(0) => Ok(Solutions::None),
+            Some(1) | Some(2) => {
+                let values = self.solve(eq, var)?;
+                if values.is_empty() {
+                    // Among degrees 1 and 2 only a quadratic with a negative
+                    // discriminant reaches here, and that is a real answer.
+                    Ok(Solutions::None)
+                } else {
+                    Ok(Solutions::Values(values))
+                }
+            }
+            Some(_) => Err(SolverError::NotImplemented),
+        }
+    }
+
     /// Solve the system as a system: substitution first, then elimination.
     ///
     /// One equation at a time would silently drop the variables the other
@@ -226,5 +265,73 @@ impl Solver for NativeSolver {
         _order: usize,
     ) -> Result<Expr, SolverError> {
         Err(SolverError::NotImplemented)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use canlab_core::{int, sym};
+
+    fn x() -> Expr {
+        sym("x")
+    }
+
+    fn var() -> SymbolId {
+        SymbolId::intern("x")
+    }
+
+    #[test]
+    fn solve_all_keeps_both_roots_of_a_quadratic() {
+        // x² = 4
+        let equation = add([pow(x(), int(2)), int(-4)]);
+        assert_eq!(
+            NativeSolver.solve_all(&equation, var()),
+            Ok(Solutions::Values(vec![int(2), int(-2)]))
+        );
+    }
+
+    #[test]
+    fn solve_all_keeps_a_linear_root() {
+        // 2x = 6
+        let equation = add([mul([int(2), x()]), int(-6)]);
+        assert_eq!(
+            NativeSolver.solve_all(&equation, var()),
+            Ok(Solutions::Values(vec![int(3)]))
+        );
+    }
+
+    #[test]
+    fn solve_all_says_none_for_a_negative_discriminant() {
+        // x² + 1 = 0 has no real solutions.
+        let equation = add([pow(x(), int(2)), int(1)]);
+        assert_eq!(
+            NativeSolver.solve_all(&equation, var()),
+            Ok(Solutions::None)
+        );
+    }
+
+    #[test]
+    fn solve_all_says_none_for_a_contradiction() {
+        // 0 = 3
+        assert_eq!(NativeSolver.solve_all(&int(3), var()), Ok(Solutions::None));
+    }
+
+    #[test]
+    fn solve_all_says_all_for_an_identity() {
+        // 0 = 0
+        assert_eq!(NativeSolver.solve_all(&int(0), var()), Ok(Solutions::All));
+    }
+
+    #[test]
+    fn solve_all_declines_a_cubic() {
+        let equation = pow(x(), int(3));
+        let error = NativeSolver
+            .solve_all(&equation, var())
+            .expect_err("a cubic is outside this backend's repertoire");
+        assert_eq!(error, SolverError::NotImplemented);
+        // A decline is a normal answer, not a failure: the caller keeps the
+        // equation rather than showing an error banner.
+        assert!(error.is_declined());
     }
 }

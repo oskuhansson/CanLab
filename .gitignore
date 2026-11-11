@@ -4,3 +4,8 @@
 *.svg
 !docs/**/*.svg
 plot.svg
+
+# Headless frame tests: the reference images are committed, the diffs are not.
+**/tests/snapshots/**/*.new.png
+**/tests/snapshots/**/*.diff.png
+**/tests/snapshots/**/*.old.png

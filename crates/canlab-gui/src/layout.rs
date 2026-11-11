@@ -483,7 +483,12 @@ fn show_leaf(
                     kind,
                 });
             }
-            let response = ui.menu_button("▾", |ui| {
+            // Plain ASCII: the bundled font set is Ubuntu-Light plus egui's icon
+            // font, and neither has the typographic ellipsis or the triangle this
+            // button used to ask for. The headless frame test found both by
+            // panicking on the missing glyph — which is the behaviour we want from
+            // a test, and not from a UI that silently draws a box.
+            let response = ui.menu_button("...", |ui| {
                 ui.label(RichText::new("Panel").small().strong());
                 ui.separator();
                 for candidate in PanelKind::ALL {
