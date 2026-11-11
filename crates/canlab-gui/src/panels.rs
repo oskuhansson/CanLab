@@ -1683,7 +1683,14 @@ fn plot_equations(
     // the sum of squares touches zero from above instead of crossing it. That
     // ring is a *hint*, and Newton's method turns each hint into a coordinate,
     // which is a thing a reader can read off instead of a blob they cannot.
-    if programs.len() >= 2 && variables.len() == 2 {
+    // Pairing is only meaningful *inside* one system. `x² + y² = 1` and `x = y`
+    // in two different blocks are not simultaneous, so a crossing between them is
+    // a point that satisfies neither block's question — a wrong answer drawn as a
+    // dot. The flat equation list has lost the block each line came from, and
+    // until the plot carries it, a page with more than one system draws **no**
+    // intersections: a refusal is a smaller lie than an invented crossing.
+    let one_system = app.field.systems().len() <= 1;
+    if programs.len() >= 2 && variables.len() == 2 && one_system {
         let tolerance = ((options.x_max - options.x_min) / options.resolution as f64) * 3.0;
         for first in 0..programs.len() {
             for second in (first + 1)..programs.len() {

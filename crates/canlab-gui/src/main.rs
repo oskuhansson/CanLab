@@ -2741,10 +2741,15 @@ mod tests {
     }
 
     #[test]
-    fn several_systems_all_reach_the_plot() {
+    fn several_systems_all_reach_the_plot_but_do_not_intersect() {
         // Built from LaTeX rather than typed: after `^` the script absorbs
         // everything until the cursor is moved out, exactly as in Abitti, so a
         // typed `x^2+y^2=4` would be `x^{2+y^{2=4}}`.
+        //
+        // The two lines are in **different systems**, so they are not
+        // simultaneous: `y = x` does not meet the circle of the other block, and
+        // pairing them would draw a crossing that answers neither question. This
+        // test used to assert the opposite, which is how the bug survived.
         let mut app = CasApp::new();
         let mut field = MathField::from_latex("x^2+y^2=4").expect("a circle");
         field.new_system();
@@ -2754,9 +2759,9 @@ mod tests {
         crate::panels::build_curve(&mut app);
         assert!(app.curves.len() >= 2, "status: {}", app.plot_note);
         assert!(
-            app.plot_note.contains("intersection"),
-            "note: {}",
-            app.plot_note
+            app.intersections.is_empty(),
+            "curves from different systems were paired: {} intersections",
+            app.intersections.len()
         );
     }
 
