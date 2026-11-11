@@ -17,6 +17,7 @@ pub mod expr;
 pub mod normalize;
 pub mod rewrite;
 pub mod number;
+pub mod relation;
 pub mod symbol;
 
 pub mod diff;
@@ -25,4 +26,5 @@ pub use eval::{INLINE_STACK, Op, Program};
 pub use expr::{Expr, ExprNode, FuncId, Hold, int, ratio, sym};
 pub use normalize::{add, mul, normalize, pow};
 pub use number::Number;
+pub use relation::{Comparator, Relation};
 pub use symbol::SymbolId;

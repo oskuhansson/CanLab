@@ -1523,6 +1523,34 @@ impl MathField {
             .collect()
     }
 
+    /// Read a one-line document as an *inequality*, keeping its comparator.
+    ///
+    /// A comparison is not an expression, so [`MathField::build_expr`] refuses
+    /// the line and [`MathField::build_equations`] only knows `=`. Without this
+    /// reader the comparator is discarded before the solver is asked, and
+    /// `|x − 1| < 2` and `|x − 1| > 2` arrive as the same difference.
+    ///
+    /// `None` means this is not that question: a plain expression, an equation,
+    /// a definition, or a page with more than one line. A page of several
+    /// inequalities is several questions, and answering the first would answer
+    /// an unasked one.
+    pub fn build_relation_with(
+        &self,
+        definitions: &crate::define::Definitions,
+    ) -> Result<Option<canlab_core::Relation>, crate::ToExprError> {
+        let rows: Vec<&Row> = self
+            .systems
+            .iter()
+            .flatten()
+            .filter(|row| row_caret_len(row) > 0)
+            .filter(|row| !self.is_definition_row(row))
+            .collect();
+        if rows.len() != 1 {
+            return Ok(None);
+        }
+        relation(rows[0], definitions)
+    }
+
     /// The equations of one system, so a caller can plot or solve them apart.
     pub fn build_system_equations(
         &self,
@@ -1714,6 +1742,44 @@ fn equation(
         None => None,
     };
     Ok((lhs, rhs))
+}
+
+/// One line as an inequality, or `None` when it has no comparison in it.
+///
+/// The first comparison splits the line; a second one on either side is then an
+/// ordinary character to the expression reader and is refused by it, which is
+/// what `x < y < z` deserves rather than a two-step guess.
+fn relation(
+    row: &Row,
+    definitions: &crate::define::Definitions,
+) -> Result<Option<canlab_core::Relation>, crate::ToExprError> {
+    let Some(index) = row.iter().position(|node| comparison(node).is_some()) else {
+        return Ok(None);
+    };
+    let comparator = comparison(&row[index]).expect("the position matched a comparison");
+    let left: Row = row[..index].to_vec();
+    let right: Row = row[index + 1..].to_vec();
+    Ok(Some(canlab_core::Relation::new(
+        crate::expr::build_with(&left, definitions)?,
+        crate::expr::build_with(&right, definitions)?,
+        comparator,
+    )))
+}
+
+/// The comparison a node stands for, when it is one.
+///
+/// `<` and `>` are plain characters in the field; `<=` and `>=` are rewritten
+/// to `\le` / `\ge` as they are typed, and a saved or pasted document may carry
+/// either spelling of the long form.
+fn comparison(node: &Node) -> Option<canlab_core::Comparator> {
+    use canlab_core::Comparator;
+    match node {
+        Node::Text(text) if text == "<" => Some(Comparator::Less),
+        Node::Text(text) if text == ">" => Some(Comparator::Greater),
+        Node::Sym(name) if name == "\\le" || name == "\\leq" => Some(Comparator::LessOrEqual),
+        Node::Sym(name) if name == "\\ge" || name == "\\geq" => Some(Comparator::GreaterOrEqual),
+        _ => None,
+    }
 }
 
 /// Parse a list of LaTeX lines into rows.

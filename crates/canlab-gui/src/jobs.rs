@@ -12,7 +12,7 @@
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 
-use canlab_core::{Expr, SymbolId};
+use canlab_core::{Expr, Relation, SymbolId};
 use canlab_solver::{NativeSolver, Solver, SolverError};
 
 /// Which backend the worker thread is talking to.
@@ -44,7 +44,8 @@ impl Backend {
             (Backend::Native, JobKind::Solve) => String::from(
                 "This backend solves one equation in one variable, of degree 1 or 2, and \
                  linear systems of any size. A higher power, a function of the variable, \
-                 or a non-linear system is beyond it.",
+                 or a non-linear system is beyond it. An inequality is charted when both \
+                 sides are polynomials, a ratio of polynomials, or absolute values of those.",
             ),
             (Backend::Native, JobKind::Integrate) => String::from(
                 "This backend integrates sums of integer powers of one variable.",
@@ -110,6 +111,12 @@ pub enum JobOp {
     Simplify(Expr),
     Integrate(Expr, SymbolId),
     Solve(Expr, SymbolId),
+    /// A comparison the user typed, with both sides and the comparator intact.
+    ///
+    /// Beside [`JobOp::Solve`] rather than inside it on purpose: folding the
+    /// sides into a difference first makes `<` and `>` the same expression, so
+    /// the comparator has to be part of the request.
+    SolveRelation(Relation, SymbolId),
     /// The whole document's equations, solved together for all its variables.
     SolveSystem(Vec<Expr>, Vec<SymbolId>),
 }
@@ -329,6 +336,24 @@ fn run(solver: &dyn Solver, backend: Backend, job: Job) -> JobResult {
             // three of those away before the answer reached the screen.
             let (outcome, fatal) = match solver.solve_all(&expr, var) {
                 Ok(solutions) => (JobOutcome::Solutions(solutions), false),
+                Err(err) => declined_or_failed(err, JobKind::Solve, backend),
+            };
+            (JobKind::Solve, Some(var), outcome, fatal)
+        }
+        JobOp::SolveRelation(relation, var) => {
+            // The answer type is the same one an equation uses: `x < 2` is a
+            // union of intervals, which is one more kind of `Solutions`.
+            let (outcome, fatal) = match solver.solve_relation(&relation, var) {
+                Ok(solutions) => (JobOutcome::Solutions(solutions), false),
+                // SymPy has no relation solver behind this trait, while the
+                // native sign chart answers the school cases exactly. As with a
+                // system, trying the other backend beats declining.
+                Err(err) if err.is_declined() && backend != Backend::Native => {
+                    match NativeSolver.solve_relation(&relation, var) {
+                        Ok(solutions) => (JobOutcome::Solutions(solutions), false),
+                        Err(native) => declined_or_failed(native, JobKind::Solve, Backend::Native),
+                    }
+                }
                 Err(err) => declined_or_failed(err, JobKind::Solve, backend),
             };
             (JobKind::Solve, Some(var), outcome, fatal)

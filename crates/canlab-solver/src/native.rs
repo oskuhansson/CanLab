@@ -19,7 +19,7 @@
 
 use std::collections::BTreeMap;
 
-use canlab_core::{Expr, ExprNode, Number, SymbolId, add, mul, pow};
+use canlab_core::{Expr, ExprNode, Number, Relation, SymbolId, add, mul, pow};
 use canlab_poly::Poly;
 
 use crate::{Solutions, Solver, SolverError};
@@ -373,6 +373,16 @@ impl Solver for NativeSolver {
         vars: &[SymbolId],
     ) -> Result<Vec<(SymbolId, Expr)>, SolverError> {
         crate::system::solve_system(self, equations, vars)
+    }
+
+    /// The solution set of an inequality, by a sign chart over exact critical
+    /// points. See [`crate::inequality`] for the construction.
+    fn solve_relation(
+        &self,
+        relation: &Relation,
+        var: SymbolId,
+    ) -> Result<Solutions, SolverError> {
+        crate::inequality::solve_relation(self, relation, var)
     }
 
     fn limit(&self, _e: &Expr, _var: SymbolId, _at: &Expr) -> Result<Expr, SolverError> {

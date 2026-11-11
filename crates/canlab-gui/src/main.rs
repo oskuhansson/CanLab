@@ -373,6 +373,49 @@ impl CasApp {
             return;
         }
 
+        // An inequality is a relation too, but `build_equations` only knows
+        // `=`, and the expression reader refuses a comparison by design. It is
+        // read here so the comparator survives re-parsing; folding the sides
+        // into a difference at this point would lose which comparison was typed.
+        match self.field.build_relation_with(&self.definitions) {
+            Ok(Some(relation)) => {
+                self.expr = None;
+                self.equations.clear();
+                self.result_latex = self.field.to_latex();
+                self.result_plain = String::from("an inequality");
+                let mut vars = Vec::new();
+                for side in [&relation.left, &relation.right] {
+                    let mut side_vars = Vec::new();
+                    free_symbols(side, &mut side_vars);
+                    for var in side_vars {
+                        if !vars.contains(&var) {
+                            vars.push(var);
+                        }
+                    }
+                }
+                for variable in self.definition_variables() {
+                    if !vars.contains(&variable) {
+                        vars.push(variable);
+                    }
+                }
+                self.free_vars = vars;
+                self.choose_axes();
+                self.refresh_parameters();
+                return;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                self.error = Some(format!(
+                    "The inequality cannot be read yet: {}.",
+                    friendly_error(&error)
+                ));
+                self.result_plain.clear();
+                self.equations.clear();
+                self.refresh_parameters();
+                return;
+            }
+        }
+
         // An *equation* is a first-class thing here, whether or not it is part of
         // a system: `x + y = 3` on its own line is a perfectly good object to
         // plot and to solve. `build_expr` refuses relations by design (a relation
@@ -1161,6 +1204,37 @@ impl CasApp {
     fn start_job(&mut self, kind: JobKind) {
         if self.refuse_half_typed() {
             return;
+        }
+        // A comparison is a different request from an equation. It leaves the
+        // editor as both sides plus the comparator, never as `left − right`,
+        // because that fold makes `<` and `>` the same expression.
+        if kind == JobKind::Solve {
+            match self.field.build_relation_with(&self.definitions) {
+                Ok(Some(relation)) => {
+                    let Some(var) = self.free_vars.first().copied() else {
+                        self.status = String::from("no variable to solve for");
+                        return;
+                    };
+                    let label = format!("Solve the inequality for {}", var.as_str());
+                    let status = format!("{label}…");
+                    let generation = self.generation;
+                    if self.jobs.submit(Job {
+                        label,
+                        op: JobOp::SolveRelation(relation, var),
+                        generation,
+                    }) {
+                        self.status = status;
+                    } else {
+                        self.status = String::from("solver worker unavailable");
+                    }
+                    return;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    self.status = format!("nothing to send: {}", friendly_error(&error));
+                    return;
+                }
+            }
         }
         // Send the field's own tree. Re-parsing `to_latex()` here would be a
         // second, subtly different interpretation of what the user built.

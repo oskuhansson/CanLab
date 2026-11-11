@@ -8,7 +8,7 @@
 use canlab_core::expr::ExprNode;
 use canlab_core::{add, mul, pow, Expr, Number, SymbolId};
 
-use crate::tree::{Node, Row};
+use crate::tree::{Delim, Node, Row};
 
 /// Why a field cannot be read as an expression.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -366,6 +366,16 @@ fn atom(node: &Node, definitions: &crate::define::Definitions) -> Result<Expr, T
         } => Ok(pow(
             build_with(body, definitions)?,
             pow(build_with(index, definitions)?, ExprNode::int(-1)),
+        )),
+        // `|u|` is a function, not a bracket: dropping the bars would turn the
+        // absolute value into the bare expression, which is a different value.
+        Node::Group {
+            delim: Delim::Abs,
+            body,
+            ..
+        } => Ok(ExprNode::fn_raw(
+            SymbolId::intern("abs"),
+            vec![build_with(body, definitions)?],
         )),
         Node::Group { body, .. } => build_with(body, definitions),
         Node::Accent { .. } => Err(ToExprError::UnsupportedConstruct("an accent")),

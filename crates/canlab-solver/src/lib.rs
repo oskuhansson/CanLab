@@ -35,9 +35,10 @@
 
 #![warn(missing_docs)]
 
-use canlab_core::{Expr, SymbolId};
+use canlab_core::{Expr, Relation, SymbolId};
 
 pub mod exponential;
+pub mod inequality;
 pub mod logarithmic;
 pub mod json;
 pub mod mock;
@@ -163,6 +164,20 @@ pub trait Solver: Send + Sync {
         self.solve(eq, var).map(Solutions::Values)
     }
 
+    /// The solution set of `relation` in `var`, as a union of intervals.
+    ///
+    /// The default refuses. That is deliberate: an inequality folded into
+    /// `left − right` is indistinguishable from the same fold of its opposite,
+    /// so a backend that cannot see the comparator must not answer. A backend
+    /// that can answer overrides this; the native one does, with a sign chart.
+    fn solve_relation(
+        &self,
+        _relation: &Relation,
+        _var: SymbolId,
+    ) -> Result<Solutions, SolverError> {
+        Err(SolverError::NotImplemented)
+    }
+
     /// `lim(var -> at) e`.
     fn limit(&self, e: &Expr, var: SymbolId, at: &Expr) -> Result<Expr, SolverError>;
 
@@ -268,6 +283,22 @@ mod tests {
         // an empty answer.
         assert_eq!(
             MockSolver.solve_all(&canlab_core::sym("x"), var),
+            Err(SolverError::NotImplemented)
+        );
+    }
+
+    #[test]
+    fn the_default_solve_relation_declines() {
+        // A backend that cannot see the comparator must not answer an
+        // inequality: the difference it would receive is the same for `<` and
+        // `>`. The default is the refusal, not a guess.
+        let relation = Relation::new(
+            canlab_core::sym("x"),
+            canlab_core::int(2),
+            canlab_core::Comparator::Less,
+        );
+        assert_eq!(
+            OnlySolve.solve_relation(&relation, SymbolId::intern("x")),
             Err(SolverError::NotImplemented)
         );
     }
