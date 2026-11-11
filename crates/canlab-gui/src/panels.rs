@@ -443,15 +443,23 @@ fn plot_row(app: &mut CasApp, ui: &mut Ui) {
         axes_changed |= axis_picker(app, ui, "x", Axis::Horizontal);
         axes_changed |= axis_picker(app, ui, "y", Axis::Vertical);
 
-        ui.separator();
-        ui.label(RichText::new("x from").small());
-        let mut range_changed = ui
-            .add(egui::DragValue::new(&mut app.x_min).speed(0.5))
-            .changed();
-        ui.label(RichText::new("to").small());
-        range_changed |= ui
-            .add(egui::DragValue::new(&mut app.x_max).speed(0.5))
-            .changed();
+        // The window controls need room for two number boxes and their labels. In
+        // a narrow dock they used to wrap onto a second line *inside a strip sized
+        // for one*, so labels and values landed on top of each other. They are
+        // better absent than broken there; the window is still reachable by
+        // dragging and scrolling the plot.
+        let mut range_changed = false;
+        if ui.available_width() > 300.0 {
+            ui.separator();
+            ui.label(RichText::new("x from").small());
+            range_changed |= ui
+                .add(egui::DragValue::new(&mut app.x_min).speed(0.5))
+                .changed();
+            ui.label(RichText::new("to").small());
+            range_changed |= ui
+                .add(egui::DragValue::new(&mut app.x_max).speed(0.5))
+                .changed();
+        }
 
         if axes_changed {
             // A new axis can turn a parameter into a coordinate or back.
