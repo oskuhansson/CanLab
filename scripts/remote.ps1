@@ -86,7 +86,12 @@ if (Test-Path $identity) {
 function Invoke-Remote {
     param([string]$Script, [switch]$AllowFailure)
     Write-Verbose "remote: $Script"
-    & ssh @sshBase $target $Script
+    # `2>&1` must wrap the whole command and be applied *on the server*: cargo
+    # writes progress to stderr, and PowerShell turns any stderr line from a
+    # native command into an error record — so a working build reported exit 1.
+    # Appending the redirect instead of wrapping it would bind to the last command
+    # of an `a && b && c` chain and leave the rest unredirected.
+    & ssh @sshBase $target "{ $Script ; } 2>&1"
     $code = $LASTEXITCODE
     if ($code -ne 0 -and -not $AllowFailure) {
         throw "remote command failed with $code"
@@ -105,8 +110,18 @@ function Sync-Tree {
     Write-Host "packing the tree ..." -ForegroundColor Cyan
     Push-Location $root
     try {
-        tar -czf $localTarball --exclude=target --exclude=./target --exclude=.git --exclude=.obsidian .
-        if ($LASTEXITCODE -ne 0) { throw "tar failed with $LASTEXITCODE" }
+        # `git archive`, not `tar`. The archive comes from the commit, so it holds
+        # only tracked files, carries git's own file modes, and has none of
+        # bsdtar's `SCHILY.fflags` extended attributes — which is what made the
+        # server refuse some paths with "Cannot mkdir: Permission denied". It also
+        # means the server builds a named commit rather than whatever the tree
+        # happened to hold, so a failing remote run can be reproduced.
+        & git archive --format=tar.gz --output=$localTarball HEAD
+        if ($LASTEXITCODE -ne 0) { throw "git archive failed with $LASTEXITCODE" }
+        $dirty = (& git status --porcelain) -join "`n"
+        if ($dirty) {
+            Write-Host "warning: the tree is dirty; only the commit is sent" -ForegroundColor Yellow
+        }
     } finally {
         Pop-Location
     }
@@ -118,7 +133,13 @@ function Sync-Tree {
     $unpack = @(
         "set -e"
         "mkdir -p '$RemotePath'"
-        "tar -xzf '$remoteTarball' -C '$RemotePath'"
+        # A previous archive left the checkout root mode 0555, so the next
+        # extraction could not create a file inside it ("Cannot open: Permission
+        # denied", on .cargo/config.toml because it sorts first). Make the tree
+        # writable before unpacking, and do not let the archive's own modes make
+        # it read-only again.
+        "chmod -R u+w '$RemotePath' 2>/dev/null || true"
+        "tar --no-same-permissions --no-same-owner -xzf '$remoteTarball' -C '$RemotePath'"
         "rm -f '$remoteTarball'"
     ) -join ' && '
     Invoke-Remote $unpack | Out-Null
