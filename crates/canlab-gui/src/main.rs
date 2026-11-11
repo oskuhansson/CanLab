@@ -1820,7 +1820,10 @@ mod tests {
     }
 
     #[test]
-    fn a_two_variable_equation_is_declined_with_a_reason() {
+    fn a_two_variable_equation_answers_in_the_chosen_variable() {
+        // `x² + y² = 1` used to be declined as "two variables". It has two
+        // answers in `x` with `y` as a parameter, and saying so is the whole
+        // point of the parametric path — this is what autofill will insert.
         let mut app = CasApp::new();
         app.field = MathField::from_latex("x^2+y^2=1").expect("a circle");
         app.recompute();
@@ -1835,10 +1838,19 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         match &app.solve {
-            SolveState::Declined { why, .. } => {
-                assert!(why.contains("one variable"), "why: {why}");
+            SolveState::Solved {
+                solutions: canlab_solver::Solutions::Values(values),
+                ..
+            } => {
+                assert_eq!(values.len(), 2, "a circle has two branches in x");
+                let latex = app.result_latex.clone();
+                assert!(latex.contains("sqrt"), "the result should carry a root: {latex}");
+                assert!(
+                    !latex.contains("\\frac{1}{4}"),
+                    "the square factor should have been taken out: {latex}"
+                );
             }
-            other => panic!("expected a decline, got {other:?}"),
+            other => panic!("expected two branches, got {other:?}"),
         }
     }
 

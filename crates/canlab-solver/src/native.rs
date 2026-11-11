@@ -144,7 +144,13 @@ impl Solver for NativeSolver {
 
     /// The real solutions of `eq == 0`, for degree 1 and 2.
     fn solve(&self, eq: &Expr, var: SymbolId) -> Result<Vec<Expr>, SolverError> {
-        let map = coefficients(eq, var).ok_or(SolverError::NotImplemented)?;
+        let Some(map) = coefficients(eq, var) else {
+            // Not a polynomial with numeric coefficients. It may still be one in
+            // `var` with symbolic coefficients — `x² + y² = 1` has two answers in
+            // `x` — and that is the case the editor's autofill needs.
+            return crate::parametric::solve_parametric(eq, var)
+                .ok_or(SolverError::NotImplemented);
+        };
         if map.keys().any(|power| *power < 0) {
             return Err(SolverError::NotImplemented);
         }
@@ -211,7 +217,11 @@ impl Solver for NativeSolver {
     /// Higher degrees and anything that is not a polynomial in `var` stay
     /// [`SolverError::NotImplemented`]; W2.3 and W2.5 will fill those in.
     fn solve_all(&self, eq: &Expr, var: SymbolId) -> Result<Solutions, SolverError> {
-        let map = coefficients(eq, var).ok_or(SolverError::NotImplemented)?;
+        let Some(map) = coefficients(eq, var) else {
+            return crate::parametric::solve_parametric(eq, var)
+                .map(Solutions::Values)
+                .ok_or(SolverError::NotImplemented);
+        };
         if map.keys().any(|power| *power < 0) {
             return Err(SolverError::NotImplemented);
         }

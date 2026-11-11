@@ -40,6 +40,7 @@ use canlab_core::{Expr, SymbolId};
 pub mod json;
 pub mod mock;
 pub mod native;
+pub mod parametric;
 pub mod solutions;
 pub mod system;
 pub mod session;

@@ -2323,6 +2323,7 @@ name = "canlab-solver"
 version = "0.1.0"
 dependencies = [
  "canlab-core",
+ "canlab-poly",
  "canlab-tex",
 ]
 
