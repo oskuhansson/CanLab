@@ -322,6 +322,9 @@ impl Solver for NativeSolver {
                     Ok(Solutions::Values(kept))
                 };
             }
+            if let Some(solutions) = crate::trig::solve_trigonometric(eq, var) {
+                return Ok(solutions);
+            }
             return crate::parametric::solve_parametric(eq, var)
                 .map(Solutions::Values)
                 .ok_or(SolverError::NotImplemented);

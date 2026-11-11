@@ -46,6 +46,7 @@ pub mod parametric;
 pub mod solutions;
 pub mod system;
 pub mod session;
+pub mod trig;
 pub mod sympy;
 
 pub use json::{decode, decode_array, decode_solutions, encode, encode_solutions};

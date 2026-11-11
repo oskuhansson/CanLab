@@ -1,0 +1,11 @@
+# W2.5, the case that fits one family: the tangent repeats every half turn, so
+# `tan x = 1` is a single progression. The exact angle matters here -- the row
+# would pass on `0.785 + k*pi` too if the expectation were numeric, and the point
+# of a CAS is that it is not.
+id = "tan-one-family"
+subject = "math"
+capability = "solve.trigonometric"
+source = "docs/corpus.md §5 — a contract row for the whole pipeline, not an exam problem"
+document = '\tan x = 1'
+expect.exact = '\frac{\pi}{4} + \pi k'
+note = "Sin and cosine are refused for now: sin x = 1/2 has two families, and a single Family cannot say that. The union of families is the next piece of W2.5."

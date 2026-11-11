@@ -25,6 +25,7 @@ use canlab_core::{Expr, ExprNode, Number, SymbolId, add, int, mul};
 use crate::native::NativeSolver;
 use crate::Solver as _;
 
+#[cfg(test)]
 fn natural_log(value: &Expr) -> Expr {
     ExprNode::fn_raw(SymbolId::intern("ln"), vec![value.clone()])
 }
