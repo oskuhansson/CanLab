@@ -9,7 +9,7 @@
 # one-liner to paste, not a permanent setting.
 #
 # Why: the file sandbox allows writes under this workspace only. Cargo itself is
-# fine there — an offline build already worked without it — but rustc and the
+# fine there - an offline build already worked without it - but rustc and the
 # test binaries inherit TMP and TEMP, and a test that writes to
 # `std::env::temp_dir()` fails with "Access is denied". That is a property of the
 # machine, not of the code, and it cost two red tests before anyone noticed.

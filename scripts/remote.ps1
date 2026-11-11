@@ -15,7 +15,7 @@
 # else `oskar@100.88.227.20:2220` (the tailnet IP; `ai.ragnarhansson.com` does
 # not resolve to a reachable address from every network). The checkout is
 # `~/canlab-remote` and the build directory `~/canlab-target` is *shared*, so a
-# second run is incremental — that is the point of the exercise.
+# second run is incremental - that is the point of the exercise.
 #
 # The transport is plain `ssh`/`scp` with the key in `~/.ssh/id_ed25519`. To
 # authorise it once, from this machine and with the server's password:
@@ -88,7 +88,7 @@ function Invoke-Remote {
     Write-Verbose "remote: $Script"
     # `2>&1` must wrap the whole command and be applied *on the server*: cargo
     # writes progress to stderr, and PowerShell turns any stderr line from a
-    # native command into an error record — so a working build reported exit 1.
+    # native command into an error record - so a working build reported exit 1.
     # Appending the redirect instead of wrapping it would bind to the last command
     # of an `a && b && c` chain and leave the rest unredirected.
     & ssh @sshBase $target "{ $Script ; } 2>&1"
@@ -112,7 +112,7 @@ function Sync-Tree {
     try {
         # `git archive`, not `tar`. The archive comes from the commit, so it holds
         # only tracked files, carries git's own file modes, and has none of
-        # bsdtar's `SCHILY.fflags` extended attributes — which is what made the
+        # bsdtar's `SCHILY.fflags` extended attributes - which is what made the
         # server refuse some paths with "Cannot mkdir: Permission denied". It also
         # means the server builds a named commit rather than whatever the tree
         # happened to hold, so a failing remote run can be reproduced.
