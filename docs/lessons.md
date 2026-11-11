@@ -317,3 +317,73 @@ delimiter that changes meaning is a construct, not a decoration.** Every node ki
 the field can produce needs a value rule or a refusal — falling through to the
 generic case is how `|x|` becomes `x`.
 
+## How the errors were thought into existence
+
+The entries above read as separate bugs. They are not separate in the way they
+were made. Each one began with a thought that was true of the case in hand and
+false just next door, and the code was built from that thought before the next
+case was tried.
+
+**The nearest case was treated as the general case.** The surface slice was
+thought to be a parameter because the parameter rule was written from the
+coefficient case; the `a` that became a third coordinate was the same rule with
+the same name. The `5x²` reading was the run's product meaning, applied to the
+power that followed it. The `|x−1|` bars were the group's "read the body"
+meaning, applied to a delimiter that is not a group. In every case the nearest
+example was the only one consulted, and the rule was written before the neighbour
+was written.
+
+**The test was a proof of the implementation, not a search for the failure.** The
+suite asked whether the curve appeared, not whether it should be refused. It
+asked whether the system solved, not whether the answer was the question echoed
+back. It asked whether the state changed, not whether the text on screen was
+readable. It asked whether the frame was drawn, not whether the glyphs existed.
+A positive test is a map of the intended case; it cannot be a map of the
+neighbouring case, and the neighbouring case is where the error lives.
+
+**The representation was allowed to decide the meaning.** The run is one node
+with two readings; the field's delimiter is one node with several meanings; the
+document's lines are one list of equations, some of which are statements. In each
+case the code picked the reading that was easier to implement and then the reader
+fell through to its default. The default is the most dangerous place to put a
+meaning, because a default is what a reader uses when nobody has told it what
+this node is.
+
+**The developer's environment was treated as the world.** The temporary SVG
+tests were written where the developer's `%TEMP%` is writable; the window frame
+was thought to be the app's, because the app's own frame was the only one the
+tests looked at. The suite is a statement about the environment as much as the
+code, and a test that leaks its environment is a test that only proves the
+developer's desk.
+
+**The screen was left out of the loop.** The tests asserted state, the
+screenshots were the first renderer, and the glyphs, the title bar, the
+accessibility names and the "decline" as the answer all lived in the gap. The
+product is the screen; the state is a means to it. A test that stops at the
+state is a test of the means, not the product.
+
+**The document was read as a bag, not as a set of statements.** The page's
+`a = 2b` and `b = 3` were sent to the solver as unknowns, and the parameter list
+read only `s = 3`. The document is a set of statements, and "the page states
+this" is not "these unknowns satisfy this". The bug was not a missing case; it
+was a missing distinction between the two kinds of sentence.
+
+**Prose was treated as inert.** The comment and the Markdown file are not
+compiled, so a shell's `\a` became a control code and a word lost its letter. The
+reviewer read the word and saw the hole. The code did not read the prose, and no
+test could. The prose is part of the product, and the file tools are the only
+path that preserves it.
+
+**The fallback was the default.** The group case, the "parameter" case, the
+"state" case, the "environment" case, the "prose" case: each is a fallback that
+was reached when the code did not know what it was looking at. The fallback is
+the wrong answer when the code is looking at a construct it has never named. The
+refusal is the right answer, and it is the one thing the suite did not ask for.
+
+The common thread is not the fixes. It is the decision to make the case in hand
+work, and to test the case in hand, before the neighbour was named. The cost is
+the same each time: a picture, a number, a sentence or a screen that is wrong
+without being broken. The lesson is the *thought* — the neighbour, the refusal,
+the default, the screen — not the code that followed it.
+
+

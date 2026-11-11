@@ -160,6 +160,10 @@ pub struct Parameter {
     pub name: SymbolId,
     /// The value it is sampled at.
     pub value: f64,
+    /// Whether the plot draws a family of level curves instead of using this
+    /// value as the one number. The value is still the centre of the family, so
+    /// the picture the user was looking at stays in the middle of the five.
+    pub free: bool,
 }
 
 struct CasApp {
@@ -177,6 +181,10 @@ struct CasApp {
     error: Option<String>,
     /// The curves currently plotted: one for y = f(x), one per equation for a system.
     curves: Vec<Curve>,
+    /// How each curve in `curves` is painted, in the same order. A normal curve
+    /// is the next wheel colour; a free family's members are the equation's
+    /// colour, full strength at the centre and translucent either side.
+    curve_paints: Vec<panels::CurvePaint>,
     /// The document's equations — the `left` and optional `right` of each line's
     /// `=`. A lone equation is one entry; a system is several. Empty when the
     /// document is a plain expression.
@@ -256,6 +264,7 @@ impl CasApp {
             result_plain: String::new(),
             error: None,
             curves: Vec::new(),
+            curve_paints: Vec::new(),
             equations: Vec::new(),
             x_axis: None,
             y_axis: None,
@@ -344,6 +353,7 @@ impl CasApp {
     fn autoplot(&mut self) {
         if self.is_typing() || !self.can_plot() {
             self.curves.clear();
+            self.curve_paints.clear();
             self.plot_note.clear();
             return;
         }
@@ -355,6 +365,7 @@ impl CasApp {
         self.generation = self.generation.wrapping_add(1);
         self.error = None;
         self.curves.clear();
+        self.curve_paints.clear();
         self.intersections.clear();
         self.approximation = None;
         self.solve = SolveState::Idle;
@@ -380,6 +391,7 @@ impl CasApp {
             self.solve = SolveState::Idle;
             self.intersections.clear();
             self.curves.clear();
+            self.curve_paints.clear();
             return;
         }
 
@@ -738,6 +750,14 @@ impl CasApp {
             if axes.contains(variable) {
                 continue;
             }
+            // A free parameter is a property of the plot, not of the document,
+            // so a re-parse must not lose it: the name is the identity, and the
+            // value is already kept the same way.
+            let free = self
+                .parameters
+                .iter()
+                .find(|parameter| parameter.name == *variable)
+                .is_some_and(|parameter| parameter.free);
             // The document's value wins over the slider: `s = 1` is a statement,
             // not a default. The control stays, so the value can be tried out;
             // the next re-parse puts it back.
@@ -745,6 +765,7 @@ impl CasApp {
                 next.push(Parameter {
                     name: *variable,
                     value: number.to_f64(),
+                    free,
                 });
                 continue;
             }
@@ -759,6 +780,7 @@ impl CasApp {
             next.push(Parameter {
                 name: *variable,
                 value,
+                free,
             });
         }
         self.third_coordinates = coordinates;
@@ -2168,6 +2190,20 @@ mod tests {
             app.third_coordinates.is_empty(),
             "a is a knob, not a coordinate"
         );
+    }
+
+    #[test]
+    fn a_free_parameter_survives_a_reparse() {
+        // `free` is a plot property, not a document one: the re-parse rebuilds
+        // the list by name, so the flag has to be kept by name as well.
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex("x^2+y^2=a").expect("a circle with a radius");
+        app.recompute();
+        assert_eq!(app.parameters.len(), 1);
+        app.parameters[0].free = true;
+        app.recompute();
+        assert_eq!(app.parameters.len(), 1, "note: {}", app.plot_note);
+        assert!(app.parameters[0].free, "note: {}", app.plot_note);
     }
 
     #[test]

@@ -128,6 +128,26 @@ fn a_page_that_states_its_parameters_answers_on_screen() {
 }
 
 #[test]
+fn a_free_parameter_draws_its_family() {
+    let _frame = frame_lock();
+    // A free parameter is a family, not a single circle: the image is the
+    // assertion that the five members are drawn and the caption says so.
+    let mut app = CasApp::new();
+    app.field = MathField::from_latex("x^2+y^2=a").expect("a circle with a free parameter");
+    app.recompute();
+    app.parameters[0].free = true;
+    crate::panels::build_curve_fitting(&mut app, false);
+    assert!(
+        app.curves.len() > 1,
+        "the family this test is about is missing: {}",
+        app.plot_note
+    );
+    let mut harness = harness_for(&mut app);
+    draw_frames(&mut harness, 6);
+    harness.snapshot("free_parameter_family");
+}
+
+#[test]
 fn a_surface_says_so_instead_of_drawing_a_slice() {
     let _frame = frame_lock();
     // The bug this guards: `x² + y² = z` used to draw the circle at `z = 1`.

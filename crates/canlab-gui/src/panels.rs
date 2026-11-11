@@ -1084,7 +1084,18 @@ pub fn plot(app: &mut CasApp, ui: &mut Ui) {
         // so one unit is the same number of pixels along both axes.
         paint_axes(&painter, rect, &view);
         for (index, curve) in app.curves.iter().enumerate() {
-            paint_curve(&painter, rect, curve, &view, curve_color(index));
+            let paint = app
+                .curve_paints
+                .get(index)
+                .copied()
+                .unwrap_or(CurvePaint::Wheel);
+            let color = match paint {
+                CurvePaint::Wheel => curve_color(index),
+                CurvePaint::Family { equation, centre } => {
+                    family_curve_color(equation, centre)
+                }
+            };
+            paint_curve(&painter, rect, curve, &view, color);
         }
         paint_intersections(&painter, &response, app, &view, rect);
     }
@@ -1158,7 +1169,7 @@ fn paint_intersections(
     let to_px = |x: f64, y: f64| view.to_px(rect, x, y);
     for intersection in &app.intersections {
         let point = to_px(intersection.x, intersection.y);
-        painter.circle_filled(point, 4.5, crate::theme::accent());
+        painter.circle_filled(point, 4.5, marker_color());
         painter.circle_stroke(point, 4.5, Stroke::new(1.5, crate::theme::current().panel));
     }
 
@@ -1215,6 +1226,13 @@ fn parameter_row(app: &mut CasApp, ui: &mut Ui) {
                     .size(12.0)
                     .strong(),
             );
+            // A free parameter is a family, not a number: the toggle is the
+            // control that says which of the two the parameter is. The drag
+            // stays, because the centre member of the family is the value the
+            // drag shows.
+            changed |= ui
+                .add(egui::Checkbox::new(&mut parameter.free, "free"))
+                .changed();
             changed |= ui
                 .add(
                     egui::DragValue::new(&mut parameter.value)
@@ -1232,6 +1250,38 @@ fn parameter_row(app: &mut CasApp, ui: &mut Ui) {
 /// A distinct colour per curve, from the palette's wheel.
 fn curve_color(index: usize) -> Color32 {
     crate::theme::curve_color(index)
+}
+
+/// How a curve is painted when it is not simply the next wheel colour.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum CurvePaint {
+    /// The next colour in the wheel: a normal curve, or a definition curve.
+    Wheel,
+    /// A member of a free parameter's family. `equation` is the equation's
+    /// index in the system, so its colour is the same as the single curve's
+    /// would have been; `centre` is the member at the parameter's current value.
+    Family { equation: usize, centre: bool },
+}
+
+/// The colour of a family member: the equation's colour, full strength at the
+/// centre and translucent for the members either side.
+///
+/// The curves are the *explanation* of the family, so the side members are
+/// faint enough that overlaps read as overlaps; the centre is the picture the
+/// user was already looking at, so it stays full strength.
+fn family_curve_color(equation: usize, centre: bool) -> Color32 {
+    let base = curve_color(equation);
+    if centre {
+        base
+    } else {
+        base.gamma_multiply(0.5)
+    }
+}
+
+/// The colour of an intersection marker: full strength, because the answer has
+/// to stand out against the faint curves of a family.
+fn marker_color() -> Color32 {
+    crate::theme::accent()
 }
 
 /// Draw the grid, the axes and the window label into `rect`.
@@ -1387,6 +1437,7 @@ pub fn build_curve(app: &mut CasApp) {
 /// changing the range by hand, or panning, must not, or the two would fight.
 pub fn build_curve_fitting(app: &mut CasApp, fit: bool) {
     app.curves.clear();
+    app.curve_paints.clear();
     app.intersections.clear();
     if !app.x_max.is_finite() || !app.x_min.is_finite() || app.x_max <= app.x_min {
         app.plot_note = String::from("x range is empty");
@@ -1432,6 +1483,7 @@ pub fn build_curve_fitting(app: &mut CasApp, fit: bool) {
             n => format!("{n} segments"),
         });
         app.curves.push(curve);
+        app.curve_paints.push(CurvePaint::Wheel);
     }
     noted.extend(plot_definitions(app, fit));
     if app.curves.is_empty() && app.intersections.is_empty() {
@@ -1513,6 +1565,7 @@ fn plot_definitions(app: &mut CasApp, fit: bool) -> Vec<String> {
     for (label, curve) in curves {
         labels.push(label);
         app.curves.push(curve);
+        app.curve_paints.push(CurvePaint::Wheel);
     }
     if labels.is_empty() {
         Vec::new()
@@ -1640,6 +1693,36 @@ fn same_point(a: &Intersection, b: &Intersection) -> bool {
     close(a.x, b.x) && close(a.y, b.y)
 }
 
+/// How many members a free parameter's family draws.
+const FAMILY_MEMBERS: usize = 5;
+
+/// The member drawn at the parameter's current value: the centre of the five.
+const FAMILY_CENTRE: usize = FAMILY_MEMBERS / 2;
+
+/// The five levels a free parameter's family is drawn at.
+///
+/// The centre is the parameter's current value, so the picture the user was
+/// already looking at stays in the middle. The other four are evenly spaced
+/// between half and three-halves of that value, in the parameter's own units:
+/// the visible range of the curve, not a new scale. A value of zero has no half
+/// to speak of, so the family is a unit step around it instead.
+fn family_levels(value: f64) -> [f64; FAMILY_MEMBERS] {
+    if !value.is_finite() {
+        return [0.0; FAMILY_MEMBERS];
+    }
+    if value.abs() < 1e-12 {
+        return [-0.5, -0.25, 0.0, 0.25, 0.5];
+    }
+    let step = value / 4.0;
+    [
+        value - 2.0 * step,
+        value - step,
+        value,
+        value + step,
+        value + 2.0 * step,
+    ]
+}
+
 /// Trace every equation in the document as an implicit curve.
 ///
 /// The two axes come from the document's variable list, so the letters are
@@ -1747,9 +1830,67 @@ fn plot_equations(
         .collect();
     let mut sampling = variables.clone();
     sampling.extend(parameter_names.iter().copied());
-    let evaluate = |program: &canlab_core::Program, axes: &[f64]| -> f64 {
+
+    // A free parameter is a variable the user asked to see as a family rather
+    // than as one number. Which free parameters actually occur in the equations
+    // decides whether there is a family at all: a free parameter that no
+    // equation mentions would only draw the same picture five times.
+    let free_indices: Vec<usize> = app
+        .parameters
+        .iter()
+        .enumerate()
+        .filter(|(_, parameter)| parameter.free)
+        .map(|(index, _)| index)
+        .collect();
+    let mut used_symbols: Vec<canlab_core::SymbolId> = Vec::new();
+    for expression in &expressions {
+        crate::free_symbols(expression, &mut used_symbols);
+    }
+    let used_free: Vec<usize> = free_indices
+        .iter()
+        .copied()
+        .filter(|index| used_symbols.contains(&app.parameters[*index].name))
+        .collect();
+    let unused_free: Vec<usize> = free_indices
+        .iter()
+        .copied()
+        .filter(|index| !used_free.contains(index))
+        .collect();
+    let has_free = !free_indices.is_empty();
+    let family = !used_free.is_empty();
+
+    // One level per member, shared by every equation in that member: the same
+    // point of the family's parameter, not a separate level per equation. That
+    // is what makes two circles of a system meet at the same level.
+    let levels: Vec<[f64; FAMILY_MEMBERS]> = used_free
+        .iter()
+        .map(|index| family_levels(app.parameters[*index].value))
+        .collect();
+    let members: Vec<Vec<f64>> = if family {
+        (0..FAMILY_MEMBERS)
+            .map(|member| {
+                let mut values = parameter_values.clone();
+                for (position, index) in used_free.iter().enumerate() {
+                    values[*index] = levels[position][member];
+                }
+                values
+            })
+            .collect()
+    } else {
+        vec![parameter_values.clone()]
+    };
+    // The centre member is drawn last: a full-strength curve drawn first is
+    // half covered by the translucent ones either side of it, and no longer
+    // reads as full strength.
+    let member_order: Vec<usize> = if family {
+        vec![0, 1, 3, 4, FAMILY_CENTRE]
+    } else {
+        vec![0]
+    };
+
+    let evaluate = |program: &canlab_core::Program, axes: &[f64], values: &[f64]| -> f64 {
         let mut args = axes.to_vec();
-        args.extend(parameter_values.iter().copied());
+        args.extend(values.iter().copied());
         program.eval(&args)
     };
 
@@ -1763,18 +1904,29 @@ fn plot_equations(
         }
     }
 
-    for program in &programs {
-        let curve = if variables.len() == 2 {
-            sample_implicit(|x, y| evaluate(program, &[x, y]), &options)
-        } else {
-            // One variable: the zero set is a set of vertical lines.
-            sample_implicit(|x, _| evaluate(program, &[x]), &options)
-        };
-        if curve.segments.is_empty() {
-            skipped += 1;
-        } else {
-            plotted += 1;
-            app.curves.push(curve);
+    for member in member_order {
+        for (equation, program) in programs.iter().enumerate() {
+            let values = &members[member];
+            let curve = if variables.len() == 2 {
+                sample_implicit(|x, y| evaluate(program, &[x, y], values), &options)
+            } else {
+                // One variable: the zero set is a set of vertical lines.
+                sample_implicit(|x, _| evaluate(program, &[x], values), &options)
+            };
+            if curve.segments.is_empty() {
+                skipped += 1;
+            } else {
+                plotted += 1;
+                app.curves.push(curve);
+                app.curve_paints.push(if family {
+                    CurvePaint::Family {
+                        equation,
+                        centre: member == FAMILY_CENTRE,
+                    }
+                } else {
+                    CurvePaint::Wheel
+                });
+            }
         }
     }
 
@@ -1788,8 +1940,12 @@ fn plot_equations(
     // dot. The flat equation list has lost the block each line came from, and
     // until the plot carries it, a page with more than one system draws **no**
     // intersections: a refusal is a smaller lie than an invented crossing.
+    //
+    // A free parameter makes the set of crossings infinite, so a family draws
+    // no intersections at all: one point per pair would be a sample of a
+    // continuum, not an answer.
     let one_system = app.field.systems().len() <= 1;
-    if programs.len() >= 2 && variables.len() == 2 && one_system {
+    if !has_free && programs.len() >= 2 && variables.len() == 2 && one_system {
         let tolerance = ((options.x_max - options.x_min) / options.resolution as f64) * 3.0;
         for first in 0..programs.len() {
             for second in (first + 1)..programs.len() {
@@ -1798,22 +1954,22 @@ fn plot_equations(
                     let t = step as f64 / 4.0;
                     let x = options.x_min + (options.x_max - options.x_min) * t;
                     let y = options.y_min + (options.y_max - options.y_min) * t;
-                    let a = evaluate(&programs[first], &[x, y]);
-                    let b = evaluate(&programs[second], &[x, y]);
+                    let a = evaluate(&programs[first], &[x, y], &parameter_values);
+                    let b = evaluate(&programs[second], &[x, y], &parameter_values);
                     peak = peak.max(a * a + b * b);
                 }
                 let epsilon = (peak * 0.004).max(f64::MIN_POSITIVE);
                 let hint = sample_implicit(
                     |x, y| {
-                        let a = evaluate(&programs[first], &[x, y]);
-                        let b = evaluate(&programs[second], &[x, y]);
+                        let a = evaluate(&programs[first], &[x, y], &parameter_values);
+                        let b = evaluate(&programs[second], &[x, y], &parameter_values);
                         a * a + b * b - epsilon
                     },
                     &options,
                 );
                 let found = canlab_plot::locate(
-                    |x, y| evaluate(&programs[first], &[x, y]),
-                    |x, y| evaluate(&programs[second], &[x, y]),
+                    |x, y| evaluate(&programs[first], &[x, y], &parameter_values),
+                    |x, y| evaluate(&programs[second], &[x, y], &parameter_values),
                     &hint.segments,
                     tolerance,
                 );
@@ -1852,9 +2008,13 @@ fn plot_equations(
         }
     }
 
+    // A free parameter has no number in the caption: the family is the value,
+    // and the centre member is the value the drag shows. The pinned parameters
+    // keep the number they were given.
     let parameters: Vec<String> = app
         .parameters
         .iter()
+        .filter(|parameter| !parameter.free)
         .map(|parameter| {
             format!(
                 "{} = {}",
@@ -1872,6 +2032,28 @@ fn plot_equations(
             (n, 0) => format!("{n} equation curve(s), {axes_label}"),
             (n, s) => format!("{n} equation curve(s), {s} skipped, {axes_label}"),
         });
+    }
+    if !used_free.is_empty() {
+        let names: Vec<String> = used_free
+            .iter()
+            .map(|index| app.parameters[*index].name.as_str().to_string())
+            .collect();
+        let names = names.join(", ");
+        parts.push(format!(
+            "{names} free: {FAMILY_MEMBERS} level curves of {names}"
+        ));
+    }
+    if !unused_free.is_empty() {
+        let names: Vec<String> = unused_free
+            .iter()
+            .map(|index| app.parameters[*index].name.as_str().to_string())
+            .collect();
+        let list = names.join(", ");
+        let verb = if names.len() == 1 { "is" } else { "are" };
+        let pronoun = if names.len() == 1 { "it" } else { "them" };
+        parts.push(format!(
+            "{list} {verb} free but no equation uses {pronoun}"
+        ));
     }
     if intersections > 0 {
         let suffix = if intersections == 1 { "" } else { "s" };
@@ -2391,6 +2573,125 @@ mod tests {
         plot_frame(&mut app, &ctx, plot_rect, Vec::new());
         assert_eq!(app.plot_canvas, Some(plot_rect.size()));
         assert!(!app.curves.is_empty(), "note: {}", app.plot_note);
+    }
+
+    /// The app with a unit circle and a free parameter, as the toggle makes it.
+    fn free_circle_app() -> crate::CasApp {
+        let mut app = crate::CasApp::new();
+        app.field = canlab_input::MathField::from_latex("x^2+y^2=a").expect("a circle");
+        app.recompute();
+        app.parameters[0].free = true;
+        build_curve_fitting(&mut app, false);
+        app
+    }
+
+    #[test]
+    fn a_free_parameter_draws_more_than_one_curve() {
+        let app = free_circle_app();
+        assert!(app.curves.len() > 1, "note: {}", app.plot_note);
+        assert!(app.plot_note.contains("a free"), "note: {}", app.plot_note);
+        assert!(
+            app.plot_note.contains("5 level curves"),
+            "note: {}",
+            app.plot_note
+        );
+    }
+
+    #[test]
+    fn each_curve_of_the_family_sits_on_its_level() {
+        // The five members are five circles, not five copies of one: each
+        // curve's samples must lie on its own x² + y² = level. The level is the
+        // mean of the samples, which is the value the tracer's own interpolation
+        // gives; the spread is the tracer's error, not a second level.
+        let app = free_circle_app();
+        let mut levels: Vec<f64> = Vec::new();
+        for curve in &app.curves {
+            let mut sum = 0.0;
+            let mut count = 0usize;
+            for point in curve.segments.iter().flatten() {
+                sum += point[0] * point[0] + point[1] * point[1];
+                count += 1;
+            }
+            assert!(count > 0, "an empty curve");
+            // The level is the mean of the samples, so a 1e-6 check on the
+            // *level* is the precision the tracer's interpolation can give; the
+            // samples themselves are only as close as the tracer's grid.
+            let level = sum / count as f64;
+            for point in curve.segments.iter().flatten() {
+                let residual = (point[0] * point[0] + point[1] * point[1] - level).abs();
+                assert!(
+                    residual < 1.0e-4,
+                    "point {point:?} is {residual} away from {level}"
+                );
+            }
+            levels.push(level);
+        }
+        assert!(levels.len() > 1, "only one curve: {levels:?}");
+        // The five levels are the five levels the family is meant to draw: the
+        // centre is the parameter's value, and the others are half and three
+        // halves of it. The level is the mean of the samples, so a 1e-6 check
+        // on the *level* is the precision the tracer's interpolation can give.
+        let mut expected = [0.5, 0.75, 1.0, 1.25, 1.5];
+        expected.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        levels.sort_by(|a, b| a.total_cmp(b));
+        for (drawn, wanted) in levels.iter().zip(expected) {
+            assert!(
+                (drawn - wanted).abs() < 1.0e-4,
+                "the family drew {drawn} where the level {wanted} was asked for"
+            );
+        }
+    }
+
+    #[test]
+    fn a_free_parameter_in_a_system_draws_no_intersections() {
+        // The user's page: `x² + y² = a` and `x² + (y − 1)² = (a + b)²`, with
+        // `a` free and `b` pinned. The family is a pair of circles at each
+        // level; the crossings are not a finite set, so no marker is drawn.
+        let mut app = crate::CasApp::new();
+        app.field = canlab_input::MathField::from_latex_lines(&[
+            String::from("x^2+y^2=a"),
+            String::from("x^2+(y-1)^2=(a+b)^2"),
+            String::from("b=0.01"),
+        ])
+        .expect("a page");
+        app.recompute();
+        let a = app
+            .parameters
+            .iter_mut()
+            .find(|parameter| parameter.name.as_str() == "a")
+            .expect("a is a parameter");
+        a.free = true;
+        let b = app
+            .parameters
+            .iter_mut()
+            .find(|parameter| parameter.name.as_str() == "b")
+            .expect("b is a parameter");
+        b.free = false;
+        build_curve_fitting(&mut app, false);
+        assert!(app.intersections.is_empty(), "note: {}", app.plot_note);
+        assert!(
+            app.curves.len() > 2,
+            "the family is more than one curve per equation: {}",
+            app.plot_note
+        );
+        assert!(
+            app.plot_note.contains("a free"),
+            "note: {}",
+            app.plot_note
+        );
+    }
+
+    #[test]
+    fn a_family_marker_is_full_strength_while_its_curves_are_not() {
+        // The user's correction: the curves are translucent so overlaps read as
+        // overlaps; the marker is the answer, so it stays at full strength.
+        let marker = marker_color();
+        assert_eq!(marker.a(), 255, "the marker is the answer");
+        let centre = family_curve_color(0, true);
+        assert_eq!(centre.a(), 255, "the centre member is full strength");
+        let side = family_curve_color(0, false);
+        assert!(side.a() < 255, "a side member is translucent");
+        assert!(side.a() >= 128, "the side member is still readable");
     }
 
     #[test]
