@@ -95,6 +95,39 @@ fn a_circle_draws_its_curve() {
 }
 
 #[test]
+fn a_page_that_states_its_parameters_answers_on_screen() {
+    let _frame = frame_lock();
+    // The document from the report: a circle whose radius the page states through
+    // an intermediate line. The image is the assertion — the answer, the stated
+    // values and the curve all have to be readable at once.
+    let mut app = CasApp::new();
+    app.field = MathField::from_latex_lines(&[
+        String::from("x^2+y^2=a"),
+        String::from("a=2b"),
+        String::from("b=3"),
+    ])
+    .expect("a three-line document");
+    app.recompute();
+    app.start_solve();
+    let poll = egui::Context::default();
+    for _ in 0..400 {
+        app.poll_jobs(&poll);
+        if !matches!(app.solve, SolveState::Idle) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(
+        matches!(app.solve, SolveState::Solved { .. }),
+        "the page must answer: {}",
+        app.status
+    );
+    let mut harness = harness_for(&mut app);
+    draw_frames(&mut harness, 6);
+    harness.snapshot("page_states_parameters");
+}
+
+#[test]
 fn a_surface_says_so_instead_of_drawing_a_slice() {
     let _frame = frame_lock();
     // The bug this guards: `x² + y² = z` used to draw the circle at `z = 1`.
