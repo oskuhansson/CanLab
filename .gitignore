@@ -9,3 +9,6 @@ plot.svg
 **/tests/snapshots/**/*.new.png
 **/tests/snapshots/**/*.diff.png
 **/tests/snapshots/**/*.old.png
+
+# A commit message file lives here while a commit is being written.
+commit-msg.txt
