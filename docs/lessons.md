@@ -317,6 +317,38 @@ delimiter that changes meaning is a construct, not a decoration.** Every node ki
 the field can produce needs a value rule or a refusal — falling through to the
 generic case is how `|x|` becomes `x`.
 
+## The same frame, drawn on a machine with no symbol font
+
+**What happened.** The headless frame tests were run on the build server (Linux,
+RTX 3080) to see whether the snapshots were adapter-portable. They rendered and
+all five passed, but the image was full of tofu: every `²`, `×`, `π`, `α`, `Σ`,
+`√`, `∞`, `≤`, `∫` and every window-button icon was an empty box. On this machine
+the same frame is correct.
+
+**Why the code did it.** `theme::install` registers a *fallback list* of system
+fonts for symbol glyphs. That list is resolved by name at startup, and the names
+it asks for exist on Windows and not on that server. egui does not fail when a
+fallback is missing: it draws the missing glyph as an empty box, so the app looks
+broken in exactly the places that carry mathematical meaning.
+
+**Why no test caught it.** The snapshot comparisons run on the machine the
+references were made on, so a missing font on a *different* machine is invisible.
+And the frame test passes: it asserts that a frame was produced, not that the
+glyphs in it are the glyphs intended. The earlier missing-glyph incident (the
+`▾` in a combo box) was caught only because it panicked rather than falling back
+to tofu.
+
+**What changed.** The snapshot job is documented as **Windows-only** in
+`docs/remote.md`: the server renders for verification of the *pipeline*, not for
+regenerating references. Two options if these frames are ever needed on Linux:
+bundle a symbol font with the app and register it, or assert in the frame test
+that no rendered glyph is U+FFFD/tofu. The second is the honest test and is not
+written yet.
+
+**The rule.** A picture that renders is not a picture that says what you meant.
+An empty box is the visual equivalent of a silent default: present, plausible, and
+wrong.
+
 ## How the errors were thought into existence
 
 The entries above read as separate bugs. They are not separate in the way they
