@@ -15,3 +15,4 @@ canlab-parse = { path = "../canlab-parse" }
 canlab-tex = { path = "../canlab-tex" }
 canlab-plot = { path = "../canlab-plot" }
 canlab-solver = { path = "../canlab-solver" }
+canlab-corpus = { path = "../canlab-corpus" }

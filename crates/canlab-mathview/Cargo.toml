@@ -7,4 +7,5 @@ description = "Display-list layout engine and egui renderer for the structural m
 
 [dependencies]
 canlab-input = { path = "../canlab-input" }
-egui = "0.37.0"
+# Pinned by `bevy_egui` 0.43, which is the egui that lives inside Bevy 0.20.
+egui = "0.36.0"

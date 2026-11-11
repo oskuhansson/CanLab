@@ -1,0 +1,9 @@
+# A different linear system: the answer is still matched by variable name, so
+# the order the elimination produces does not matter.
+id = "2024-kevat-N-2-1"
+subject = "math"
+capability = "solve.linear-system"
+source = "https://svenska-content.ylestatic.fi/abimix/2024/var/N_sv/ — 2024, uppgift 2.1"
+document = '2x + y = 7 || x - y = 2'
+expect.exact = 'x = 3; y = 1'
+note = "Elimination over the exact rationals: x = 3, y = 1. No figure and no prose are copied."

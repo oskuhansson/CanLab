@@ -8,7 +8,7 @@ use canlab_mathview::{DisplayList, MathView, Style};
 use canlab_plot::implicit::{ImplicitOptions, sample_implicit};
 use canlab_plot::{Curve, Intersection, SampleOptions, sample};
 use canlab_tex::to_latex;
-use eframe::egui::{
+use egui::{
     self, Align, Align2, Button, Color32, FontId, Label, Layout, Rect, RichText,
     Sense, Stroke, Ui, UiBuilder, pos2, vec2,
 };

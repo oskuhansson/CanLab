@@ -17,18 +17,23 @@ canlab-parse = { path = "../canlab-parse" }
 canlab-tex = { path = "../canlab-tex" }
 canlab-plot = { path = "../canlab-plot" }
 canlab-solver = { path = "../canlab-solver" }
-# The default (wgpu) backend is the one that ships. `--features glow` switches to
-# the GL renderer, whose framebuffer *can* be read back — which is how the
-# screenshot hook in `shot.rs` works on a machine where `PrintWindow` sees a
-# blank surface over a remote session.
-eframe = "0.37.0"
+# Bevy owns the window, the event loop and (from M5) the 3D view; egui is the
+# interface inside it. `eframe` is gone on purpose: it cannot host a Bevy render
+# graph, and two window/event loops in one process is a fight, not a design.
+bevy = "0.20.1"
+bevy_egui = "0.43.1"
+egui = "0.36.0"
 
 [features]
 default = []
-glow = ["eframe/glow"]
+# Note for later: `bevy/dynamic_linking` is Bevy's most effective compile-time
+# change, and it does not work here yet — Windows fails to link `bevy_dylib`
+# with LNK1189 ("too many exported symbols") unless the performance profiles are
+# also set, and every test binary then needs the dylib on `PATH`. Revisit with
+# `[profile.dev] opt-level = 1` and `[profile.dev.package."*"] opt-level = 3`.
 
 [dev-dependencies]
 # A headless frame: `egui_kittest` renders into an offscreen texture through
 # `wgpu`, so a snapshot test needs no window and no desktop. That is the whole
 # reason it is here — see `src/snapshot.rs`.
-egui_kittest = { version = "0.37.0", features = ["wgpu", "snapshot"] }
+egui_kittest = { version = "0.36.0", features = ["wgpu", "snapshot"] }

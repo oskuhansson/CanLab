@@ -98,4 +98,26 @@ show it and no test opened it.
 4. The rule: **a UI change is not finished until a frame test renders it.** The
    reviewer can read a diff; only a renderer can see a missing glyph.
 
+## The window arrived with somebody else's title bar
+
+**What happened.** The first launch on Bevy opened a correctly drawn dark app
+under a bright white Windows title bar.
+
+**Why the code did it.** eframe had been setting the viewport up for us; the Bevy
+`Window` was created without `window_theme`, so winit drew the frame in the
+system's light theme regardless of the app's palette. Nothing in the app's own
+rendering could fix it — the frame belongs to the OS.
+
+**Why no test caught it.** Every test renders the *client area*. A title bar is
+outside the texture, so no snapshot can contain it, and no assertion about app
+state can either. This is the boundary of what the headless harness proves: it
+covers what egui paints and nothing that winit draws.
+
+**What changed.** `window_theme: Some(WindowTheme::Dark)` on the primary window,
+next to the size and title. And a note in the plan's W0.0 that the two failures
+of the port were both *silent*: a missing camera meant `bevy_egui` had no context
+and every frame drew nothing, and a missing window theme meant the frame was
+light. Neither is a compile error.
+
+
 

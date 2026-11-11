@@ -1,0 +1,11 @@
+# The format's own refusal example: a zero denominator is not a value. The
+# expected text is `1/0`, the construct the field names in its refusal, not
+# `division by zero`, which is what the separate LaTeX parser says; §6 and the
+# field disagree on the wording and this row keeps the construct.
+id = "input-division-by-zero"
+subject = "math"
+capability = "input.malformed"
+source = "docs/corpus.md §6 — a contract row, not a problem"
+document = '\frac{1}{0}'
+expect.refused = '1/0'
+note = "Refused while the document is read: the field will not turn a zero denominator into a NaN constant."

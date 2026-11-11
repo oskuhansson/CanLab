@@ -1,0 +1,10 @@
+# A correct row that does not pass yet: parsing `\int_a^b` is W3.1, so the
+# document is refused today. That refusal is the coverage gap this row measures,
+# not a mistake in the expectation.
+id = "2025-kevat-M-1-5"
+subject = "math"
+capability = "calc.definite-integral"
+source = "https://svenska-content.ylestatic.fi/abimix/2025/var/M_sv/ — 2025, uppgift 1.5"
+document = '\int_1^4 3x^2 dx'
+expect.exact = "63"
+note = "The integral is 63 = 4³ − 1³. Needs W3.1; until then the field refuses the document and the row fails, which is what the corpus is for."

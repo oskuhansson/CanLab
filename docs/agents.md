@@ -29,7 +29,7 @@ of a session, spawn one agent per owner from the briefs below and then reuse it.
   test that writes to `std::env::temp_dir()` fails with "Access is denied" for a
   reason that has nothing to do with the code. See
   [lessons.md](lessons.md).
-- `cargo clean -p windows -p pxfm -p icu_normalizer -p eframe` if a build runs out of memory.
+- `cargo clean -p windows -p pxfm -p icu_normalizer` if a build runs out of memory.
 - Kill `canlab-gui.exe` before rebuilding it; Windows holds the executable.
 - Tests are the deliverable, not an extra: a behaviour change without one is not
   finished.

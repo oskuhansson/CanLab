@@ -1,0 +1,9 @@
+# A definition is resolved before the equation is read, so the row exercises the
+# document-wide definition table and not just the quadratic solver.
+id = "2024-kevat-N-1-1"
+subject = "math"
+capability = "solve.quadratic"
+source = "https://svenska-content.ylestatic.fi/abimix/2024/var/N_sv/ — 2024, uppgift 1.1"
+document = 'f(x) = x^2 | f(x) - 3x + 2 = 0'
+expect.exact = '\left\{1, 2\right\}'
+note = "The second line is the question; `f(x)` is substituted from the definition before solving. The roots are 1 and 2."

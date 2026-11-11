@@ -98,7 +98,6 @@ These choose a backend, a layout or a file without changing the code:
 | `CANLAB_OPEN` | document to open, lines separated by a vertical bar |
 | `CANLAB_WORKSPACE` | preset layout: `editing`, `solving` or `plotting` |
 | `CANLAB_PYTHON`, `CANLAB_WORKER` | interpreter and `worker.py` location; an existing interpreter path may contain spaces; see [docs/sympy.md](docs/sympy.md) |
-| `CANLAB_SHOT` | write one frame to a BMP; needs a `--features glow` build |
 
 ---
 
@@ -165,20 +164,19 @@ python crates/canlab-mathview/tools/render_layout.py layout.json layout.png
 same items to a PNG, including every caret position and the faint half of a ghost
 bracket.
 
-### Capturing the window
+### Capturing a frame, without a window
 
-The window itself can be captured through the renderer:
+The interface renders itself in a test, through `wgpu`, into an offscreen
+texture. Nothing is presented, so nothing appears on the desktop:
 
 ```bash
-CANLAB_SHOT=shot.bmp CANLAB_OPEN="x^2+y^2=1" CANLAB_WORKSPACE=plotting \
-  cargo run -p canlab-gui --features glow
+cargo test -p canlab-gui --offline -j 1 snapshot
 ```
 
-`CANLAB_SHOT` asks egui for the frame after it has settled and writes an
-uncompressed 24-bit BMP. The `glow` feature switches to the GL renderer because
-the default wgpu backend cannot read its framebuffer; it exists for this hook.
-`CANLAB_OPEN` and `CANLAB_WORKSPACE` make the shot reproducible without typing
-into the window.
+The images live in `crates/canlab-gui/tests/snapshots/` and are compared on every
+run; `UPDATE_SNAPSHOTS=1` regenerates them. Three frames are kept: the default
+document, a circle, and the refusal a surface gets. `CANLAB_OPEN` and
+`CANLAB_WORKSPACE` are not needed — a snapshot builds its own document.
 
 The end-to-end milestone the whole thing is aimed at:
 

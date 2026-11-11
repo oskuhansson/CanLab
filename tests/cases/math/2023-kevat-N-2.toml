@@ -1,0 +1,9 @@
+# A system is solved as one system: solving either line alone would drop the
+# other unknown.
+id = "2023-kevat-N-2"
+subject = "math"
+capability = "solve.linear-system"
+source = "https://svenska-content.ylestatic.fi/abimix/2023/var/N_sv/index.html — 2023, uppgift 2"
+document = 'x + y = 8 || 2x - y = 1'
+expect.exact = 'x = 3; y = 5'
+note = "Both equations are linear and the substitution/elimination path answers them; the answer is matched by variable name."

@@ -35,3 +35,15 @@ $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
 if ($env:PATH -notlike "*$cargoBin*") {
     $env:PATH = "$cargoBin;$env:PATH"
 }
+
+# `rust-lld` is not on `PATH`, and `.cargo/config.toml` points the linker at it.
+# Same directory the toolchain keeps it in, for the same reason: linking is where
+# a Bevy build spends its time.
+$lld = Get-ChildItem (Join-Path $env:USERPROFILE '.rustup\toolchains') -Recurse `
+    -Filter 'rust-lld.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($lld) {
+    $lldDir = $lld.DirectoryName
+    if ($env:PATH -notlike "*$lldDir*") {
+        $env:PATH = "$lldDir;$env:PATH"
+    }
+}

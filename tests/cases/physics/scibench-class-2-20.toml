@@ -1,0 +1,12 @@
+# Free fall: s = ½gt², with g = 9.81 m/s² and t = 1.2 s. Two significant
+# figures; the unit is recorded, not checked, until W15.
+id = "scibench-class-2-20"
+subject = "physics"
+capability = "units.sigfigs"
+source = "hf:xw27/scibench class#Problem 2.20"
+document = '\frac{1}{2} \cdot 9.81 \cdot 1.2^2'
+expect.numeric = 7.1
+expect.tolerance = 0.05
+expect.unit = "m"
+expect.digits = 2
+note = "The expression is the model, not the statement: s = ½gt². The value is 7.0632 m, which is 7.1 m to two significant figures."

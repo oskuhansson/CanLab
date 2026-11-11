@@ -1,0 +1,12 @@
+# A magnitude with a unit and two significant figures. The unit is recorded but
+# not checked until W15, so the row is reported `pass (unit unchecked)`.
+id = "scibench-class-2-26"
+subject = "physics"
+capability = "units.sigfigs"
+source = "hf:xw27/scibench class#Problem 2.26"
+document = '\sqrt{\frac{2 \cdot 4^2}{6}}'
+note = "The spring model: ½mv² = ½kx² with m = 2 kg, v = 4 m/s, k = 6 N/m, so x = sqrt(mv²/k). Prose not copied."
+expect.numeric = 2.3
+expect.tolerance = 0.05
+expect.unit = "m"
+expect.digits = 2

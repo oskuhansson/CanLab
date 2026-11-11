@@ -154,7 +154,9 @@ pub struct JobResult {
 /// The app-side handle to the worker thread.
 pub struct Jobs {
     tx: Option<Sender<Job>>,
-    rx: Receiver<JobResult>,
+    /// Behind a lock only because `Receiver` is not `Sync`, and Bevy's resources
+    /// must be. Nothing contends for it: one thread polls, and only the UI does.
+    rx: Mutex<Receiver<JobResult>>,
     in_flight: usize,
     running: Option<String>,
     /// Filled in by the worker thread once it has chosen a backend.
@@ -219,7 +221,7 @@ impl Jobs {
         let tx = if spawned.is_ok() { Some(tx) } else { None };
         Self {
             tx,
-            rx,
+            rx: Mutex::new(rx),
             in_flight: 0,
             running: None,
             status,
@@ -260,8 +262,9 @@ impl Jobs {
     /// Collect every finished job without blocking.
     pub fn poll(&mut self) -> Vec<JobResult> {
         let mut results = Vec::new();
+        let rx = self.rx.lock().expect("job receiver lock");
         loop {
-            match self.rx.try_recv() {
+            match rx.try_recv() {
                 Ok(result) => {
                     self.in_flight = self.in_flight.saturating_sub(1);
                     results.push(result);

@@ -1,0 +1,9 @@
+# A half-typed fraction: the field says the slot is empty instead of reading it
+# as zero, and the refusal is the expected answer.
+id = "input-empty-slot"
+subject = "math"
+capability = "input.malformed"
+source = "docs/corpus.md §1 — the empty-slot rule"
+document = '\frac{1}{}'
+expect.refused = 'the field has an empty slot'
+note = "A student halfway through a fraction; the row checks that the field refuses with its reason rather than inventing a value."

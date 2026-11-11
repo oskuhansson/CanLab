@@ -1,0 +1,9 @@
+# The format's first example: a quadratic whose two roots are compared as a set,
+# not in the backend's order.
+id = "2023-kevat-N-1-4"
+subject = "math"
+capability = "solve.quadratic"
+source = "https://svenska-content.ylestatic.fi/abimix/2023/var/N_sv/index.html — 2023, uppgift 1.4"
+document = 'x^2 = 8x'
+expect.exact = '\left\{0, 8\right\}'
+note = "The exam task asks for the larger root; the row keeps both, because the CAS answers the equation and the comparison is a set."

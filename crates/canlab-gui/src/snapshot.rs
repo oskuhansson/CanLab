@@ -28,16 +28,18 @@ use super::*;
 /// fonts, which is a different picture from the one a reader sees — and it was
 /// the theme's font fallback that the first missing-glyph panic was asking for.
 fn harness_for(app: &mut CasApp) -> egui_kittest::Harness<'_> {
-    egui_kittest::Harness::builder()
+    let mut harness = egui_kittest::Harness::builder()
         .with_size(egui::vec2(1180.0, 760.0))
-        .with_context_setup(|ctx| {
-            crate::theme::install(ctx);
-            // No easing. An animation asks for another frame until it finishes,
-            // and a headless pass has no clock to finish it on: without this the
-            // harness runs to its step limit chasing a fading highlight.
-            ctx.all_styles_mut(|style| style.animation_time = 0.0);
-        })
-        .build_ui(|ui| app.draw(ui))
+        .build_ui(|ui| app.draw(ui));
+    // 0.36 has no `with_context_setup`, but the context is a public field. The
+    // construction pass has already run by the time this is reachable, and in
+    // 0.36 a missing glyph is drawn as tofu rather than panicking, so nothing is
+    // lost: the frames that are snapshotted run after the theme is installed.
+    crate::theme::install(&harness.ctx);
+    // No easing. An animation asks for another frame until it finishes, and a
+    // headless pass has no wall clock to finish it on.
+    harness.ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    harness
 }
 
 /// A fixed number of frames, then stop.

@@ -21,7 +21,7 @@
 //! the accent; the plot is the one place with six colours, and that is because a
 //! system of equations needs to be told apart.
 
-use eframe::egui::{self, Color32, CornerRadius, FontId, Margin, Stroke, TextStyle, Visuals, vec2};
+use egui::{self, Color32, CornerRadius, FontId, Margin, Stroke, TextStyle, Visuals, vec2};
 
 /// Add a system font that covers the symbols the palette draws.
 ///

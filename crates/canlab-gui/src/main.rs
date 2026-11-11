@@ -17,7 +17,6 @@ mod jobs;
 mod layout;
 mod panels;
 mod persist;
-mod shot;
 #[cfg(test)]
 mod snapshot;
 mod theme;
@@ -25,41 +24,82 @@ mod undo;
 
 use std::time::Instant;
 
+use bevy::prelude::*;
+use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use canlab_core::{Expr, ExprNode, Hold, SymbolId, expr::node};
 use canlab_input::{Definitions, MathField, Node, ToExprError};
 use canlab_plot::{Curve, Intersection};
 use canlab_tex::to_latex;
-use eframe::egui;
+use egui;
 
 use jobs::{Job, JobKind, JobOp, JobOutcome, JobResult, Jobs};
 use layout::{Dock, PanelKind, Workspace};
 
+/// The application, as a Bevy resource.
+///
+/// `CasApp` is unchanged: it still draws one frame given a `Ui`, which is what
+/// lets the same code run under Bevy and under the headless snapshot harness.
+#[derive(Resource)]
+struct OpenApp {
+    app: CasApp,
+    /// `theme::install` needs an egui context, and the context does not exist
+    /// until `bevy_egui` has made one for the camera, so it happens on the first
+    /// frame rather than in `main`.
+    theme_installed: bool,
+}
 
-fn main() -> eframe::Result<()> {
-    // The GL renderer is only for screenshots; see the feature in Cargo.toml.
-    // `cfg!` would compile both arms, and `Renderer::Glow` does not exist in a
-    // wgpu-only build.
-    #[cfg(feature = "glow")]
-    let renderer = eframe::Renderer::Glow;
-    #[cfg(not(feature = "glow"))]
-    let renderer = eframe::Renderer::default();
+/// The camera `bevy_egui` hangs its primary context on.
+///
+/// Without one there is no context, and every frame silently draws nothing —
+/// which is exactly how the boot probe spent twelve seconds looking idle.
+fn setup_camera(mut commands: Commands) {
+    commands.spawn(Camera2d);
+}
 
-    let options = eframe::NativeOptions {
-        renderer,
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1180.0, 760.0])
-            .with_min_inner_size([900.0, 600.0])
-            .with_title("CanLab — LaTeX algebra"),
-        ..Default::default()
+/// One frame of the interface, inside Bevy's egui pass.
+fn draw_frame(mut contexts: EguiContexts, mut open: ResMut<OpenApp>) {
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
     };
-    eframe::run_native(
-        "canlab",
-        options,
-        Box::new(|cc| {
-            theme::install(&cc.egui_ctx);
-            Ok(Box::new(CasApp::new()) as Box<dyn eframe::App>)
-        }),
-    )
+    if !open.theme_installed {
+        open.theme_installed = true;
+        theme::install(ctx);
+    }
+    // `CasApp::draw` wants a `Ui`, and a panel is what turns a context into one.
+    // An `Area` pinned to the corner and sized to the window is the closest thing
+    // to the full-screen `Ui` that eframe used to hand over.
+    let screen = ctx.content_rect();
+    egui::Area::new(egui::Id::new("canlab-root"))
+        .fixed_pos(screen.min)
+        .order(egui::Order::Background)
+        .show(ctx, |ui| {
+            ui.set_min_size(screen.size());
+            open.app.draw(ui);
+        });
+}
+
+fn main() {
+    App::new()
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: String::from("CanLab — LaTeX algebra"),
+                resolution: (1180u32, 760u32).into(),
+                // Without this the Windows title bar is light above a dark app:
+                // winit only switches the frame to dark when the window asks for
+                // a dark theme.
+                window_theme: Some(bevy::window::WindowTheme::Dark),
+                ..default()
+            }),
+            ..default()
+        }))
+        .add_plugins(EguiPlugin::default())
+        .insert_resource(OpenApp {
+            app: CasApp::new(),
+            theme_installed: false,
+        })
+        .add_systems(Startup, setup_camera)
+        .add_systems(EguiPrimaryContextPass, draw_frame)
+        .run();
 }
 
 /// The latest Solve outcome, kept separate from the editor's displayed LaTeX
@@ -171,8 +211,6 @@ struct CasApp {
     /// The theme has been restored from a session but not applied yet, because
     /// applying it needs an egui context and `new` has none.
     theme_pending: bool,
-    /// A pending screenshot, when `CANLAB_SHOT` asks for one.
-    shot: shot::Shot,
 }
 
 impl CasApp {
@@ -211,7 +249,6 @@ impl CasApp {
             // document the developer last had open — and would overwrite it.
             sessions: !cfg!(test),
             theme_pending: false,
-            shot: shot::Shot::from_env(),
         };
         app.restore_session();
         // `CANLAB_PALETTE=Nord` picks a scheme for this run, which is what a
@@ -1144,23 +1181,16 @@ impl CasApp {
     }
 }
 
-impl eframe::App for CasApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.draw(ui);
-    }
-}
-
 impl CasApp {
     /// One frame of the whole interface.
     ///
-    /// Split out of [`eframe::App::ui`] so a test can drive it: constructing a
-    /// real `eframe::Frame` is not possible outside eframe, but a `Ui` is.
+    /// The only entry point on purpose: Bevy calls it from an egui pass, and a
+    /// test calls it with a `Ui` it built itself, so there is no second path
+    /// through the drawing code to drift from the first.
     fn draw(&mut self, ui: &mut egui::Ui) {
         // Paint a few frames unconditionally before settling into egui's
         // on-demand mode: a window that has never been presented stays blank
-        // until some event makes egui repaint. The window size, meanwhile, is
-        // decided at creation (`with_inner_size`) and left alone — creating it
-        // maximised, or resizing it afterwards, leaves a stale framebuffer.
+        // until some event makes egui repaint.
         if self.paints < 4 {
             self.paints += 1;
             ui.ctx().request_repaint();
@@ -1188,9 +1218,6 @@ impl CasApp {
             self.dock.restore(layout);
         });
 
-        if self.shot.pending() {
-            self.shot.request(ui.ctx(), self.paints);
-        }
         self.autosave(ui);
 
         if self.jobs.in_flight() > 0 {

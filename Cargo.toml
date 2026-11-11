@@ -9,3 +9,9 @@ license = "MIT OR Apache-2.0"
 
 [profile.release]
 opt-level = 3
+
+# Debug info is most of what the linker copies: a Bevy debug binary is ~1 GB of
+# object code, and the link dominated every build and every test binary. Line
+# tables keep backtraces readable and cost a fraction of the space.
+[profile.dev]
+debug = "line-tables-only"

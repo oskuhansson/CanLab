@@ -10,7 +10,7 @@
 //! being drawn and applied afterwards. Mutating the tree in the middle of the
 //! recursion would invalidate the paths of every sibling.
 
-use eframe::egui::{
+use egui::{
     self, Align, CornerRadius, CursorIcon, Layout as UiLayout, Rect, RichText, Sense, Stroke,
     StrokeKind, Ui, UiBuilder, pos2, vec2,
 };

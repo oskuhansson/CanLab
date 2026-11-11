@@ -11,14 +11,18 @@
 //! The REPL is deliberately thin so the same code paths are exercised in both.
 
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use canlab_core::{Expr, ExprNode, Hold, Program, SymbolId, expr::node};
+use canlab_corpus::run::{Provenance, RowResult, RunReport, run_batched};
+use canlab_corpus::{LoadError, Outcome, Row, batch, fetch, load_rows, report};
 use canlab_parse::parse_latex;
 use canlab_plot::{SampleOptions, SvgOptions, sample, to_svg};
 use canlab_solver::{NativeSolver, Solver};
 use canlab_tex::to_latex;
+
+mod bench;
 
 const USAGE: &str = "\
 canlab — a small LaTeX-native computer algebra system
@@ -31,12 +35,23 @@ USAGE:
     canlab int    <latex> [opts]    integrate (uses SymPy when it is installed)
     canlab solve-all <latex> [opts] solve <latex> = 0 and print the solution set
     canlab solver [--probe]         report the SymPy backend, or test it
+    canlab bench  [--write]         measure the evaluator, the sampler and the tracer
+    canlab corpus run [opts]        run the exam corpus and write the coverage report
+    canlab corpus fetch [name]      download the cited datasets (olympiadbench, ugphysics, scibench)
 
 OPTIONS:
     -o, --out <file>             output file for plot (default: plot.svg)
         --xmin <f> --xmax <f>    plot domain (default: -10 10)
     -v, --var <name>             variable for integration or solve-all (default: guess)
         --probe                  really start the worker and make it answer
+        --write                  (bench) write docs/bench.md instead of stdout
+        --tag <tag>              (corpus run) only capabilities equal to `tag` or starting `tag.`
+        --batch <n>              (corpus run) rows per child process (default: 50)
+        --update                 (corpus run) re-fetch the datasets and check `hf:` rows
+
+CORPUS ENVIRONMENT:
+    CANLAB_CORPUS_HOME=<dir>     cache root (default: %LOCALAPPDATA%\\canlab\\corpus)
+    CANLAB_CORPUS_MIRROR=<dir>   read a local mirror instead of the network
 
 REPL COMMANDS:
     :help  :quit  :tex  :plot  :int  :solve-all  :solver
@@ -57,8 +72,10 @@ fn main() -> ExitCode {
     let result = match args[0].as_str() {
         "help" | "-h" | "--help" => {
             print!("{USAGE}");
-            Ok(())
+            return ExitCode::SUCCESS;
         }
+        "corpus" => return corpus_command(&args[1..]),
+        "bench" => return bench_command(&args[1..]),
         "eval" => eval_command(&args[1..]),
         "tex" => tex_command(&args[1..]),
         "plot" => plot_command(&args[1..]),
@@ -266,15 +283,326 @@ fn solve_all_command(args: &[String]) -> Result<(), String> {
 // The backend
 // ---------------------------------------------------------------------------
 
-/// The strongest backend this machine can run.
+/// The strongest backend this machine can run, and the name the report records.
 ///
-/// SymPy is the real thing but it needs a Python installation; the native backend
-/// needs nothing and covers school algebra. Choosing here rather than at each call
-/// site means the REPL, `int`, `solve-all` and the GUI all make the same choice.
-fn backend() -> Box<dyn Solver> {
+/// SymPy is the real thing but it needs a Python installation; the native
+/// backend needs nothing and covers school algebra. Choosing here rather than at
+/// each call site means the REPL, `int`, `solve-all`, `corpus` and the GUI all
+/// make the same choice.
+fn backend_choice() -> (Box<dyn Solver>, &'static str) {
     match canlab_solver::sympy::open() {
-        Ok(worker) => Box::new(worker),
-        Err(_) => Box::new(NativeSolver),
+        Ok(worker) => (Box::new(worker), "sympy"),
+        Err(_) => (Box::new(NativeSolver), "native"),
+    }
+}
+
+fn backend() -> Box<dyn Solver> {
+    backend_choice().0
+}
+
+// ---------------------------------------------------------------------------
+// canlab bench (W0.3)
+// ---------------------------------------------------------------------------
+
+fn bench_command(args: &[String]) -> ExitCode {
+    let mut write = false;
+    for argument in args {
+        match argument.as_str() {
+            "--write" => write = true,
+            other => {
+                eprintln!("error: unknown bench option `{other}`");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    match bench::run(write) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            eprintln!("error: {message}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// canlab corpus (W0.4)
+// ---------------------------------------------------------------------------
+
+/// Where a run keeps the generated report. Fixed by `docs/corpus.md`.
+const REPORT: &str = "docs/abimix-coverage.md";
+
+fn corpus_command(args: &[String]) -> ExitCode {
+    match args.first().map(String::as_str) {
+        Some("run") => corpus_run(&args[1..]),
+        Some("fetch") => corpus_fetch(&args[1..]),
+        // Internal: the child half of `--batch`. Not in the help text because
+        // nobody types it; the parent starts it.
+        Some("exec") => corpus_exec(&args[1..]),
+        Some(other) => {
+            eprintln!("error: unknown corpus command `{other}`\n\n{USAGE}");
+            ExitCode::from(2)
+        }
+        None => {
+            eprintln!("error: `canlab corpus` needs `run`, `fetch` or `exec`\n\n{USAGE}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn corpus_run(args: &[String]) -> ExitCode {
+    let mut tag: Option<String> = None;
+    let mut batch_size = batch::DEFAULT_BATCH;
+    let mut update = false;
+
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--tag" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    eprintln!("error: --tag needs a capability");
+                    return ExitCode::from(2);
+                };
+                tag = Some(value.clone());
+            }
+            "--batch" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    eprintln!("error: --batch needs a count");
+                    return ExitCode::from(2);
+                };
+                match value.parse::<usize>() {
+                    Ok(count) if count >= 1 => batch_size = count,
+                    _ => {
+                        eprintln!("error: --batch needs a positive whole number, not {value:?}");
+                        return ExitCode::from(2);
+                    }
+                }
+            }
+            "--update" => update = true,
+            other => {
+                eprintln!("error: unknown corpus run option `{other}`");
+                return ExitCode::from(2);
+            }
+        }
+        index += 1;
+    }
+
+    let cases = Path::new("tests/cases");
+    let (mut rows, mut load_errors) = load_rows(cases);
+    for error in &load_errors {
+        eprintln!("load error: {error}");
+    }
+
+    if let Some(tag) = &tag {
+        rows.retain(|row| canlab_corpus::row::matches_tag(&row.capability, tag));
+        if rows.is_empty() {
+            eprintln!("error: no row matched --tag {tag:?}");
+            return ExitCode::from(2);
+        }
+    } else if rows.is_empty() && load_errors.is_empty() {
+        eprintln!("error: no rows under {}", cases.display());
+        return ExitCode::from(2);
+    }
+
+    let (_solver, backend) = backend_choice();
+    let generated = bench::utc_now();
+
+    // `--update` is a provenance check, never a rewrite: an expectation that
+    // disagrees with upstream is a failed row, not a corrected one.
+    let mut provenance = Provenance::Unchecked;
+    let mut drift: Vec<(PathBuf, String)> = Vec::new();
+    if update {
+        let source = corpus_source();
+        match fetch::check(&rows, source.as_ref(), &fetch::default_cache_root(), &generated) {
+            Ok(outcome) => {
+                for (path, detail) in &outcome.missing {
+                    eprintln!("provenance: {}: {detail}", canlab_corpus::row::path_text(&path));
+                }
+                if outcome.missing.is_empty() && outcome.drift.is_empty() {
+                    provenance = Provenance::Checked;
+                } else if outcome.missing.is_empty() {
+                    provenance = Provenance::Checked;
+                    drift = outcome.drift;
+                } else {
+                    provenance = Provenance::Failed(format!(
+                        "{} cited row(s) were not found upstream",
+                        outcome.missing.len()
+                    ));
+                }
+            }
+            Err(reason) => {
+                eprintln!("error: --update could not check the datasets: {reason}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+
+    let command = match batch::ExecCommand::current_exe() {
+        Ok(command) => command.with_backend(backend),
+        Err(reason) => {
+            eprintln!("error: {reason}");
+            return ExitCode::from(2);
+        }
+    };
+    let outcomes = run_batched(&rows, &command, batch_size, batch::DEFAULT_DEADLINE);
+
+    let mut ran: Vec<(Row, Outcome)> = Vec::new();
+    for (row, result) in rows.into_iter().zip(outcomes) {
+        match result {
+            RowResult::Outcome(outcome) => ran.push((row, outcome)),
+            RowResult::LoadError(reason) => load_errors.push(LoadError {
+                path: row.path.clone(),
+                reason,
+            }),
+        }
+    }
+
+    for (path, detail) in drift {
+        if let Some((_, outcome)) = ran.iter_mut().find(|(row, _)| row.path == path)
+            && outcome.is_pass()
+        {
+            *outcome = Outcome::Fail {
+                got: detail,
+                reason: Some(String::from(
+                    "--update: the upstream answer disagrees with `expect`",
+                )),
+            };
+        }
+    }
+
+    for (row, outcome) in &ran {
+        println!("{}", row_line(row, outcome));
+    }
+
+    let report = RunReport {
+        rows: ran,
+        load_errors,
+        backend: backend.to_string(),
+        tag,
+        provenance,
+    };
+    if let Err(message) = report::write(&report, &generated, Path::new(REPORT)) {
+        eprintln!("error: {message}");
+        return ExitCode::FAILURE;
+    }
+    println!(
+        "{} row(s): {} passed, {} failed, {} refusal row(s); report {REPORT}",
+        report.rows.len(),
+        report.passes(),
+        report.failures(),
+        report.refusals()
+    );
+    ExitCode::from(report.exit_code())
+}
+
+/// One line per row: status, file, expected, got.
+fn row_line(row: &Row, outcome: &Outcome) -> String {
+    let status = match outcome {
+        Outcome::Pass {
+            unit_unchecked: true,
+            ..
+        } => "PASS (unit unchecked)",
+        Outcome::Pass { .. } => "PASS",
+        Outcome::Fail { .. } => "FAIL",
+    };
+    let mut line = format!(
+        "{status}  {}  expected {}  got {}",
+        canlab_corpus::row::path_text(&row.path),
+        row.expect.describe(),
+        outcome.got()
+    );
+    if let Outcome::Fail {
+        reason: Some(reason), ..
+    } = outcome
+    {
+        line.push_str(&format!(" ({reason})"));
+    }
+    line
+}
+
+fn corpus_fetch(args: &[String]) -> ExitCode {
+    let datasets = match args {
+        [] => fetch::Dataset::ALL.to_vec(),
+        [name] => match fetch::Dataset::parse(name) {
+            Some(dataset) => vec![dataset],
+            None => {
+                eprintln!(
+                    "error: unknown dataset {name:?}; choose olympiadbench, ugphysics or scibench"
+                );
+                return ExitCode::from(2);
+            }
+        },
+        _ => {
+            eprintln!("error: `canlab corpus fetch` takes one dataset name, or none for all three");
+            return ExitCode::from(2);
+        }
+    };
+
+    let source = corpus_source();
+    let cache = fetch::default_cache_root();
+    let generated = bench::utc_now();
+    match fetch::fetch_with(source.as_ref(), &cache, &datasets, &generated) {
+        Ok(fetched) => {
+            for dataset in fetched {
+                println!(
+                    "fetched {} {}: {} file(s), {} bytes -> {}",
+                    dataset.dataset.name(),
+                    dataset.revision,
+                    dataset.files.len(),
+                    dataset.bytes(),
+                    dataset.directory.display()
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        Err(message) => {
+            eprintln!("error: {message}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// The child half of a batch: read paths, run them, write one JSON line each.
+fn corpus_exec(args: &[String]) -> ExitCode {
+    let pinned = match args {
+        [] => None,
+        [flag, name] if flag.as_str() == "--backend" => Some(name.as_str()),
+        _ => {
+            eprintln!("error: `canlab corpus exec` takes only `--backend native|sympy`");
+            return ExitCode::from(2);
+        }
+    };
+    let solver: Box<dyn Solver> = match pinned {
+        None => backend_choice().0,
+        Some("native") => Box::new(NativeSolver),
+        Some("sympy") => match canlab_solver::sympy::open() {
+            Ok(worker) => Box::new(worker),
+            Err(reason) => {
+                eprintln!("error: the parent asked for SymPy but it is unavailable: {reason}");
+                return ExitCode::from(2);
+            }
+        },
+        Some(other) => {
+            eprintln!("error: unknown backend {other:?}; choose native or sympy");
+            return ExitCode::from(2);
+        }
+    };
+    match batch::exec_loop(&*solver) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            eprintln!("error: {message}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// A local mirror when the environment names one, HTTPS otherwise. The mirror
+/// is what lets the fetch be tested, and what an offline checkout can use.
+fn corpus_source() -> Box<dyn fetch::Source> {
+    match std::env::var_os("CANLAB_CORPUS_MIRROR") {
+        Some(root) => Box::new(fetch::LocalSource::new(PathBuf::from(root))),
+        None => Box::new(fetch::HttpSource::curl()),
     }
 }
 

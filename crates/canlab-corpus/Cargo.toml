@@ -1,0 +1,12 @@
+[package]
+name = "canlab-corpus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Exam problems as machine-readable rows: the corpus format, runner, batch executor and fetch"
+
+[dependencies]
+canlab-core = { path = "../canlab-core" }
+canlab-input = { path = "../canlab-input" }
+canlab-solver = { path = "../canlab-solver" }
+canlab-tex = { path = "../canlab-tex" }
