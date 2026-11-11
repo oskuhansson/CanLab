@@ -70,6 +70,13 @@ pub enum Solutions {
         /// The union, each interval `(lower, upper)`.
         intervals: Vec<(Bound, Bound)>,
     },
+    /// The union of several answer sets.
+    ///
+    /// `sin x = ½` is two progressions, `π/6 + 2kπ` and `5π/6 + 2kπ`, and no
+    /// single [`Solutions::Family`] can say that. The members are kept whole, so
+    /// each one still renders and serialises the way it does alone; a union with
+    /// one member is that member.
+    Union(Vec<Solutions>),
 }
 
 impl Solutions {
@@ -86,6 +93,8 @@ impl Solutions {
             Solutions::Values(values) => values.is_empty(),
             Solutions::Family { .. } => false,
             Solutions::Inequality { intervals, .. } => intervals.is_empty(),
+            // A union is empty exactly when every member is.
+            Solutions::Union(members) => members.iter().all(Solutions::is_empty),
         }
     }
 
@@ -128,6 +137,14 @@ impl Solutions {
                 out.push_str(&period_latex(period, *param));
                 out
             }
+            // `π/6 + 2kπ \cup 5π/6 + 2kπ`. An empty member is not part of the
+            // union, and a union that keeps one member prints as that member.
+            Solutions::Union(members) => members
+                .iter()
+                .filter(|member| !member.is_empty())
+                .map(Solutions::to_latex)
+                .collect::<Vec<String>>()
+                .join(" \\cup "),
             Solutions::Inequality { intervals, .. } => {
                 if intervals.is_empty() {
                     return String::from("\\varnothing");

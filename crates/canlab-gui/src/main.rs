@@ -1737,6 +1737,9 @@ fn solution_lines(solutions: &canlab_solver::Solutions, var: SymbolId) -> Vec<St
             .collect(),
         Solutions::Family { .. } => vec![format!("{name} = {}", solutions.to_latex())],
         Solutions::Inequality { .. } => vec![format!("{name} \\in {}", solutions.to_latex())],
+        // `sin x = ½` is two progressions; each is a line of its own, because
+        // `x = π/6 + 2kπ, x = 5π/6 + 2kπ` is how it is read aloud.
+        Solutions::Union(_) => vec![format!("{name} = {}", solutions.to_latex())],
         Solutions::None => vec![String::from("no solutions")],
         Solutions::All => vec![String::from("every number")],
     }
@@ -1753,6 +1756,7 @@ fn solution_count(solutions: &canlab_solver::Solutions) -> String {
         },
         Solutions::Family { .. } => String::from("a family of solutions"),
         Solutions::Inequality { .. } => String::from("an interval"),
+        Solutions::Union(members) => format!("{} families", members.len()),
         Solutions::None => String::from("no solutions"),
         Solutions::All => String::from("every number"),
     }

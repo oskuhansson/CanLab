@@ -744,6 +744,20 @@ pub fn encode_solutions(solutions: &Solutions) -> String {
     match solutions {
         Solutions::None => String::from(r#"{"kind":"none"}"#),
         Solutions::All => String::from(r#"{"kind":"all"}"#),
+        // A union keeps its members whole, so the encoding is a list of complete
+        // solution sets. The decoder does not read this kind back yet: it answers
+        // "unknown kind", which is honest rather than a half-restored set.
+        Solutions::Union(members) => {
+            let mut out = String::from(r#"{"kind":"union","members":["#);
+            for (index, member) in members.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                out.push_str(&encode_solutions(member));
+            }
+            out.push_str("]}");
+            out
+        }
         Solutions::Values(values) => {
             let mut out = String::from(r#"{"kind":"values","values":["#);
             for (index, value) in values.iter().enumerate() {
