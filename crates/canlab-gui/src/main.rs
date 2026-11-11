@@ -193,6 +193,15 @@ struct CasApp {
     /// the solver.
     plot_note: String,
     y_range: (f64, f64),
+    /// The plot canvas as last drawn, in points.
+    ///
+    /// `x_min..x_max` and `y_range` are the window the document was fitted to,
+    /// or the one the reader panned or zoomed to. A panel of a different shape
+    /// shows *more plane* around that window at the same scale instead of
+    /// stretching it, so what is visible depends on the canvas. Remembering its
+    /// size lets a build trace that wider window, which is why a curve reaches
+    /// the edge of a panel it was never fitted to.
+    plot_canvas: Option<egui::Vec2>,
     status: String,
     solve: SolveState,
     history: Vec<HistoryEntry>,
@@ -252,6 +261,7 @@ impl CasApp {
             y_axis: None,
             plot_note: String::new(),
             y_range: (-1.0, 1.0),
+            plot_canvas: None,
             status: String::from("ready"),
             solve: SolveState::Idle,
             history: Vec::new(),
@@ -763,6 +773,17 @@ impl CasApp {
     /// curve of its own.
     fn can_plot(&self) -> bool {
         self.expr.is_some() || !self.equations.is_empty() || !self.definitions.is_empty()
+    }
+
+    /// The window the plot panel shows right now.
+    ///
+    /// Not the stored window: when the canvas is wider or taller than the fitted
+    /// window, the extra space is filled by showing *more plane* on that axis,
+    /// never by stretching a unit of x to a different length than a unit of y.
+    /// [`panels::View`] owns that arithmetic so sampling and painting cannot
+    /// disagree about it.
+    fn plot_view(&self) -> panels::View {
+        panels::View::new(self.plot_canvas, (self.x_min, self.x_max), self.y_range)
     }
 
     /// Keep the axis choice coherent with the document.

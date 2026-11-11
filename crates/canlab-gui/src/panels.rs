@@ -529,7 +529,7 @@ fn axis_picker(app: &mut CasApp, ui: &mut Ui, label: &str, axis: Axis) -> bool {
     let selected = current.map_or_else(|| String::from("—"), |v| v.as_str().to_string());
     let combo = egui::ComboBox::from_id_salt(("axis", label))
         .selected_text(RichText::new(selected).monospace().size(12.0))
-        .width(52.0)
+        .width(46.0)
         .show_ui(ui, |ui| {
             for variable in app.free_vars.clone() {
                 let is_current = current == Some(variable);
@@ -921,69 +921,140 @@ fn variables_body(app: &mut CasApp, ui: &mut Ui) {
     }
 }
 
-pub fn plot(app: &mut CasApp, ui: &mut Ui) {
-    // In a narrow dock the floating strip would cover most of the graph, so the
-    // controls go above the canvas and the picture keeps whatever is left.
-    let wide = ui.available_width() >= 520.0;
-    if !wide {
-        plot_row(app, ui);
-        if !app.parameters.is_empty() {
-            parameter_row(app, ui);
+/// The data window a canvas shows.
+///
+/// One unit is the same number of pixels on both axes: that is the whole point,
+/// because a circle that renders as an ellipse is a wrong picture. When the panel
+/// is wider than the window it was fitted to, the x *range* grows and the same
+/// picture sits in a wider plane; when it is taller, y grows. The axes never
+/// stretch.
+///
+/// The stored `x_min..x_max` and `y_range` stay the window the document was
+/// fitted to (or the reader panned to). This type is what the canvas shows of
+/// it, so widening the panel does not change the session's window or the scale
+/// at which the picture was drawn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct View {
+    pub(crate) x: (f64, f64),
+    pub(crate) y: (f64, f64),
+}
+
+impl View {
+    /// The view of `window` on a canvas of `canvas` points.
+    ///
+    /// `None` is the state before the plot has been drawn: builds that run
+    /// before the first frame, and tests that never open a panel. The stored
+    /// window is then used unchanged, which is what sampling did before the
+    /// canvas existed.
+    pub(crate) fn new(canvas: Option<egui::Vec2>, x: (f64, f64), y: (f64, f64)) -> Self {
+        let stored = Self { x, y };
+        let Some(canvas) = canvas else {
+            return stored;
+        };
+        if !(x.1 > x.0 && y.1 > y.0) || canvas.x <= 0.0 || canvas.y <= 0.0 {
+            return stored;
         }
-        ui.add_space(4.0);
+        let units_x = x.1 - x.0;
+        let units_y = y.1 - y.0;
+        // The scale the letterboxed picture used to be drawn at: the shorter
+        // side of the panel decided it. Keeping that number is what the user
+        // called good; only how much plane fits around the picture may change.
+        let pixels_per_unit =
+            (f64::from(canvas.x) / units_x).min(f64::from(canvas.y) / units_y);
+        if !pixels_per_unit.is_finite() || pixels_per_unit <= 0.0 {
+            return stored;
+        }
+        let visible_x = f64::from(canvas.x) / pixels_per_unit;
+        let visible_y = f64::from(canvas.y) / pixels_per_unit;
+        // Keep the centre: the fitted picture stays where it was, and the extra
+        // plane appears on both sides of it rather than only on the right.
+        let centre_x = (x.0 + x.1) * 0.5;
+        let centre_y = (y.0 + y.1) * 0.5;
+        Self {
+            x: (centre_x - visible_x * 0.5, centre_x + visible_x * 0.5),
+            y: (centre_y - visible_y * 0.5, centre_y + visible_y * 0.5),
+        }
     }
 
-    // The canvas is the rest of the panel; in a wide panel the controls float
-    // over it, because anything they take from the top is graph nobody sees.
+    fn drawable(&self) -> bool {
+        self.x.1 > self.x.0 && self.y.1 > self.y.0
+    }
+
+    /// Where `(x, y)` is painted on `rect`.
+    ///
+    /// Both axes use the same scale by construction: `rect.width() / x-span`
+    /// equals `rect.height() / y-span`, so a circle stays a circle.
+    fn to_px(&self, rect: Rect, x: f64, y: f64) -> egui::Pos2 {
+        pos2(
+            rect.left() + ((x - self.x.0) / (self.x.1 - self.x.0)) as f32 * rect.width(),
+            rect.bottom() - ((y - self.y.0) / (self.y.1 - self.y.0)) as f32 * rect.height(),
+        )
+    }
+
+    /// The data coordinate under `point`, for a zoom anchor.
+    fn from_px(&self, rect: Rect, point: egui::Pos2) -> (f64, f64) {
+        (
+            self.x.0 + ((point.x - rect.left()) / rect.width()) as f64 * (self.x.1 - self.x.0),
+            self.y.0 + ((rect.bottom() - point.y) / rect.height()) as f64 * (self.y.1 - self.y.0),
+        )
+    }
+}
+
+pub fn plot(app: &mut CasApp, ui: &mut Ui) {
+    // The canvas is the whole panel, and the controls float over its top edge.
+    // A row the controls claim for themselves is graph nobody sees, and the
+    // graph is the panel's answer.
     let size = ui.available_size();
-    let width = size.x.max(80.0);
-    let height = size.y.max(90.0);
-    let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click_and_drag());
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
     let painter = ui.painter_at(rect);
-    let visuals = ui.visuals().clone();
 
-    // Pan and zoom act on the data window, which is the only display state the
-    // plot has. The mapping used here is the one the picture is drawn with: the
-    // equal-aspect box, not the panel, because that is where a pixel is a
-    // coordinate.
+    // The canvas shape decides how much plane is visible, and a build may have
+    // run before this panel was ever drawn: the document is plotted on every
+    // keystroke, while the panel is only drawn once a frame. Trace again when
+    // the shape changed, so the curve covers the window actually shown. The
+    // fitted window itself is not touched — a wider panel shows more plane, it
+    // does not choose a different window.
+    let canvas = rect.size();
+    if app.plot_canvas != Some(canvas) {
+        app.plot_canvas = Some(canvas);
+        if app.can_plot() && !app.is_typing() {
+            build_curve_fitting(app, false);
+        }
+    }
+
+    let view = app.plot_view();
     let mut moved = false;
-    let drawn = equal_aspect(rect, (app.x_min, app.x_max), app.y_range);
-    if drawn.width() > 1.0 && drawn.height() > 1.0 {
-        let (x0, x1) = (app.x_min, app.x_max);
-        let (y0, y1) = app.y_range;
-
+    if view.drawable() && rect.width() > 1.0 && rect.height() > 1.0 {
         // Drag to pan: the content follows the pointer, so the window moves the
-        // other way.
+        // other way. The delta is converted with the view the picture is drawn
+        // in, so a drag covers exactly the data the pointer travelled over.
         let delta = response.drag_delta();
         if response.dragged() && delta != egui::Vec2::ZERO {
-            let dx = -(delta.x as f64) * (x1 - x0) / drawn.width() as f64;
-            let dy = (delta.y as f64) * (y1 - y0) / drawn.height() as f64;
-            app.x_min = x0 + dx;
-            app.x_max = x1 + dx;
-            app.y_range = (y0 + dy, y1 + dy);
+            let dx = -(delta.x as f64) * (view.x.1 - view.x.0) / rect.width() as f64;
+            let dy = (delta.y as f64) * (view.y.1 - view.y.0) / rect.height() as f64;
+            app.x_min += dx;
+            app.x_max += dx;
+            app.y_range = (app.y_range.0 + dy, app.y_range.1 + dy);
             moved = true;
         }
 
         // Scroll to zoom about the pointer, so the point under the cursor stays
-        // where it is.
+        // where it is. The anchor is a data coordinate in `view`; scaling the
+        // stored window about the same coordinate scales the view about it too,
+        // because showing more plane is a linear map of the stored window.
         if response.hovered() {
             let scroll = ui.input(|input| input.smooth_scroll_delta.y);
             if scroll.abs() > 0.5 {
                 let factor = (-(scroll as f64) * 0.0020).exp().clamp(0.25, 4.0);
                 let anchor = response
                     .hover_pos()
-                    .map(|position| {
-                        (
-                            x0 + ((position.x - drawn.left()) / drawn.width()) as f64 * (x1 - x0),
-                            y0 + ((drawn.bottom() - position.y) / drawn.height()) as f64 * (y1 - y0),
-                        )
-                    })
-                    .unwrap_or(((x0 + x1) * 0.5, (y0 + y1) * 0.5));
-                app.x_min = anchor.0 + (x0 - anchor.0) * factor;
-                app.x_max = anchor.0 + (x1 - anchor.0) * factor;
+                    .map(|position| view.from_px(rect, position))
+                    .unwrap_or(((view.x.0 + view.x.1) * 0.5, (view.y.0 + view.y.1) * 0.5));
+                app.x_min = anchor.0 + (app.x_min - anchor.0) * factor;
+                app.x_max = anchor.0 + (app.x_max - anchor.0) * factor;
                 app.y_range = (
-                    anchor.1 + (y0 - anchor.1) * factor,
-                    anchor.1 + (y1 - anchor.1) * factor,
+                    anchor.1 + (app.y_range.0 - anchor.1) * factor,
+                    anchor.1 + (app.y_range.1 - anchor.1) * factor,
                 );
                 moved = true;
             }
@@ -996,7 +1067,8 @@ pub fn plot(app: &mut CasApp, ui: &mut Ui) {
         ui.ctx().request_repaint();
     }
 
-    let drawn = equal_aspect(rect, (app.x_min, app.x_max), app.y_range);
+    // The window may have moved, so read it again after the gesture.
+    let view = app.plot_view();
     if app.curves.is_empty() && app.intersections.is_empty() {
         painter.text(
             rect.center(),
@@ -1005,56 +1077,61 @@ pub fn plot(app: &mut CasApp, ui: &mut Ui) {
             FontId::proportional(13.0),
             crate::theme::weak(),
         );
-    } else {
+    } else if view.drawable() {
         // Axes once, then every curve on top of them in its own colour, so a
         // system of two equations reads as two lines rather than one thick one.
-        // Everything is drawn in the equal-aspect box, so resizing the panel
-        // letterboxes the picture instead of reshaping it.
-        paint_axes(&painter, drawn, (app.x_min, app.x_max), app.y_range);
+        // Everything is painted into the same rectangle the sampler was given,
+        // so one unit is the same number of pixels along both axes.
+        paint_axes(&painter, rect, &view);
         for (index, curve) in app.curves.iter().enumerate() {
-            paint_curve(
-                &painter,
-                drawn,
-                curve,
-                (app.x_min, app.x_max),
-                app.y_range,
-                curve_color(index),
-            );
+            paint_curve(&painter, rect, curve, &view, curve_color(index));
         }
-        paint_intersections(&painter, &response, app, drawn, rect);
+        paint_intersections(&painter, &response, app, &view, rect);
     }
 
-    // The overlay: translucent strips across the top, so the controls stay
-    // readable over the grid without owning any of the panel. The caption gets a
-    // line of its own — it is a sentence, and a sentence cannot share a row with
-    // two dropdowns and two number boxes.
-    if wide {
-        let with_parameters = !app.parameters.is_empty();
-        let strip_height = 54.0 + if with_parameters { 24.0 } else { 0.0 };
-        let strip = Rect::from_min_size(
-            rect.min + vec2(10.0, 10.0),
-            vec2((rect.width() - 20.0).max(120.0), strip_height),
-        );
-        painter.rect_filled(strip, 6.0, visuals.window_fill.gamma_multiply(0.88));
-        let mut child = ui.new_child(
-            UiBuilder::new()
-                .max_rect(strip.shrink2(vec2(8.0, 4.0)))
-                .layout(Layout::top_down(Align::Min)),
-        );
-        child.set_clip_rect(strip);
-        child.spacing_mut().item_spacing.y = 2.0;
-        plot_row(app, &mut child);
-        if with_parameters {
-            parameter_row(app, &mut child);
-        }
-        plot_note_row(app, &mut child);
-    } else {
-        ui.add_space(2.0);
-        plot_note_row(app, ui);
+    plot_overlay(app, ui, rect);
+}
+
+/// The plot's controls, drawn over the top edge of the canvas.
+///
+/// The strip has a background but no widget of its own: a drag that starts on
+/// the graph — even on an empty part of the strip — still pans it, and only
+/// where a picker or a number box actually is does the overlay take the pointer.
+fn plot_overlay(app: &mut CasApp, ui: &mut Ui, rect: Rect) {
+    let margin = 8.0;
+    if rect.width() <= 2.0 * margin || rect.height() <= 2.0 * margin {
+        return;
     }
+    let bounds = rect.shrink(margin);
+    let mut child = ui.new_child(
+        UiBuilder::new()
+            .max_rect(bounds)
+            .layout(Layout::top_down(Align::Min)),
+    );
+    child.set_clip_rect(bounds);
+    egui::Frame::new()
+        .fill(crate::theme::overlay())
+        .stroke(Stroke::new(1.0, crate::theme::line()))
+        .corner_radius(6)
+        .inner_margin(egui::Margin::symmetric(6, 4))
+        .show(&mut child, |ui| {
+            // Tight on purpose: in a narrow dock every row the strip takes is a
+            // row of graph it covers. The controls stay one line high wherever
+            // they fit; wrapping is what makes a small panel unreadable.
+            ui.spacing_mut().item_spacing = vec2(4.0, 2.0);
+            ui.spacing_mut().interact_size.y = 22.0;
+            plot_row(app, ui);
+            if !app.parameters.is_empty() {
+                parameter_row(app, ui);
+            }
+            plot_note_row(app, ui);
+        });
 }
 
 /// The plot's caption: what is drawn, on which axes, at which parameter values.
+///
+/// Not selectable: it is a caption rather than a control, and a drag that starts
+/// on it must still pan the picture underneath.
 fn plot_note_row(app: &CasApp, ui: &mut Ui) {
     ui.add(
         Label::new(
@@ -1062,7 +1139,8 @@ fn plot_note_row(app: &CasApp, ui: &mut Ui) {
                 .small()
                 .color(crate::theme::weak()),
         )
-        .truncate(),
+        .truncate()
+        .selectable(false),
     );
 }
 
@@ -1071,18 +1149,13 @@ fn paint_intersections(
     painter: &egui::Painter,
     response: &egui::Response,
     app: &CasApp,
-    drawn: Rect,
+    view: &View,
     rect: Rect,
 ) {
     if app.intersections.is_empty() {
         return;
     }
-    let to_px = |x: f64, y: f64| {
-        pos2(
-            drawn.left() + ((x - app.x_min) / (app.x_max - app.x_min)) as f32 * drawn.width(),
-            drawn.bottom() - ((y - app.y_range.0) / (app.y_range.1 - app.y_range.0)) as f32 * drawn.height(),
-        )
-    };
+    let to_px = |x: f64, y: f64| view.to_px(rect, x, y);
     for intersection in &app.intersections {
         let point = to_px(intersection.x, intersection.y);
         painter.circle_filled(point, 4.5, crate::theme::accent());
@@ -1123,13 +1196,18 @@ fn paint_intersections(
 /// value is now a control, and the plot says what it is set to.
 fn parameter_row(app: &mut CasApp, ui: &mut Ui) {
     let mut changed = false;
+    // The heading is the first thing to go in a narrow strip: the name and its
+    // number identify the control on their own, and the heading costs a row.
+    let compact = ui.available_width() < 220.0;
     ui.horizontal_wrapped(|ui| {
-        ui.label(
-            RichText::new("parameters")
-                .small()
-                .strong()
-                .color(crate::theme::weak()),
-        );
+        if !compact {
+            ui.label(
+                RichText::new("parameters")
+                    .small()
+                    .strong()
+                    .color(crate::theme::weak()),
+            );
+        }
         for parameter in &mut app.parameters {
             ui.label(
                 RichText::new(parameter.name.as_str())
@@ -1156,35 +1234,20 @@ fn curve_color(index: usize) -> Color32 {
     crate::theme::curve_color(index)
 }
 
-/// The square-ish area the data window actually gets.
-///
-/// One unit on x must be the same length as one unit on y, or a circle comes out
-/// as an ellipse and the shape of a curve depends on how wide the panel happens
-/// to be. The requested window is fitted into the panel and centred, and the
-/// letterbox that leaves over is empty panel — not stretched axes.
-fn equal_aspect(rect: Rect, x_range: (f64, f64), y_range: (f64, f64)) -> Rect {
-    let (x0, x1) = x_range;
-    let (y0, y1) = y_range;
-    if !(x1 > x0 && y1 > y0) || rect.width() <= 0.0 || rect.height() <= 0.0 {
-        return rect;
-    }
-    let units_x = (x1 - x0) as f32;
-    let units_y = (y1 - y0) as f32;
-    let pixels_per_unit = (rect.width() / units_x).min(rect.height() / units_y);
-    Rect::from_center_size(rect.center(), vec2(units_x * pixels_per_unit, units_y * pixels_per_unit))
-}
-
 /// Draw the grid, the axes and the window label into `rect`.
-fn paint_axes(painter: &egui::Painter, rect: Rect, x_range: (f64, f64), y_range: (f64, f64)) {
+///
+/// `view` is the window the canvas shows, so the label names the plane that is
+/// actually visible, not just the fitted window inside it.
+fn paint_axes(painter: &egui::Painter, rect: Rect, view: &View) {
     // Colours come from the palette, not from egui's derived text colours: the
     // grid is a *line* colour and the labels are *weak* text, which is what makes
     // the axes recede in every scheme instead of just the default one.
     let axis_color = crate::theme::weak();
     let label_color = crate::theme::weak();
     let grid_color = crate::theme::line();
-    let (x0, x1) = x_range;
-    let (y0, y1) = y_range;
-    if !(x1 > x0 && y1 > y0) {
+    let (x0, x1) = view.x;
+    let (y0, y1) = view.y;
+    if !view.drawable() {
         painter.text(
             rect.center(),
             Align2::CENTER_CENTER,
@@ -1195,12 +1258,7 @@ fn paint_axes(painter: &egui::Painter, rect: Rect, x_range: (f64, f64), y_range:
         return;
     }
 
-    let to_px = |x: f64, y: f64| {
-        pos2(
-            rect.left() + ((x - x0) / (x1 - x0)) as f32 * rect.width(),
-            rect.bottom() - ((y - y0) / (y1 - y0)) as f32 * rect.height(),
-        )
-    };
+    let to_px = |x: f64, y: f64| view.to_px(rect, x, y);
 
     // A subtle grid: four vertical and four horizontal divisions.
     let grid = Stroke::new(1.0, grid_color);
@@ -1238,27 +1296,18 @@ fn paint_curve(
     painter: &egui::Painter,
     rect: Rect,
     curve: &Curve,
-    x_range: (f64, f64),
-    y_range: (f64, f64),
+    view: &View,
     color: Color32,
 ) {
-    let (x0, x1) = x_range;
-    let (y0, y1) = y_range;
-    if !(x1 > x0 && y1 > y0) {
+    if !view.drawable() {
         return;
     }
-    let to_px = |x: f64, y: f64| {
-        pos2(
-            rect.left() + ((x - x0) / (x1 - x0)) as f32 * rect.width(),
-            rect.bottom() - ((y - y0) / (y1 - y0)) as f32 * rect.height(),
-        )
-    };
     let stroke = Stroke::new(2.2, color);
     for segment in &curve.segments {
         let points: Vec<egui::Pos2> = segment
             .iter()
             .filter(|point| point[0].is_finite() && point[1].is_finite())
-            .map(|point| to_px(point[0], point[1]))
+            .map(|point| view.to_px(rect, point[0], point[1]))
             .collect();
         if points.len() >= 2 {
             painter.add(egui::Shape::line(points, stroke));
@@ -1364,15 +1413,19 @@ pub fn build_curve_fitting(app: &mut CasApp, fit: bool) {
             app.plot_note = String::from("cannot evaluate numerically");
             return;
         };
-        let curve = sample(
-            &program,
-            &SampleOptions {
-                x_min: app.x_min,
-                x_max: app.x_max,
-                ..SampleOptions::default()
-            },
-        );
-        app.y_range = vertical_extent(&curve).unwrap_or((-1.0, 1.0));
+        // Fitting must not read the filled view: the y range it is about to
+        // choose is what decides how wide that view is, so fitting on it would
+        // walk the range outward on every keystroke. Fit on the stored x window,
+        // then trace the plane the panel will show without moving the range.
+        let window = if fit { (app.x_min, app.x_max) } else { app.plot_view().x };
+        let mut curve = sample_window(&program, window);
+        if fit {
+            app.y_range = vertical_extent(&curve).unwrap_or((-1.0, 1.0));
+            let drawn = app.plot_view().x;
+            if drawn != window {
+                curve = sample_window(&program, drawn);
+            }
+        }
         let count = curve.segments.len();
         noted.push(match count {
             1 => String::from("1 segment"),
@@ -1380,7 +1433,7 @@ pub fn build_curve_fitting(app: &mut CasApp, fit: bool) {
         });
         app.curves.push(curve);
     }
-    noted.extend(plot_definitions(app));
+    noted.extend(plot_definitions(app, fit));
     if app.curves.is_empty() && app.intersections.is_empty() {
         app.plot_note = String::from("nothing to plot");
         return;
@@ -1391,11 +1444,23 @@ pub fn build_curve_fitting(app: &mut CasApp, fit: bool) {
     app.plot_note = noted.join(", ");
 }
 
+/// Sample `program` across an x window, for the plot's width.
+fn sample_window(program: &canlab_core::Program, window: (f64, f64)) -> Curve {
+    sample(
+        program,
+        &SampleOptions {
+            x_min: window.0,
+            x_max: window.1,
+            ..SampleOptions::default()
+        },
+    )
+}
+
 /// Draw `y = f(x)` for every definition whose parameter is the horizontal axis.
 ///
 /// Returns at most one note fragment, which is what the plot caption says when a
 /// definition was drawn.
-fn plot_definitions(app: &mut CasApp) -> Vec<String> {
+fn plot_definitions(app: &mut CasApp, fit: bool) -> Vec<String> {
     let Some(horizontal) = app.x_axis else {
         return Vec::new();
     };
@@ -1413,47 +1478,72 @@ fn plot_definitions(app: &mut CasApp) -> Vec<String> {
     // Only the definitions decide the vertical range when nothing else was drawn:
     // an expression has already been sampled into a range that fits it.
     let first = app.curves.is_empty();
-    let mut labels: Vec<String> = Vec::new();
-    let mut extent: Option<(f64, f64)> = None;
-    for (name, params, body) in definitions {
-        // A function of two variables is a surface; a function of a *different*
-        // variable does not belong on this horizontal axis.
-        if params != vec![horizontal] {
-            continue;
+    // Same rule as the expression path: a definition-only page fits its y range
+    // from the stored x window, not from the filled one, so the range cannot
+    // chase itself. Otherwise the window is whatever the canvas shows.
+    let window = if fit && first {
+        (app.x_min, app.x_max)
+    } else {
+        app.plot_view().x
+    };
+    let mut curves = definition_curves(&definitions, horizontal, window);
+    if first && fit {
+        let mut extent: Option<(f64, f64)> = None;
+        for (_, curve) in &curves {
+            if let Some((low, high)) = vertical_extent(curve) {
+                extent = Some(match extent {
+                    Some((existing_low, existing_high)) => {
+                        (existing_low.min(low), existing_high.max(high))
+                    }
+                    None => (low, high),
+                });
+            }
         }
-        let Some(program) = canlab_core::Program::compile(&body, &[horizontal]) else {
-            continue;
-        };
-        let curve = sample(
-            &program,
-            &SampleOptions {
-                x_min: app.x_min,
-                x_max: app.x_max,
-                ..SampleOptions::default()
-            },
-        );
-        if curve.segments.is_empty() {
-            continue;
+        if let Some(range) = extent {
+            app.y_range = range;
         }
-        if let Some((low, high)) = vertical_extent(&curve) {
-            extent = Some(match extent {
-                Some((existing_low, existing_high)) => {
-                    (existing_low.min(low), existing_high.max(high))
-                }
-                None => (low, high),
-            });
+        // The fitted y range may have changed how much x the panel shows; trace
+        // that plane too, without touching the range that was just fitted.
+        let drawn = app.plot_view().x;
+        if drawn != window {
+            curves = definition_curves(&definitions, horizontal, drawn);
         }
-        labels.push(format!("{name}({})", horizontal.as_str()));
-        app.curves.push(curve);
     }
-    if first && let Some(range) = extent {
-        app.y_range = range;
+    let mut labels: Vec<String> = Vec::new();
+    for (label, curve) in curves {
+        labels.push(label);
+        app.curves.push(curve);
     }
     if labels.is_empty() {
         Vec::new()
     } else {
         vec![format!("definition(s) of {}", labels.join(", "))]
     }
+}
+
+/// Sample one curve per definition that is a function of the horizontal axis.
+fn definition_curves(
+    definitions: &[(String, Vec<canlab_core::SymbolId>, canlab_core::Expr)],
+    horizontal: canlab_core::SymbolId,
+    window: (f64, f64),
+) -> Vec<(String, Curve)> {
+    let mut out = Vec::new();
+    for (name, params, body) in definitions {
+        // A function of two variables is a surface; a function of a *different*
+        // variable does not belong on this horizontal axis.
+        if params.len() != 1 || params[0] != horizontal {
+            continue;
+        }
+        let Some(program) = canlab_core::Program::compile(body, &[horizontal]) else {
+            continue;
+        };
+        let curve = sample_window(&program, window);
+        if curve.segments.is_empty() {
+            continue;
+        }
+        out.push((format!("{name}({})", horizontal.as_str()), curve));
+    }
+    out
 }
 
 /// Grow the view to contain everything that was drawn.
@@ -1580,17 +1670,26 @@ fn plot_equations(
         None => format!("{} → x", horizontal.as_str()),
     };
 
-    // An equation has no preferred y range, so the window is square: the two axes
-    // get the same span, which is also what makes a circle look round.
-    let span = (app.x_max - app.x_min).abs().max(1.0);
-    let y_min = -span / 2.0;
-    let y_max = span / 2.0;
+    // An equation has no preferred y range. Fitting frames it square on the x
+    // window, as it always has; otherwise the y range the reader is looking at
+    // is kept — refitting it here would undo a vertical pan on the very next
+    // rebuild.
+    let (y_min, y_max) = if fit {
+        let span = (app.x_max - app.x_min).abs().max(1.0);
+        (-span / 2.0, span / 2.0)
+    } else {
+        app.y_range
+    };
+    // Trace the window the canvas shows, not only the fitted one: a line that
+    // leaves the fitted window continues across the plane the panel adds. This
+    // changes no stored range — it is the same picture seen in a wider plane.
+    let view = View::new(app.plot_canvas, (app.x_min, app.x_max), (y_min, y_max));
     let options = ImplicitOptions {
         resolution: 240,
-        x_min: app.x_min,
-        x_max: app.x_max,
-        y_min,
-        y_max,
+        x_min: view.x.0,
+        x_max: view.x.1,
+        y_min: view.y.0,
+        y_max: view.y.1,
     };
 
     // `left − right`, so the curve is where the equation holds. An equation whose
@@ -1698,7 +1797,7 @@ fn plot_equations(
                 for step in 0..=4 {
                     let t = step as f64 / 4.0;
                     let x = options.x_min + (options.x_max - options.x_min) * t;
-                    let y = y_min + (y_max - y_min) * t;
+                    let y = options.y_min + (options.y_max - options.y_min) * t;
                     let a = evaluate(&programs[first], &[x, y]);
                     let b = evaluate(&programs[second], &[x, y]);
                     peak = peak.max(a * a + b * b);
@@ -1731,13 +1830,17 @@ fn plot_equations(
         }
     }
 
-    app.y_range = (y_min, y_max);
+    if fit {
+        // The square window the trace was framed in; the fit below shrinks it
+        // further. A rebuild at the same view must not move it.
+        app.y_range = (y_min, y_max);
+    }
 
     // A page can do both: define a function and ask a question about it. The fit
     // below only looks at the *equation* curves: `y = x²` runs off the top of a
     // plot of the unit circle, and fitting to it would make the circle a dot.
     let equation_curves = app.curves.len();
-    let definitions = plot_definitions(app);
+    let definitions = plot_definitions(app, fit);
 
     if fit {
         // The intersections if there are any: a linear equation spans the whole
@@ -2022,21 +2125,272 @@ mod tests {
         assert!(!same_point(&a, &b));
     }
 
-    #[test]
-    fn the_plot_keeps_one_scale_for_both_axes() {
-        // A square data window in a wide panel stays square: the picture is
-        // letterboxed, not stretched.
-        let panel = Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 200.0));
-        let square = equal_aspect(panel, (-10.0, 10.0), (-10.0, 10.0));
-        assert!((square.width() - square.height()).abs() < 0.01);
-        assert!((square.width() - 200.0).abs() < 0.01, "fitted to the short side");
-        assert!((square.center() - panel.center()).length() < 0.01);
+    /// The app with a unit circle in it, fitted as a document change fits it.
+    fn circle_app() -> crate::CasApp {
+        let mut app = crate::CasApp::new();
+        app.field = canlab_input::MathField::from_latex("x^2+y^2=1").expect("a circle");
+        app.recompute();
+        app
+    }
 
-        // A window that is twice as wide as it is tall fills the width.
-        let wide = equal_aspect(panel, (-20.0, 20.0), (-5.0, 5.0));
-        assert!((wide.width() - 400.0).abs() < 0.01);
-        assert!((wide.height() - 100.0).abs() < 0.01);
-        assert!((wide.center() - panel.center()).length() < 0.01);
+    /// The bounding box of every sampled point, in data coordinates.
+    fn sample_bbox(app: &crate::CasApp) -> (f64, f64, f64, f64) {
+        let mut low_x = f64::MAX;
+        let mut high_x = f64::MIN;
+        let mut low_y = f64::MAX;
+        let mut high_y = f64::MIN;
+        for curve in &app.curves {
+            for point in curve.segments.iter().flatten() {
+                low_x = low_x.min(point[0]);
+                high_x = high_x.max(point[0]);
+                low_y = low_y.min(point[1]);
+                high_y = high_y.max(point[1]);
+            }
+        }
+        assert!(
+            low_x.is_finite() && high_x.is_finite() && low_y.is_finite() && high_y.is_finite(),
+            "nothing was sampled"
+        );
+        (low_x, high_x, low_y, high_y)
+    }
+
+    /// One frame of just the plot panel in a fixed rectangle.
+    fn plot_frame(
+        app: &mut crate::CasApp,
+        ctx: &egui::Context,
+        plot_rect: Rect,
+        events: Vec<egui::Event>,
+    ) {
+        let screen = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 600.0));
+        let input = egui::RawInput {
+            screen_rect: Some(screen),
+            events,
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
+            let mut child = ui.new_child(
+                UiBuilder::new()
+                    .max_rect(plot_rect)
+                    .layout(Layout::top_down(Align::Min)),
+            );
+            child.set_clip_rect(plot_rect);
+            plot(app, &mut child);
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn a_wider_canvas_widens_the_range_instead_of_stretching_the_axes() {
+        let x = (-10.0, 10.0);
+        let y = (-10.0, 10.0);
+
+        // The old canvas was square, so a square window already filled it.
+        let square = View::new(Some(vec2(400.0, 400.0)), x, y);
+        assert_eq!(square, View { x, y });
+
+        // 900 × 400 is 2.25:1, so x shows 45 units at the 20 px/unit the short
+        // side sets; y is untouched.
+        let wide = View::new(Some(vec2(900.0, 400.0)), x, y);
+        assert!((wide.x.0 + 22.5).abs() < 1.0e-9 && (wide.x.1 - 22.5).abs() < 1.0e-9);
+        assert!((wide.y.1 - wide.y.0 - 20.0).abs() < 1.0e-9);
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(900.0, 400.0));
+        let unit_x = wide.to_px(rect, 1.0, 0.0).x - wide.to_px(rect, 0.0, 0.0).x;
+        let unit_y = wide.to_px(rect, 0.0, 0.0).y - wide.to_px(rect, 0.0, 1.0).y;
+        assert!(
+            (unit_x - unit_y).abs() < 1.0e-3,
+            "one scale: {unit_x} px/unit on x, {unit_y} on y"
+        );
+
+        // A tall canvas widens y instead.
+        let tall = View::new(Some(vec2(400.0, 900.0)), x, y);
+        assert!((tall.x.1 - tall.x.0 - 20.0).abs() < 1.0e-9);
+        assert!((tall.y.1 - tall.y.0 - 45.0).abs() < 1.0e-9);
+
+        // A canvas that is not a canvas, and a window that is not a window, are
+        // shown unchanged rather than divided by zero.
+        assert_eq!(View::new(Some(vec2(0.0, 0.0)), x, y), View { x, y });
+        assert_eq!(
+            View::new(Some(vec2(900.0, 400.0)), (1.0, 1.0), y),
+            View {
+                x: (1.0, 1.0),
+                y
+            }
+        );
+
+        // Before a canvas exists, the stored window is what is shown.
+        assert_eq!(View::new(None, x, y), View { x, y });
+    }
+
+    #[test]
+    fn at_the_old_square_size_the_window_and_samples_are_unchanged() {
+        // The old plot canvas was a square fitted into the panel. At that shape
+        // filling the panel is a no-op, so the window and the traced curve must
+        // be exactly what they were.
+        //
+        // `y = x` rather than the circle: it runs corner to corner, so its
+        // bounding box is the whole window and the fit leaves the stored range
+        // alone — a comparison of like with like rather than one hidden refit.
+        let mut app = crate::CasApp::new();
+        app.field = canlab_input::MathField::from_latex("y=x").expect("a diagonal line");
+        app.plot_canvas = Some(vec2(400.0, 400.0));
+        app.recompute();
+        build_curve_fitting(&mut app, true);
+        let ranges = ((app.x_min, app.x_max), app.y_range);
+        let bbox = sample_bbox(&app);
+        assert_eq!(ranges.0, (-10.0, 10.0), "x window: {ranges:?}");
+        assert_eq!(ranges.1, (-10.0, 10.0), "y window: {ranges:?}");
+
+        build_curve_fitting(&mut app, false);
+        assert_eq!(
+            ((app.x_min, app.x_max), app.y_range),
+            ranges,
+            "filling the panel moved the window"
+        );
+        assert_eq!(sample_bbox(&app), bbox, "filling resampled the same window differently");
+    }
+
+    #[test]
+    fn a_wide_panel_shows_a_circle_with_equal_pixel_spans() {
+        // The bug this guards: widening the panel must show more plane, not
+        // stretch a unit of x away from a unit of y. A circle whose samples are
+        // 500 px wide and 200 px tall is a wrong picture.
+        let mut app = circle_app();
+        let canvas = vec2(900.0, 400.0);
+        app.plot_canvas = Some(canvas);
+        build_curve_fitting(&mut app, false);
+
+        let stored = (app.x_min, app.x_max);
+        let view = View::new(Some(canvas), stored, app.y_range);
+        assert!(
+            view.x.1 - view.x.0 > stored.1 - stored.0 + 1.0,
+            "the x range did not widen: {view:?}"
+        );
+        assert!(
+            (view.y.1 - view.y.0 - (app.y_range.1 - app.y_range.0)).abs() < 1.0e-9,
+            "y should keep its span: {view:?}"
+        );
+
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), canvas);
+        let (low_x, high_x, low_y, high_y) = sample_bbox(&app);
+        let span_x = view.to_px(rect, high_x, 0.0).x - view.to_px(rect, low_x, 0.0).x;
+        let span_y = view.to_px(rect, 0.0, low_y).y - view.to_px(rect, 0.0, high_y).y;
+        assert!(
+            (span_x - span_y).abs() <= 2.0,
+            "a circle came out {span_x} px wide and {span_y} px tall"
+        );
+    }
+
+    #[test]
+    fn a_drag_from_the_middle_of_the_canvas_pans_and_is_not_swallowed_by_the_overlay() {
+        let ctx = egui::Context::default();
+        let mut app = circle_app();
+        let plot_rect = Rect::from_min_size(pos2(40.0, 30.0), vec2(900.0, 400.0));
+        plot_frame(&mut app, &ctx, plot_rect, Vec::new());
+
+        let centre = plot_rect.center();
+        let before = (app.x_min, app.x_max, app.y_range);
+        let view = app.plot_view();
+        let expected_dx = -60.0 * (view.x.1 - view.x.0) / plot_rect.width() as f64;
+
+        plot_frame(
+            &mut app,
+            &ctx,
+            plot_rect,
+            vec![egui::Event::PointerMoved(centre)],
+        );
+        plot_frame(
+            &mut app,
+            &ctx,
+            plot_rect,
+            vec![egui::Event::PointerButton {
+                pos: centre,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        plot_frame(
+            &mut app,
+            &ctx,
+            plot_rect,
+            vec![egui::Event::PointerMoved(centre + vec2(60.0, 0.0))],
+        );
+
+        assert!(
+            (app.x_min - (before.0 + expected_dx)).abs() < 1.0e-6,
+            "the overlay swallowed the drag: x went {} -> {}, expected {}",
+            before.0,
+            app.x_min,
+            before.0 + expected_dx
+        );
+        assert_eq!(
+            app.x_max - app.x_min,
+            before.1 - before.0,
+            "panning changed the zoom"
+        );
+        assert_eq!(app.y_range, before.2, "a horizontal drag moved y");
+    }
+
+    #[test]
+    fn a_drag_on_the_overlay_background_still_pans() {
+        // The strip has a background but no widget across it: only the controls
+        // in it take the pointer. A drag that starts on the empty part of the
+        // strip must pan the picture under it.
+        let ctx = egui::Context::default();
+        let mut app = circle_app();
+        let plot_rect = Rect::from_min_size(pos2(40.0, 30.0), vec2(900.0, 400.0));
+        plot_frame(&mut app, &ctx, plot_rect, Vec::new());
+
+        // Between the overlay's outer edge and the frame's inner margin: strip,
+        // not control.
+        let start = plot_rect.min + vec2(10.0, 10.0);
+        let before = app.x_min;
+        let view = app.plot_view();
+        let expected_dx = -40.0 * (view.x.1 - view.x.0) / plot_rect.width() as f64;
+
+        plot_frame(
+            &mut app,
+            &ctx,
+            plot_rect,
+            vec![egui::Event::PointerMoved(start)],
+        );
+        plot_frame(
+            &mut app,
+            &ctx,
+            plot_rect,
+            vec![egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        plot_frame(
+            &mut app,
+            &ctx,
+            plot_rect,
+            vec![egui::Event::PointerMoved(start + vec2(40.0, 0.0))],
+        );
+
+        assert!(
+            (app.x_min - (before + expected_dx)).abs() < 1.0e-6,
+            "the strip background swallowed the drag: {before} -> {}, expected {}",
+            app.x_min,
+            before + expected_dx
+        );
+    }
+
+    #[test]
+    fn a_panel_too_small_for_the_controls_still_paints_its_canvas() {
+        // `plot_overlay` refuses a rectangle smaller than its own margin. That
+        // refusal must not take the canvas with it: the picture is still drawn,
+        // and the panel is still recorded as the place the plot lives.
+        let ctx = egui::Context::default();
+        let mut app = circle_app();
+        let plot_rect = Rect::from_min_size(pos2(5.0, 5.0), vec2(12.0, 12.0));
+        plot_frame(&mut app, &ctx, plot_rect, Vec::new());
+        assert_eq!(app.plot_canvas, Some(plot_rect.size()));
+        assert!(!app.curves.is_empty(), "note: {}", app.plot_note);
     }
 
     #[test]

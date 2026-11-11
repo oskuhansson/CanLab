@@ -355,6 +355,20 @@ pub fn text() -> Color32 {
     current().text
 }
 
+/// The scrim the plot's controls sit on.
+///
+/// The panel colour with a little of its opacity removed, rather than a new
+/// colour: the grid shows through and the strip still belongs to the scheme it
+/// is drawn in. A literal here would look right in one palette and wrong in the
+/// other six.
+pub fn overlay() -> Color32 {
+    // Translucent enough that the grid reads through it, opaque enough that a
+    // number on top stays legible.
+    const ALPHA: u8 = 236;
+    let panel = current().panel;
+    Color32::from_rgba_unmultiplied(panel.r(), panel.g(), panel.b(), ALPHA)
+}
+
 /// Dividers and outlines, from the palette in force.
 pub fn line() -> Color32 {
     current().line
