@@ -218,9 +218,15 @@ impl Solver for NativeSolver {
     /// The real solutions of `eq == 0`, for degree 1 and 2.
     fn solve(&self, eq: &Expr, var: SymbolId) -> Result<Vec<Expr>, SolverError> {
         let Some(map) = coefficients(eq, var) else {
-            // Not a polynomial with numeric coefficients. It may still be one in
-            // `var` with symbolic coefficients — `x² + y² = 1` has two answers in
-            // `x` — and that is the case the editor's autofill needs.
+            // Not a polynomial with numeric coefficients. An exponential comes
+            // first: `2^x = 8` is not polynomial in `x` and is not parametric
+            // either, and taking its logarithm is exact.
+            if let Some(values) = crate::exponential::solve_exponential(self, eq, var) {
+                return Ok(values);
+            }
+            // It may still be one in `var` with symbolic coefficients — `x² + y² = 1`
+            // has two answers in `x` — and that is the case the editor's autofill
+            // needs.
             return crate::parametric::solve_parametric(eq, var)
                 .ok_or(SolverError::NotImplemented);
         };
@@ -294,6 +300,15 @@ impl Solver for NativeSolver {
     /// [`SolverError::NotImplemented`]; W2.3 and W2.5 will fill those in.
     fn solve_all(&self, eq: &Expr, var: SymbolId) -> Result<Solutions, SolverError> {
         let Some(map) = coefficients(eq, var) else {
+            if let Some(values) = crate::exponential::solve_exponential(self, eq, var) {
+                // An exponential whose right side is not positive has no real
+                // solution, which is `None` and not an empty set of values.
+                return if values.is_empty() {
+                    Ok(Solutions::None)
+                } else {
+                    Ok(Solutions::Values(values))
+                };
+            }
             return crate::parametric::solve_parametric(eq, var)
                 .map(Solutions::Values)
                 .ok_or(SolverError::NotImplemented);

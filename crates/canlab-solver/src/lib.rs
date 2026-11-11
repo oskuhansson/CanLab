@@ -37,6 +37,7 @@
 
 use canlab_core::{Expr, SymbolId};
 
+pub mod exponential;
 pub mod json;
 pub mod mock;
 pub mod native;
