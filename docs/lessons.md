@@ -264,3 +264,30 @@ page *states* things:
 this relation". And a test of what the panel says is a test of the product: assert
 the text the user reads, not only the state the code keeps.
 
+## A backslash is an escape in TOML
+
+**What happened.** A new corpus row for the cosine union had
+`note = "Both branches, joined by \cup."`. Loading the corpus stopped dead:
+
+```text
+load error: tests/cases/math/cos-two-branches.toml: line 10:
+`\c` is not a supported escape; use a literal string ('…') for LaTeX
+```
+
+**Why the code did it.** TOML has two string forms, and they differ exactly where
+LaTeX lives. A basic string (`"…"`) processes escapes, so `\c` is an error; a
+literal string (`'…'`) takes the text verbatim. Every other row in the corpus
+already used `'…'` for `document` and `expect` — the new row used `"…"` for its
+*note*, which is the field nobody thinks of as LaTeX until it contains a `\cup`.
+
+**Why no test caught it.** The row parser is well tested, but its tests build
+their TOML in code, where `"…"` and `'…'` were chosen by whoever wrote the test.
+The hand-written row was the only thing that could have failed, and it failed on
+load — which is at least loud: exit 2, "the run could not be trusted", rather than
+a silently different expectation.
+
+**What changed.** The rule, now stated where rows are written: **every LaTeX value
+in a row is a literal string**, `document`, `expect.*` and `note` alike. And a
+reminder of why the loader refuses instead of guessing: a row that cannot be read
+must never be counted as a pass.
+
