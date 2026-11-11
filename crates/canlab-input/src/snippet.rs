@@ -274,6 +274,14 @@ impl Parser {
             self.pos += 1;
             return Ok(());
         }
+        // An escaped literal, which is how the printer writes a character LaTeX
+        // would otherwise eat: `\%`, `\#`, `\&`, `\$`, and `\ ` for a space. They
+        // are text, not commands, and a printed document has to read back.
+        if let Some(literal @ ('%' | '#' | '&' | '$' | ' ')) = self.peek() {
+            self.pos += 1;
+            out.push(Node::text(literal.to_string()));
+            return Ok(());
+        }
         let name = self.letters();
         match name.as_str() {
             "frac" => {

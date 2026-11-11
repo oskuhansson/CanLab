@@ -189,8 +189,7 @@ fn the_corpus_behaves_as_documented() {
                 failures.push(case.document);
                 continue;
             }
-        };
-        let (expected, actual, ok) = check(&field, &case.expect);
+        };        let (expected, actual, ok) = check(&field, &case.expect);
         println!(
             "| `{}` | {} | {} | {}{} |",
             case.document,
@@ -276,4 +275,51 @@ fn check(field: &MathField, expect: &Expect) -> (String, String, bool) {
             (format!("{want}"), format!("{got}"), ok)
         }
     }
+}
+
+/// Every single-line case must read back from its own printed LaTeX.
+///
+/// "LaTeX is the interchange format" is only true if printing and reading agree,
+/// and the pane the user copies from is exactly that printed form. A case that
+/// prints something the app cannot read again is a case whose LaTeX is a dead end.
+///
+/// Multi-line documents are skipped: their printed form is a `cases` block, and
+/// the reader for that is a separate question.
+#[test]
+fn every_single_line_case_round_trips_through_its_own_latex() {
+    let mut failures = Vec::new();
+    for case in cases() {
+        let lines: Vec<String> = case.document.split('|').map(str::to_string).collect();
+        let Ok(field) = MathField::from_latex_lines(&lines) else {
+            continue;
+        };
+        if lines.len() != 1 {
+            continue;
+        }
+        let printed = field.to_latex();
+        if printed.is_empty() {
+            continue;
+        }
+        let Ok(reloaded) = MathField::from_latex(&printed) else {
+            failures.push(format!(
+                "{}: printed `{}`, which cannot be read back",
+                case.document, printed
+            ));
+            continue;
+        };
+        let before = field.to_expr().map(|value| canlab_tex::to_latex(&value));
+        let after = reloaded.to_expr().map(|value| canlab_tex::to_latex(&value));
+        if before != after {
+            failures.push(format!(
+                "{}: printed `{}`, which reads back as {:?} instead of {:?}",
+                case.document, printed, after, before
+            ));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} case(s) do not survive their own LaTeX:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }
