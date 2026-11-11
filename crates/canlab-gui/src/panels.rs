@@ -574,6 +574,15 @@ fn result_card(app: &CasApp, ui: &mut Ui) {
         );
     } else {
         result_body(app, ui);
+        // The decimal belongs under the exact form, not instead of it.
+        if let Some(approximation) = &app.approximation {
+            ui.add_space(2.0);
+            ui.label(
+                RichText::new(approximation.as_str())
+                    .small()
+                    .color(crate::theme::weak()),
+            );
+        }
     }
 }
 
@@ -1556,6 +1565,22 @@ fn plot_equations(
     let mut expressions: Vec<canlab_core::Expr> = Vec::new();
     let mut surfaces = 0usize;
     for (left, right) in equations {
+        // `s = 1` states a parameter's value; it is not a curve. Plotting it would
+        // draw the whole plane, because with `s = 1` the relation holds everywhere.
+        if let Some(right) = right {
+            let assigned = match (left.as_symbol(), right.as_number()) {
+                (Some(symbol), Some(_)) => Some(symbol),
+                _ => match (left.as_number(), right.as_symbol()) {
+                    (Some(_), Some(symbol)) => Some(symbol),
+                    _ => None,
+                },
+            };
+            if let Some(symbol) = assigned {
+                if app.parameters.iter().any(|parameter| parameter.name == symbol) {
+                    continue;
+                }
+            }
+        }
         let mut symbols = Vec::new();
         crate::free_symbols(left, &mut symbols);
         if let Some(right) = right {

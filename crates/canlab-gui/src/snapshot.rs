@@ -41,7 +41,7 @@ fn frame_lock() -> std::sync::MutexGuard<'static, ()> {
 /// fonts, which is a different picture from the one a reader sees — and it was
 /// the theme's font fallback that the first missing-glyph panic was asking for.
 fn harness_for(app: &mut CasApp) -> egui_kittest::Harness<'_> {
-    let mut harness = egui_kittest::Harness::builder()
+    let harness = egui_kittest::Harness::builder()
         .with_size(egui::vec2(1180.0, 760.0))
         .build_ui(|ui| app.draw(ui));
     // 0.36 has no `with_context_setup`, but the context is a public field. The

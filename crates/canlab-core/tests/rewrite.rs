@@ -186,3 +186,47 @@ fn simplify_is_idempotent() {
     let twice = simplify(&once);
     assert_eq!(once, twice, "a second pass must not find anything to do");
 }
+
+#[test]
+fn a_square_root_times_itself_is_the_number() {
+    // √2 · √2 = 2. The rule matches the two factors structurally, so the rest
+    // of the product is untouched.
+    let root_two = pow(int(2), ratio(1, 2));
+    let product = mul(vec![int(3), root_two.clone(), root_two]);
+    let simplified = check("√2 · √2", product, &no_variables());
+    assert_eq!(simplified, int(6), "3·√2·√2 is 6");
+}
+
+#[test]
+fn the_standard_angles_are_exact() {
+    let pi = sym("pi");
+    let sixth = mul(vec![ratio(1, 6), pi.clone()]);
+    let quarter = mul(vec![ratio(1, 4), pi.clone()]);
+    let third = mul(vec![ratio(1, 3), pi.clone()]);
+    let half_turn = mul(vec![ratio(1, 2), pi.clone()]);
+
+    assert_eq!(simplify(&call("sin", sixth.clone())), ratio(1, 2));
+    assert_eq!(simplify(&call("cos", third.clone())), ratio(1, 2));
+    assert_eq!(simplify(&call("cos", half_turn)), int(0));
+    assert_eq!(simplify(&call("tan", quarter.clone())), int(1));
+    // √2/2 and √3/3 are equal in size to the sine and tangent they replace,
+    // which is why the walk accepts a rewrite that does not shrink.
+    assert_eq!(
+        simplify(&call("sin", quarter)),
+        mul(vec![pow(int(2), ratio(1, 2)), ratio(1, 2)])
+    );
+    assert_eq!(
+        simplify(&call("tan", sixth)),
+        mul(vec![pow(int(3), ratio(1, 2)), ratio(1, 3)])
+    );
+
+    // Numerically, against the true values.
+    agree("sin π/6", &call("sin", mul(vec![ratio(1, 6), pi.clone()])), &ratio(1, 2), &no_variables());
+}
+
+#[test]
+fn an_angle_that_is_not_standard_is_left_alone() {
+    let argument = mul(vec![ratio(1, 7), sym("pi")]);
+    let expression = call("sin", argument);
+    assert_eq!(simplify(&expression), expression, "π/7 has no exact value here");
+}

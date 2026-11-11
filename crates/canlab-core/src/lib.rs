@@ -11,6 +11,7 @@
 //! 3. Numbers are exact until something explicitly asks for a float. `2` and
 //!    `2.0` are different values and both survive a round trip.
 
+pub mod approx;
 pub mod eval;
 pub mod expr;
 pub mod normalize;

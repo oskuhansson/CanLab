@@ -63,7 +63,10 @@ pub fn simplify_with(expression: &Expr, rules: &[Rule], budget: usize) -> Expr {
         if seen.contains(&next) {
             break;
         }
-        if cost(&next) >= cost(&current) {
+        // Strictly bigger is refused; equal is allowed, because the exact value
+        // of `sin(`π/4)` is `√2/2` and that is the same size as the sine. A
+        // cycle is stopped by the repeat check rather than by the cost.
+        if cost(&next) > cost(&current) {
             break;
         }
         seen.push(next.clone());
@@ -254,7 +257,60 @@ static RULES: &[Rule] = &[
             None
         },
     },
+    Rule {
+        name: "a square root times itself",
+        apply: |expression| {
+            let ExprNode::Mul(factors) = &**expression else {
+                return None;
+            };
+            for (index, left) in factors.iter().enumerate() {
+                let Some(left_argument) = square_root_argument(left) else {
+                    continue;
+                };
+                for (other_index, right) in factors.iter().enumerate() {
+                    if other_index <= index {
+                        continue;
+                    }
+                    let Some(right_argument) = square_root_argument(right) else {
+                        continue;
+                    };
+                    if left_argument != right_argument {
+                        continue;
+                    }
+                    // √u · √u = u, and the rest of the product is untouched.
+                    let mut rest: Vec<Expr> = factors
+                        .iter()
+                        .enumerate()
+                        .filter(|(position, _)| *position != index && *position != other_index)
+                        .map(|(_, factor)| factor.clone())
+                        .collect();
+                    rest.push(left_argument.clone());
+                    return Some(ExprNode::mul_raw(rest));
+                }
+            }
+            None
+        },
+    },
+    Rule {
+        name: "trigonometric value at a standard angle",
+        apply: |expression| {
+            for name in ["sin", "cos", "tan"] {
+                if let Some(value) = trig_exact(expression, name) {
+                    return Some(value);
+                }
+            }
+            None
+        },
+    },
 ];
+
+/// The u of √u, when the factor is a square root.
+fn square_root_argument(expression: &Expr) -> Option<&Expr> {
+    let ExprNode::Pow(base, exponent) = &**expression else {
+        return None;
+    };
+    is_half(exponent).then_some(base)
+}
 
 /// Apply `rule` to a call of `name` with exactly one argument.
 fn match_function(
@@ -307,6 +363,80 @@ fn trig_of_pi(expression: &Expr, name: &str, exact: i64) -> Option<Expr> {
         is_symbol(argument, "pi").then(|| ExprNode::int(exact))
     })
 }
+
+/// A rational multiple of π, when the argument is one.
+///
+/// `π/6` reaches the rule as `Mul([Rat(1,6), π])`; `π` alone as the symbol. Any
+/// other shape is not a standard angle and the rule declines.
+fn pi_multiple(expression: &Expr) -> Option<Number> {
+    match &**expression {
+        ExprNode::Sym(symbol) if same(symbol, "pi") => Some(Number::one()),
+        ExprNode::Mul(factors) => {
+            let mut multiplier = Number::one();
+            let mut pies = 0;
+            for factor in factors {
+                match &**factor {
+                    ExprNode::Sym(symbol) if same(symbol, "pi") => pies += 1,
+                    _ => {
+                        multiplier = multiplier.mul(factor.as_number()?);
+                    }
+                }
+            }
+            (pies == 1).then_some(multiplier)
+        }
+        _ => None,
+    }
+}
+
+/// `sin`, `cos` or `tan` at a standard angle, exactly.
+///
+/// The values a school exercise is expected to know: the first-quadrant angles,
+/// the axes, and `π`. Anything else — `π/7`, `2π/3` — is left to the numeric
+/// path rather than given a decimal dressed up as an exact answer.
+fn trig_exact(expression: &Expr, name: &str) -> Option<Expr> {
+    let ExprNode::Fn(function, arguments) = &**expression else {
+        return None;
+    };
+    if !same(function, name) || arguments.len() != 1 {
+        return None;
+    }
+    let multiple = pi_multiple(&arguments[0])?;
+    let key = (name, multiple.clone());
+    let value = match key {
+        _ if name == "sin" && is_ratio(&multiple, 1, 6) => Some(ratio_half()),
+        _ if name == "sin" && is_ratio(&multiple, 1, 4) => Some(root_over(2, 2)),
+        _ if name == "sin" && is_ratio(&multiple, 1, 3) => Some(root_over(3, 2)),
+        _ if name == "sin" && is_ratio(&multiple, 1, 2) => Some(ExprNode::int(1)),
+        _ if name == "cos" && is_ratio(&multiple, 1, 6) => Some(root_over(3, 2)),
+        _ if name == "cos" && is_ratio(&multiple, 1, 4) => Some(root_over(2, 2)),
+        _ if name == "cos" && is_ratio(&multiple, 1, 3) => Some(ratio_half()),
+        _ if name == "cos" && is_ratio(&multiple, 1, 2) => Some(ExprNode::int(0)),
+        _ if name == "tan" && is_ratio(&multiple, 1, 6) => Some(root_over(3, 3)),
+        _ if name == "tan" && is_ratio(&multiple, 1, 4) => Some(ExprNode::int(1)),
+        _ if name == "tan" && is_ratio(&multiple, 1, 3) => {
+            Some(ExprNode::pow_raw(ExprNode::int(3), ExprNode::num(Number::ratio(1, 2))))
+        }
+        _ => None,
+    };
+    value
+}
+
+fn is_ratio(number: &Number, numerator: i128, denominator: i128) -> bool {
+    matches!(number, Number::Rat(n, d) if *n == numerator && *d == denominator)
+}
+
+fn ratio_half() -> Expr {
+    ExprNode::num(Number::ratio(1, 2))
+}
+
+/// `√root / denominator`.
+fn root_over(root: i64, denominator: i64) -> Expr {
+    ExprNode::mul_raw(vec![
+        ExprNode::pow_raw(ExprNode::int(root), ExprNode::num(Number::ratio(1, 2))),
+        ExprNode::num(Number::ratio(1, denominator)),
+    ])
+}
+
 
 fn call(name: &str, argument: Expr) -> Expr {
     ExprNode::fn_raw(SymbolId::intern(name), vec![argument])

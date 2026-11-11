@@ -26,7 +26,7 @@ use std::time::Instant;
 
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass};
-use canlab_core::{Expr, ExprNode, Hold, SymbolId, expr::node};
+use canlab_core::{Expr, ExprNode, Hold, Number, SymbolId, expr::node};
 use canlab_input::{Definitions, MathField, Node, ToExprError};
 use canlab_plot::{Curve, Intersection};
 use canlab_tex::to_latex;
@@ -211,6 +211,9 @@ struct CasApp {
     definitions: Definitions,
     /// Definitions the document tried to make and could not, with the reason.
     definition_problems: Vec<(String, String)>,
+    /// The decimal beside an exact answer, when it has one. 2/3 shows ≈ 0.667;
+    /// x = √2 shows ≈ 1.41; an integer shows nothing, because it needs nothing.
+    approximation: Option<String>,
     /// Values for the variables that are not on an axis.
     parameters: Vec<Parameter>,
     /// Symbols that are a whole side of an equation and not on an axis.
@@ -259,6 +262,7 @@ impl CasApp {
             paints: 0,
             definitions: Definitions::default(),
             definition_problems: Vec::new(),
+            approximation: None,
             parameters: Vec::new(),
             third_coordinates: Vec::new(),
             intersections: Vec::new(),
@@ -342,6 +346,7 @@ impl CasApp {
         self.error = None;
         self.curves.clear();
         self.intersections.clear();
+        self.approximation = None;
         self.solve = SolveState::Idle;
 
         // Definitions first: every later read depends on them.
@@ -533,6 +538,35 @@ impl CasApp {
         out
     }
 
+    /// Equations of the form `s = 1`: a parameter the document itself defines.
+    ///
+    /// A system is allowed to state the value of its own parameter, and when it
+    /// does, that value is the document's rather than the default 1.0. `x² + y² = s`
+    /// with `s = 1` is a circle, not a surface: the second line is what makes the
+    /// first plottable, so the plot must not treat `s` as a third coordinate when
+    /// a row has already pinned it down.
+    fn assigned_parameters(&self) -> Vec<(SymbolId, Number)> {
+        let mut out: Vec<(SymbolId, Number)> = Vec::new();
+        for (left, right) in &self.equations {
+            let Some(right) = right else {
+                continue;
+            };
+            let assigned = match (left.as_symbol(), right.as_number()) {
+                (Some(symbol), Some(number)) => Some((symbol, number.clone())),
+                _ => match (left.as_number(), right.as_symbol()) {
+                    (Some(number), Some(symbol)) => Some((symbol, number.clone())),
+                    _ => None,
+                },
+            };
+            if let Some((symbol, number)) = assigned {
+                if !out.iter().any(|(seen, _)| *seen == symbol) {
+                    out.push((symbol, number));
+                }
+            }
+        }
+        out
+    }
+
     /// Symbols that are a whole side of an equation and are not on an axis.
     ///
     /// The difference this draws is between a *family* and a *surface*.
@@ -542,11 +576,15 @@ impl CasApp {
     /// does not plot the equation — it plots one slice of it and says nothing.
     /// The test is structural on purpose: guessing from the letter (`z` versus
     /// `r`) would be a rule that works until someone calls their radius `z`.
+    ///
+    /// A symbol the document assigns (`s = 1`) is not a coordinate: it has a
+    /// value, so it is a parameter with that value.
     fn third_coordinate_symbols(&self) -> Vec<SymbolId> {
         let axes: Vec<SymbolId> = [self.x_axis, self.y_axis]
             .into_iter()
             .flatten()
             .collect();
+        let assigned = self.assigned_parameters();
         let axis_or_constant = |expression: &Expr| {
             expression
                 .as_symbol()
@@ -562,7 +600,10 @@ impl CasApp {
                 let Some(symbol) = side.as_symbol() else {
                     continue;
                 };
-                if !axes.contains(&symbol) && !axis_or_constant(other) && !out.contains(&symbol) {
+                if axes.contains(&symbol) || assigned.iter().any(|(seen, _)| *seen == symbol) {
+                    continue;
+                }
+                if !axis_or_constant(other) && !out.contains(&symbol) {
                     out.push(symbol);
                 }
             }
@@ -576,15 +617,30 @@ impl CasApp {
     /// what it used to be forced to whether anyone wanted it or not. A symbol
     /// that is a whole side of an equation is not a parameter at all — see
     /// [`Self::third_coordinate_symbols`] — so it gets no value and no slider.
+    /// A symbol the document assigns gets the document's value.
     pub fn refresh_parameters(&mut self) {
         let coordinates = self.third_coordinate_symbols();
+        let assigned = self.assigned_parameters();
         let axes: Vec<SymbolId> = [self.x_axis, self.y_axis]
             .into_iter()
             .flatten()
             .collect();
         let mut next: Vec<Parameter> = Vec::new();
         for variable in &self.free_vars {
-            if axes.contains(variable) || coordinates.contains(variable) {
+            if axes.contains(variable) {
+                continue;
+            }
+            // The document's value wins over the slider: `s = 1` is a statement,
+            // not a default. The control stays, so the value can be tried out;
+            // the next re-parse puts it back.
+            if let Some((_, number)) = assigned.iter().find(|(seen, _)| seen == variable) {
+                next.push(Parameter {
+                    name: *variable,
+                    value: number.to_f64(),
+                });
+                continue;
+            }
+            if coordinates.contains(variable) {
                 continue;
             }
             let value = self
@@ -1113,6 +1169,7 @@ impl CasApp {
             JobOutcome::Value(expr) => {
                 self.result_latex = to_latex(&expr);
                 self.result_plain = node(&expr).to_string();
+                self.approximation = approximation_of(&expr);
                 self.status = format!("{label}: done");
                 self.push_history(&label, self.result_latex.clone());
             }
@@ -1131,6 +1188,12 @@ impl CasApp {
                     _ => solution_lines(&solutions, var).join(",\\quad "),
                 };
                 self.result_plain = solution_lines(&solutions, var).join(", ");
+                self.approximation = match &solutions {
+                    canlab_solver::Solutions::Values(values) if values.len() == 1 => {
+                        approximation_of(&values[0])
+                    }
+                    _ => None,
+                };
                 self.status = format!("{label}: {}", solution_count(&solutions));
                 self.solve = SolveState::Solved { var, solutions };
                 self.push_history(&label, self.result_latex.clone());
@@ -1487,6 +1550,18 @@ fn default_field() -> MathField {
     field
 }
 
+/// The decimal beside an exact answer.
+///
+/// None when the answer is already a whole number, and when it has a free
+/// variable — a parametric answer has no single value and inventing one by
+/// evaluating at 1 would be a lie with a decimal point.
+fn approximation_of(expression: &Expr) -> Option<String> {
+    if canlab_core::approx::is_exact_decimal(expression) {
+        return None;
+    }
+    canlab_core::approx::decimal_of(expression, 3).map(|decimal| format!("≈ {decimal}"))
+}
+
 /// One line per answer, in the notation the panels use.
 ///
 /// A set of values prints as `x = a` per value, because that is how it is read
@@ -1819,6 +1894,57 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_system_may_state_its_own_parameter_and_still_plot() {
+        // { x² + y² = s, s = 1 } is a circle. The second line is what makes the
+        // first plottable; treating s as a third coordinate would say "surface"
+        // about a system that has just finished saying what s is.
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex_lines(&[
+            String::from("x^2+y^2=s"),
+            String::from("s=1"),
+        ])
+        .expect("a system that defines its own parameter");
+        app.recompute();
+        crate::panels::build_curve(&mut app);
+        assert!(!app.curves.is_empty(), "plot note: {}", app.plot_note);
+        assert_eq!(app.parameters.len(), 1, "note: {}", app.plot_note);
+        assert_eq!(app.parameters[0].name.as_str().to_string(), "s");
+        assert_eq!(app.parameters[0].value, 1.0);
+        assert!(app.third_coordinates.is_empty(), "s is assigned, not a coordinate");
+    }
+    #[test]
+    fn a_fractional_answer_shows_a_decimal_beside_it() {
+        // 2x = 1 is x = 1/2, and a reader wants 0.5 without doing the
+        // division. An integer answer gets no second form, because it needs none.
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex("2*x=1").expect("a line");
+        app.recompute();
+        app.start_solve();
+
+        let ctx = egui::Context::default();
+        for _ in 0..400 {
+            app.poll_jobs(&ctx);
+            if !matches!(app.solve, SolveState::Idle) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(app.approximation.as_deref(), Some("≈ 0.5"));
+
+        let mut whole = CasApp::new();
+        whole.field = MathField::from_latex("2*x=4").expect("a line");
+        whole.recompute();
+        whole.start_solve();
+        for _ in 0..400 {
+            whole.poll_jobs(&ctx);
+            if !matches!(whole.solve, SolveState::Idle) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(whole.approximation, None, "2 is already a decimal");
+    }
     #[test]
     fn a_two_variable_equation_answers_in_the_chosen_variable() {
         // `x² + y² = 1` used to be declined as "two variables". It has two
