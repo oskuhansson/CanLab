@@ -14,6 +14,7 @@
 pub mod eval;
 pub mod expr;
 pub mod normalize;
+pub mod rewrite;
 pub mod number;
 pub mod symbol;
 

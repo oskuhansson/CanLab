@@ -108,9 +108,12 @@ fn polynomial(terms: Vec<Expr>) -> Expr {
 }
 
 impl Solver for NativeSolver {
-    /// The expression is already canonical; there is nothing to rewrite.
+    /// The expression is canonical, so there is nothing to *normalize* — but the
+    /// rewrite rules know identities the canonical form does not: `ln e → 1`,
+    /// `|x|² → x²`, `sin² + cos² → 1`. This is the button doing something for the
+    /// first time.
     fn simplify(&self, e: &Expr) -> Result<Expr, SolverError> {
-        Ok(e.clone())
+        Ok(canlab_core::rewrite::simplify(e))
     }
 
     /// `d/dvar`, by the real rules rather than by polynomial bookkeeping.
@@ -281,10 +284,30 @@ impl Solver for NativeSolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use canlab_core::{int, sym};
+    use canlab_core::{add, expr::ExprNode, int, mul, pow, sym};
 
     fn x() -> Expr {
         sym("x")
+    }
+
+    #[test]
+    fn simplify_uses_the_rewrite_rules() {
+        // `ln e + 1` is `2`, and the button that used to hand the expression
+        // back unchanged now says so.
+        let expression = add(vec![
+            ExprNode::fn_raw(SymbolId::intern("ln"), vec![sym("e")]),
+            int(1),
+        ]);
+        assert_eq!(NativeSolver.simplify(&expression).unwrap(), int(2));
+    }
+
+    #[test]
+    fn simplify_does_not_invent_an_answer() {
+        // Nothing here is an identity, so nothing changes: a rewrite that made
+        // this smaller would be a bug, not a simplification.
+        let expression = add(vec![pow(sym("x"), int(2)), int(1)]);
+        assert_eq!(NativeSolver.simplify(&expression).unwrap(), expression);
+        let _ = mul(vec![int(2), x()]);
     }
 
     fn var() -> SymbolId {
