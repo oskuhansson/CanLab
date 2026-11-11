@@ -716,6 +716,11 @@ fn variables_body(app: &mut CasApp, ui: &mut Ui) {
     ui.separator();
     ui.add_space(8.0);
 
+    // Values the page states. They are not *free*, so they are listed once, as
+    // values, and not again as variables: `a` in `a = 2b`, `b = 3` is 6, and
+    // calling it a free variable would invite a reader to look for a knob.
+    let stated = app.document_assignments();
+
     ui.label(
         RichText::new("FREE VARIABLES")
             .small()
@@ -723,14 +728,20 @@ fn variables_body(app: &mut CasApp, ui: &mut Ui) {
             .color(crate::theme::weak()),
     );
     ui.add_space(4.0);
-    if app.free_vars.is_empty() {
+    let free: Vec<canlab_core::SymbolId> = app
+        .free_vars
+        .iter()
+        .copied()
+        .filter(|variable| !stated.iter().any(|(symbol, _)| symbol == variable))
+        .collect();
+    if free.is_empty() {
         ui.label(
             RichText::new("No free variables.")
                 .small()
                 .color(crate::theme::weak()),
         );
     } else {
-        for var in &app.free_vars {
+        for var in &free {
             ui.horizontal(|ui| {
                 let (dot, _) = ui.allocate_exact_size(vec2(6.0, 6.0), Sense::hover());
                 ui.painter().circle_filled(dot.center(), 2.5, crate::theme::accent());
@@ -742,7 +753,6 @@ fn variables_body(app: &mut CasApp, ui: &mut Ui) {
     // Values the page states, listed as values. `b = 3` is a statement, not a
     // choice, so it is not a slider — and when the page says `a = 2b` the reader
     // can see that the answer is 6 rather than a knob they did not touch.
-    let stated = app.document_assignments();
     if !stated.is_empty() {
         ui.add_space(10.0);
         ui.label(
