@@ -74,6 +74,15 @@ if (-not $RemoteTarget) { $RemoteTarget = "/home/$user/canlab-target" }
 $sshBase = @('-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
     '-o', 'StrictHostKeyChecking=accept-new', '-p', "$port")
 
+# Prefer the dedicated build key that `authorise-key.ps1` creates: revoking it
+# never touches the key you log in with by hand.
+$identity = "$env:USERPROFILE\.ssh\id_canlab"
+$ioArgs = @()
+if (Test-Path $identity) {
+    $ioArgs = @('-i', $identity)
+    $sshBase += $ioArgs
+}
+
 function Invoke-Remote {
     param([string]$Script, [switch]$AllowFailure)
     Write-Verbose "remote: $Script"
@@ -103,7 +112,7 @@ function Sync-Tree {
     }
     $size = [math]::Round((Get-Item $localTarball).Length / 1MB, 2)
     Write-Host "copying $size MiB to ${target}:$remoteTarball ..." -ForegroundColor Cyan
-    & scp -o BatchMode=yes -o ConnectTimeout=10 -P "$port" $localTarball "${target}:$remoteTarball"
+    & scp @ioArgs -o BatchMode=yes -o ConnectTimeout=10 -P "$port" $localTarball "${target}:$remoteTarball"
     if ($LASTEXITCODE -ne 0) { throw "scp failed with $LASTEXITCODE" }
     Remove-Item $localTarball -ErrorAction SilentlyContinue
     $unpack = @(
@@ -177,7 +186,7 @@ switch ($Action) {
         $artifact = "$RemoteTarget/x86_64-pc-windows-msvc/release/canlab-gui.exe"
         $local = Join-Path $Out 'canlab-gui.exe'
         Write-Host "copying the executable back to $local ..." -ForegroundColor Cyan
-        & scp -o BatchMode=yes -o ConnectTimeout=10 -P "$port" "${target}:$artifact" $local
+        & scp @ioArgs -o BatchMode=yes -o ConnectTimeout=10 -P "$port" "${target}:$artifact" $local
         if ($LASTEXITCODE -ne 0) { throw "the executable did not come back: check $artifact" }
         Write-Host ("built: {0:N1} MiB" -f ((Get-Item $local).Length / 1MB)) -ForegroundColor Green
     }
@@ -194,7 +203,7 @@ switch ($Action) {
         if (-not $Out) { $Out = Join-Path $root 'target\remote\snapshots' }
         New-Item -ItemType Directory -Force -Path $Out | Out-Null
         Write-Host "copying the frames back to $Out ..." -ForegroundColor Cyan
-        & scp -o BatchMode=yes -o ConnectTimeout=10 -P "$port" "${target}:$RemotePath/crates/canlab-gui/tests/snapshots/*.png" $Out
+        & scp @ioArgs -o BatchMode=yes -o ConnectTimeout=10 -P "$port" "${target}:$RemotePath/crates/canlab-gui/tests/snapshots/*.png" $Out
         if ($LASTEXITCODE -ne 0) { throw "no frames came back" }
         Get-ChildItem $Out -Filter *.png | ForEach-Object {
             Write-Host ("  {0} ({1:N0} KiB)" -f $_.Name, ($_.Length / 1KB))

@@ -224,6 +224,12 @@ impl Solver for NativeSolver {
             if let Some(values) = crate::exponential::solve_exponential(self, eq, var) {
                 return Ok(values);
             }
+            // A sum of logarithms: `log₂x + log₂(x−2) = 3`. The roots outside the
+            // domain are dropped here; W2.4's report of a *rejected* root needs a
+            // place in `Solutions` and is not in this one.
+            if let Some((kept, _rejected)) = crate::logarithmic::solve_logarithmic(self, eq, var) {
+                return Ok(kept);
+            }
             // It may still be one in `var` with symbolic coefficients — `x² + y² = 1`
             // has two answers in `x` — and that is the case the editor's autofill
             // needs.
@@ -307,6 +313,13 @@ impl Solver for NativeSolver {
                     Ok(Solutions::None)
                 } else {
                     Ok(Solutions::Values(values))
+                };
+            }
+            if let Some((kept, _rejected)) = crate::logarithmic::solve_logarithmic(self, eq, var) {
+                return if kept.is_empty() {
+                    Ok(Solutions::None)
+                } else {
+                    Ok(Solutions::Values(kept))
                 };
             }
             return crate::parametric::solve_parametric(eq, var)

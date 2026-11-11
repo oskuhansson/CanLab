@@ -1,0 +1,11 @@
+# W2.4, the logarithmic half: combining the logarithms gives x(x−2) = 8, whose
+# roots are 4 and −2. Only 4 solves the equation as written — log₂(−2) is not a
+# real number — so the row checks that the extraneous root is gone, not merely
+# that an answer exists.
+id = "log-combine-two-roots"
+subject = "math"
+capability = "solve.logarithmic"
+source = "docs/corpus.md §5 — a contract row for the whole pipeline, not an exam problem"
+document = '\log_2 x + \log_2(x-2) = 3'
+expect.exact = '\left\{4\right\}'
+note = "The rejected root is −2. It is computed and then removed by substituting back into each logarithm's domain; reporting it as rejected is still W2.4's open half."
