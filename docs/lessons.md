@@ -291,3 +291,29 @@ in a row is a literal string**, `document`, `expect.*` and `note` alike. And a
 reminder of why the loader refuses instead of guessing: a row that cannot be read
 must never be counted as a pass.
 
+## The bars around |x−1| were dropped
+
+**What happened.** While building inequalities, `|x−1| < 2` reached the algebra as
+`x−1 < 2`. The absolute value did not become a wrong interval — it silently
+stopped being an absolute value, and the answer would have been `(−∞, 3)`, which is
+the answer to a different question.
+
+**Why the code did it.** The field stores `|…|` as a *delimiter group*: the same
+node as `(…)`, with a different bar character. The value reader had a case for
+"group, read the body" and no case for "absolute value", so the bars fell through
+into grouping. Nothing was lying about what it did — the reader never claimed to
+know about `abs` — but the structure carried a meaning the reader had no rule for,
+and the default rule (group) was the wrong one.
+
+**Why no test caught it.** No acceptance row contained a pair of bars. The tracer
+and the plot handle `|`, so the notation was known to work *somewhere*; it was the
+value reader, a different path with a different table of node kinds, that had never
+been asked. And the input suites were organised by what the user types
+(`signs.rs`, `display_latex.rs`, `definitions.rs`) — no file had "notation that
+changes the meaning of its contents".
+
+**What changed.** `Delim::Abs` reads as `abs(…)`, and the rule for the class: **a
+delimiter that changes meaning is a construct, not a decoration.** Every node kind
+the field can produce needs a value rule or a refusal — falling through to the
+generic case is how `|x|` becomes `x`.
+
