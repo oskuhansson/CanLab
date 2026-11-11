@@ -21,12 +21,14 @@
 //! remainder basis to mean anything, and nothing in the plan asks for it yet; a
 //! wrong quotient is worse than a refusal.
 
+pub mod expr;
 pub mod poly;
 pub mod univariate;
 
+pub use expr::{FactorError, cancel, collect, divide, expand, factor, free_symbols};
 pub use poly::Poly;
 
-use canlab_core::{Expr, ExprNode, Number};
+use canlab_core::{Expr, ExprNode, Number, SymbolId};
 
 /// Everything a sparse polynomial needs from its coefficients.
 ///
@@ -50,6 +52,14 @@ pub trait Coeff: Clone + PartialEq + std::fmt::Debug {
 
     /// A `Number` as a coefficient, or `None` if this ring cannot hold it.
     fn from_number(number: &Number) -> Option<Self>;
+
+    /// A symbol that is not one of the polynomial's variables, taken as a
+    /// coefficient.
+    ///
+    /// `Expr` can hold it; `Number` cannot, and saying so is the difference
+    /// between `collect(x² + a·x, x)` working with symbolic coefficients and it
+    /// being silently refused.
+    fn from_symbol(symbol: SymbolId) -> Option<Self>;
 
     /// Print the coefficient as an expression. A ring that cannot say what its
     /// elements mean has no business being a coefficient of a printed polynomial.
@@ -95,6 +105,11 @@ impl Coeff for Number {
 
     fn from_number(number: &Number) -> Option<Self> {
         Some(number.clone())
+    }
+
+    fn from_symbol(_symbol: SymbolId) -> Option<Self> {
+        // A number cannot absorb `a` in `a·x`.
+        None
     }
 
     fn to_expr(&self) -> Expr {
@@ -151,6 +166,10 @@ impl Coeff for Expr {
 
     fn from_number(number: &Number) -> Option<Self> {
         Some(ExprNode::num(number.clone()))
+    }
+
+    fn from_symbol(symbol: SymbolId) -> Option<Self> {
+        Some(ExprNode::sym(symbol))
     }
 
     fn to_expr(&self) -> Expr {

@@ -231,10 +231,13 @@ impl<C: Coeff> Poly<C> {
     pub fn from_expr(expression: &Expr, vars: &[SymbolId]) -> Option<Self> {
         match &**expression {
             ExprNode::Num(number) => Some(Self::constant(vars.to_vec(), C::from_number(number)?)),
-            ExprNode::Sym(symbol) => {
-                let index = vars.iter().position(|variable| variable == symbol)?;
-                Self::variable(vars.to_vec(), index)
-            }
+            ExprNode::Sym(symbol) => match vars.iter().position(|variable| variable == symbol) {
+                Some(index) => Self::variable(vars.to_vec(), index),
+                // A symbol outside the list is a coefficient when the ring can
+                // hold one — that is what `Poly<Expr>` is for — and a refusal
+                // when it cannot, which is `Poly<Number>`'s answer.
+                None => C::from_symbol(*symbol).map(|c| Self::constant(vars.to_vec(), c)),
+            },
             ExprNode::Add(terms) => {
                 let mut sum = Self::zero(vars.to_vec());
                 for term in terms {

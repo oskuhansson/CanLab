@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use canlab_core::Number;
+use canlab_core::{Number, SymbolId};
 
 use crate::{Coeff, Monomial, Poly};
 
@@ -208,8 +208,7 @@ fn determinant<C: Coeff>(matrix: &mut [Vec<C>]) -> C {
 }
 
 /// Every divisor of a rational number, positive and negative.
-fn divisors(number: &Number) -> Option<Vec<Number>> {
-    let value = number.to_f64();
+fn divisors(number: &Number) -> Option<Vec<Number>> {    let value = number.to_f64();
     if !value.is_finite() || value == 0.0 {
         return None;
     }
@@ -228,4 +227,20 @@ fn divisors(number: &Number) -> Option<Vec<Number>> {
         }
     }
     Some(out)
+}
+
+/// Build a univariate polynomial from its coefficients, lowest power first.
+///
+/// The variables list must have exactly one entry; anything else is not a
+/// univariate polynomial and gets an empty polynomial rather than a panic, which
+/// the callers treat as a refusal.
+pub fn from_coefficients<C: Coeff>(vars: Vec<SymbolId>, coefficients: &[C]) -> Poly<C> {
+    let mut poly = Poly::zero(vars);
+    if poly.vars().len() != 1 {
+        return poly;
+    }
+    for (power, coefficient) in coefficients.iter().enumerate() {
+        poly.push(Monomial(vec![power as u32]), coefficient.clone());
+    }
+    poly
 }
