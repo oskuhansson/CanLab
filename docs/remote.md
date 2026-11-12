@@ -34,7 +34,7 @@ ssh-copy-id -p 2220 -i ~/.ssh/id_ed25519.pub oskar@100.88.227.20
 |---|---|
 | `test` | The pure-Rust crates (solver, poly, input, core, corpus, plot) compile with the cores the server has. Release by default: slower to compile once, much faster to run. |
 | `build` | `cargo xwin build` produces the **Windows** executable on Linux, so the ten-minute Bevy link is not paid here. The exe comes back to `target/remote/canlab-gui.exe`. |
-| `snapshots` | `egui_kittest` renders through `wgpu` with no window; on the server that is the 3080 rather than the integrated adapter. Frames land in `target/remote/snapshots/`. |
+| `snapshots` | `egui_kittest` renders through `wgpu` with no window; on the server that is the 3080 rather than the integrated adapter. Frames land in `target/remote/snapshots/`. The five snapshot tests are `#[cfg_attr(not(windows), ignore)]` because the references are Windows-rendered and this server has no symbol font, so the script passes `--include-ignored`; the frames it brings back are for looking at, not for replacing the references. |
 | `setup` | `rustup target add x86_64-pc-windows-msvc` and `cargo install cargo-xwin`, once. |
 
 ## How it gets the code there

@@ -182,6 +182,23 @@ fn solve_all_prints_the_library_solution_set() {
 }
 
 #[test]
+fn solve_all_says_where_a_numeric_answer_came_from() {
+    // `x^4 − x − 1` has two real roots and no exact form the native backend can
+    // name. The first line is the answer; the `≈` lines are the evidence. Before
+    // this, the command printed a bare `-0.7244… \cup 1.2207…`, which reads
+    // exactly like an exact answer.
+    let (ok, stdout, stderr) = canlab(&["solve-all", "x^4 - x - 1", "-v", "x"]);
+    assert!(ok, "solve-all failed: {stderr}");
+    let lines: Vec<&str> = stdout.lines().map(str::trim).collect();
+    assert_eq!(lines.len(), 3, "one answer line and two residuals: {stdout}");
+    assert!(lines[0].contains("1.2207"), "{stdout}");
+    for line in &lines[1..] {
+        assert!(line.contains('\u{2248}'), "no approximation mark: {line}");
+        assert!(line.contains("f(x) = "), "no residual: {line}");
+    }
+}
+
+#[test]
 fn solve_all_reports_a_decline_with_its_reason() {
     // `sin x − x² − 5` is below −4 everywhere: no closed form, and no root for
     // the native numeric fallback to find either. A decline is a normal answer:

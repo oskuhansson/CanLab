@@ -40,6 +40,20 @@ impl<C: Coeff> Poly<C> {
         Some((quotient, remainder))
     }
 
+    /// Divide exactly, or refuse.
+    ///
+    /// `None` when the division is not exact — a zero divisor, a non-zero
+    /// remainder, or a multivariate input. The remainder is the point: a caller
+    /// that wanted a quotient has no use for a quotient and a lie.
+    ///
+    /// This exists for Bareiss elimination, where every step divides by the
+    /// previous pivot and the division is exact by theorem. A `Some` here is
+    /// therefore a check on the theorem as much as on the inputs.
+    pub fn div_exact(&self, divisor: &Self) -> Option<Self> {
+        let (quotient, remainder) = self.div_rem(divisor)?;
+        remainder.is_zero().then_some(quotient)
+    }
+
     /// The greatest common divisor, monic when the ring allows it.
     ///
     /// Euclid's algorithm. Two zero polynomials have no divisor to return, and a

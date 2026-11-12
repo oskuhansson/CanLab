@@ -19,7 +19,7 @@ use canlab_corpus::run::{Provenance, RowResult, RunReport, run_batched};
 use canlab_corpus::{LoadError, Outcome, Row, batch, fetch, load_rows, report};
 use canlab_parse::parse_latex;
 use canlab_plot::{SampleOptions, SvgOptions, sample, to_svg};
-use canlab_solver::{NativeSolver, Solver};
+use canlab_solver::{NativeSolver, Solutions, Solver};
 use canlab_tex::to_latex;
 
 mod bench;
@@ -270,12 +270,38 @@ fn solve_all_command(args: &[String]) -> Result<(), String> {
     match backend().solve_all(&expr, var) {
         Ok(solutions) => {
             println!("{}", solutions.to_latex());
+            // `to_latex` prints an approximation as its number, because only
+            // the caller knows whether it is writing "x = 1.2207" or comparing
+            // two answers. The CLI *is* writing an answer, so otherwise
+            // `x^4 - x - 1` printed `-0.7244… \cup 1.2207…` and a reader had no
+            // way to tell it from an exact value — the residual is the evidence
+            // that it is not one, and it belongs beside the number.
+            for (value, residual) in approximations_of(&solutions) {
+                println!(
+                    "x \u{2248} {value}  (f(x) = {residual:.1e} of the function's scale)"
+                );
+            }
             Ok(())
         }
         Err(err) => Err(format!(
             "the solver could not give a solution set ({err}); the equation is\n  {} = 0",
             to_latex(&expr)
         )),
+    }
+}
+
+/// Every approximate member of an answer, outermost union first, as the number
+/// to print and the residual that says how good the number is.
+///
+/// A `Solutions` keeps its approximations as leaves of the answer, so a union of
+/// two numeric roots is two leaves and a union of a family and one is one leaf.
+fn approximations_of(solutions: &Solutions) -> Vec<(String, f64)> {
+    match solutions {
+        Solutions::Approximation { value, residual } => {
+            vec![(to_latex(value), *residual)]
+        }
+        Solutions::Union(members) => members.iter().flat_map(approximations_of).collect(),
+        _ => Vec::new(),
     }
 }
 

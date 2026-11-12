@@ -1,0 +1,18 @@
+[package]
+name = "canlab-optics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Metric geometry and photon transport for the Cherenkov detector simulation"
+
+[dependencies]
+canlab-core = { path = "../canlab-core" }
+canlab-parse = { path = "../canlab-parse" }
+canlab-tex = { path = "../canlab-tex" }
+canlab-solver = { path = "../canlab-solver" }
+
+[dev-dependencies]
+# `free_symbols` is how the validation test reads a parsed expression's
+# parameters out of the tree, which is what `Program::compile` needs. The crate
+# is a test-only dependency here: the library itself never needs a polynomial.
+canlab-poly = { path = "../canlab-poly" }

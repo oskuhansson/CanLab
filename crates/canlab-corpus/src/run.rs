@@ -304,7 +304,8 @@ impl RunReport {
 mod tests {
     use super::*;
     use crate::row::Subject;
-    use canlab_solver::NativeSolver;
+    use canlab_core::{Expr, SymbolId};
+    use canlab_solver::{NativeSolver, SolverError};
     use std::path::PathBuf;
 
     fn row(id: &str, document: &str, expect: Expect) -> Row {
@@ -391,13 +392,55 @@ mod tests {
         assert!(!outcome.is_pass());
     }
 
+    /// A backend that declines everything — a legitimate backend, since
+    /// `NotImplemented` is a normal answer, not a failure.
+    struct Declines;
+
+    impl Solver for Declines {
+        fn simplify(&self, _e: &Expr) -> Result<Expr, SolverError> {
+            Err(SolverError::NotImplemented)
+        }
+
+        fn diff(&self, _e: &Expr, _var: SymbolId) -> Result<Expr, SolverError> {
+            Err(SolverError::NotImplemented)
+        }
+
+        fn integrate(&self, _e: &Expr, _var: SymbolId) -> Result<Expr, SolverError> {
+            Err(SolverError::NotImplemented)
+        }
+
+        fn solve(&self, _eq: &Expr, _var: SymbolId) -> Result<Vec<Expr>, SolverError> {
+            Err(SolverError::NotImplemented)
+        }
+
+        fn limit(&self, _e: &Expr, _var: SymbolId, _at: &Expr) -> Result<Expr, SolverError> {
+            Err(SolverError::NotImplemented)
+        }
+
+        fn series(
+            &self,
+            _e: &Expr,
+            _var: SymbolId,
+            _at: &Expr,
+            _order: usize,
+        ) -> Result<Expr, SolverError> {
+            Err(SolverError::NotImplemented)
+        }
+    }
+
     #[test]
     fn a_refusal_row_passes_on_a_solver_decline_too() {
         // The refusal need not come from the reader: a backend that declines
         // is the same answer, and the row expects the decline.
+        //
+        // This used `x^3 = 2` and the native solver, expecting a decline. That
+        // stopped being true when the numeric scan landed — the native backend
+        // now answers `∛2` — and the test failed for a reason that had nothing
+        // to do with the rule it was written to hold. A stub backend tests the
+        // rule and cannot drift with the real one.
         let outcome = run_row(
             &row("a", "x^3 = 2", Expect::Refused("declined".into())),
-            &NativeSolver,
+            &Declines,
         );
         assert!(outcome.is_pass(), "{outcome:?}");
         assert!(outcome.got().contains("declined"), "{outcome:?}");
@@ -431,14 +474,34 @@ mod tests {
 
     #[test]
     fn a_declined_equation_is_a_failure_not_a_refusal_pass() {
-        // A cubic is outside the native backend, so an `exact` row fails with
-        // the decline visible; it is not silently a pass.
+        // The pre-ticked yellow corpus rows are English; this asks the same
+        // question in a language `document::ask` cannot answer, so it is the
+        // solver that declines. An `exact` row must then fail with the decline
+        // visible — not silently pass, and not be reported as a refusal.
+        let outcome = run_row(
+            &row("a", "x = 2", Expect::Exact("\\left\\{2\\right\\}".into())),
+            &Declines,
+        );
+        assert!(!outcome.is_pass());
+        assert!(outcome.got().contains("declined"), "{outcome:?}");
+    }
+
+    #[test]
+    fn a_numeric_answer_to_an_exact_row_fails_with_the_number_shown() {
+        // The row this replaced: `x^3 = 2` with an `exact` cubic-radical
+        // expectation used to fail by declining. Now the scan answers
+        // `1.2599…`, and a corpus row must still fail — a numeric answer is
+        // not the exact answer — with the number visible so the report says
+        // why. Before 0bbe5bc the answer came back as the bare `1.2599…`; a
+        // `Solutions::Approximation` now keeps its residual.
         let outcome = run_row(
             &row("a", "x^3 = 2", Expect::Exact("\\sqrt[3]{2}".into())),
             &NativeSolver,
         );
-        assert!(!outcome.is_pass());
-        assert!(outcome.got().contains("declined"), "{outcome:?}");
+        assert!(!outcome.is_pass(), "{outcome:?}");
+        let got = outcome.got().to_owned();
+        assert!(got.contains("1.2599"), "{got}");
+        assert!(!got.contains("declined"), "{got}");
     }
 
     #[test]

@@ -224,7 +224,11 @@ switch ($Action) {
         # The frames render headlessly through wgpu; UPDATE_SNAPSHOTS writes them
         # rather than comparing, because this machine's reference images were made
         # on a different adapter and a pixel diff across GPUs is not a bug.
-        $script = "$cargoPrelude && UPDATE_SNAPSHOTS=1 cargo test -p canlab-gui --release -j $jobs snapshot"
+        # --include-ignored is needed on Linux: the five tests are
+        # #[cfg_attr(not(windows), ignore)] because their references are
+        # Windows-rendered and this server has no symbol font, so without it they
+        # would be skipped and the wildcard below would fail to find anything.
+        $script = "$cargoPrelude && UPDATE_SNAPSHOTS=1 cargo test -p canlab-gui --release -j $jobs --include-ignored snapshot"
         Invoke-Remote $script
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         if (-not $Out) { $Out = Join-Path $root 'target\remote\snapshots' }
