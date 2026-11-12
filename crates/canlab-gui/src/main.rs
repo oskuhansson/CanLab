@@ -3117,6 +3117,17 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_dead_circumflex_is_a_power_only_when_no_text_arrived() {
+        // The rule, as a function of its inputs: the `^~` key opens an exponent
+        // when the frame produced no text (a dead key), and does nothing when the
+        // same key produced a character (shift+`]` is `}` on a US layout).
+        use crate::panels::is_dead_circumflex;
+        assert!(is_dead_circumflex(egui::Key::CloseBracket, true, false));
+        assert!(!is_dead_circumflex(egui::Key::CloseBracket, true, true));
+        assert!(!is_dead_circumflex(egui::Key::CloseBracket, false, false));
+        assert!(!is_dead_circumflex(egui::Key::A, true, false));
+    }
     /// Press Solve and wait for the background answer.
     fn solve_and_wait(app: &mut CasApp) {
         app.start_solve();

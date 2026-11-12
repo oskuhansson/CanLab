@@ -43,6 +43,7 @@ pub mod logarithmic;
 pub mod json;
 pub mod mock;
 pub mod native;
+pub mod nonlinear;
 pub mod parametric;
 pub mod solutions;
 pub mod system;
@@ -53,7 +54,7 @@ pub mod sympy;
 pub use json::{decode, decode_array, decode_solutions, encode, encode_solutions};
 pub use mock::MockSolver;
 pub use native::NativeSolver;
-pub use solutions::{Bound, Solutions};
+pub use solutions::{Bound, Point, Solutions, SystemAnswer};
 pub use system::{solve_system, substitute, variables_of};
 pub use session::Session;
 pub use sympy::{Discovery, Interpreter, SympyWorker, discover, discovery, probe};
@@ -196,6 +197,21 @@ pub trait Solver: Send + Sync {
         _equations: &[Expr],
         _vars: &[SymbolId],
     ) -> Result<Vec<(SymbolId, Expr)>, SolverError> {
+        Err(SolverError::NotImplemented)
+    }
+
+    /// Where several equations hold at once, as a set of **points**.
+    ///
+    /// Separate from [`Solver::solve_system`] because the two answers are
+    /// different shapes: a linear system pins one value per unknown, while a
+    /// circle and a line meet in two places and each place pairs an `x` with its
+    /// own `y`. The default declines, so a backend that does not implement this
+    /// cannot silently return one point and look finished.
+    fn solve_nonlinear(
+        &self,
+        _equations: &[Expr],
+        _vars: &[SymbolId],
+    ) -> Result<SystemAnswer, SolverError> {
         Err(SolverError::NotImplemented)
     }
 }

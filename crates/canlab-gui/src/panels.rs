@@ -287,6 +287,16 @@ fn handle_field_keys(app: &mut CasApp, ui: &mut Ui, response: &egui::Response) {
     }
 
     let events = ui.input_mut(|input| {
+        // A dead key produces **no text event at all**. On a Nordic layout the
+        // `^~` key is a dead circumflex: pressing it emits only a key event
+        // (physical `CloseBracket`), so `x^2` arrived as `x`, nothing, then `2`
+        // and the exponent silently vanished. A frame carrying text means the
+        // key produced a character (shift+`]` is `}` on a US layout), so the
+        // text wins and the fallback does not fire.
+        let frame_has_text = input
+            .events
+            .iter()
+            .any(|event| matches!(event, egui::Event::Text(_)));
         let mut ours = Vec::new();
         input.events.retain(|event| {
             let claim = match event {
@@ -310,9 +320,14 @@ fn handle_field_keys(app: &mut CasApp, ui: &mut Ui, response: &egui::Response) {
                             key,
                             egui::Key::Backspace | egui::Key::Delete | egui::Key::Enter
                         );
+                    // The dead circumflex: claimed only when the frame produced
+                    // no text, so a layout where this key *does* type a character
+                    // keeps typing it.
+                    let accent = plain && is_dead_circumflex(*key, modifiers.shift, frame_has_text);
                     // `Ctrl-A` belongs to the field while it has focus; every
                     // other command combination is left to the shell.
                     (plain && editing)
+                        || accent
                         || (modifiers.shift && arrow)
                         || (modifiers.command && matches!(key, egui::Key::A | egui::Key::Enter))
                 }
@@ -342,6 +357,14 @@ fn handle_field_keys(app: &mut CasApp, ui: &mut Ui, response: &egui::Response) {
             } => match key {
                 egui::Key::A if modifiers.command => {
                     app.field.select_all();
+                    changed = true;
+                }
+                // The dead circumflex: open an exponent, the same template the
+                // palette's `xⁿ` button inserts. Reached only when the frame had
+                // no text event, which the claim above already decided.
+                egui::Key::CloseBracket if modifiers.shift => {
+                    app.note_edit(false);
+                    app.field.power();
                     changed = true;
                 }
                 egui::Key::Backspace => {
@@ -688,6 +711,19 @@ pub fn variables(app: &mut CasApp, ui: &mut Ui) {
         .show(ui, |ui| variables_body(app, ui));
 }
 
+/// Is this keypress the **dead circumflex** — the `^~` key on a Nordic layout?
+///
+/// A dead key emits a key event and no text at all, so `x^2` arrives as `x`, the
+/// key, then `2`, and the exponent vanishes unless the reader knows the key. The
+/// `frame_has_text` guard is what keeps this from stealing shift+`]` on a layout
+/// where that key types `}`: if the frame produced any text, the text wins.
+///
+/// Kept as a function of its inputs rather than inlined so the rule can be
+/// asserted without a window: simulating focus in a headless frame is the sort of
+/// test that passes for the wrong reason.
+pub(crate) fn is_dead_circumflex(key: egui::Key, shift: bool, frame_has_text: bool) -> bool {
+    shift && !frame_has_text && key == egui::Key::CloseBracket
+}
 fn variables_body(app: &mut CasApp, ui: &mut Ui) {
     ui.horizontal(|ui| {
         ui.label(
