@@ -19,11 +19,11 @@ Open, with their design decisions already written down:
 | W3 calculus | plan row | The two failing corpus rows (`2024-kevat-N-1-2`, `2025-kevat-M-1-5`) are definite integrals waiting for this. They fail honestly. |
 | W2.1 leftover | `json.rs` | The union JSON decoder is deliberately absent; encoding without decoding is documented. |
 | Snapshot portability | `docs/lessons.md` lesson 10 | A test that no rendered glyph is tofu. The gate in `snapshot.rs` is the evidence that it is needed; the test itself is still unwritten. |
-| **W14 CanSat light transport** | plan section W14, and below | `canlab-optics` is the crate: rays, intervals, Cherenkov, the tent outline. The Monte Carlo that drives them is not written. |
+| **W14 CanSat light transport** | plan section W14, and below | `canlab-optics` now does a full single-photon trace (`block`, `fresnel`, `transport`), with a fixture the simulation is checked against. **Missing:** the muon source that births photons along the cone, the SiPM model, and the event histogram. The C++/Rust simulation that consumes the fixture is specified in `can-sat/sim/muon/README.md` but not written. |
 
 ## Test counts, last run
 
-`cargo test --offline -j 2` on the committed tree: **920 passed, 0 failed, 5
+`cargo test --offline -j 2` on the committed tree: **943 passed, 0 failed, 5
 ignored.** The five ignored are the snapshot frames, and they are ignored
 because this machine is not the one they were rendered on (see below).
 
@@ -83,6 +83,12 @@ test that would let them run everywhere is story 10 of `docs/lessons.md`.
   convex polygon, an outward normal for the sloping faces, and the tropical
   polynomial `min(y + |x|, 3) − 1.5` whose facets are the roof and the shoulders.
   A test ties the drawing's six corners to the polynomial's switches.
+- `block`, `fresnel`, `transport` — the solid, Snell and Fresnel for both
+  polarisations, and one photon from birth to death with absorption and flight
+  time. Every one was written from a closed form and against a test; three
+  sign errors and two never-exit bugs were caught that way, and the fixture in
+  `can-sat/sim/muon/events.json` is what stops the C++ simulation from drifting
+  from them.
 
 ## The build server
 
