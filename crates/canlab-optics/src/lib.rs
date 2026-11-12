@@ -32,12 +32,16 @@
 
 #![warn(missing_docs)]
 
+pub mod block;
 pub mod cherenkov;
+pub mod fresnel;
 pub mod interval;
 pub mod outline;
 pub mod vec3;
 
+pub use block::{Block, Exit, Face};
 pub use cherenkov::{Cherenkov, medium_index};
+pub use fresnel::{Interface, Polarisation, critical_angle, interface, reflectance};
 pub use interval::Interval;
 pub use outline::{OutlineError, Tropical, tropical_polynomial, tropical_polynomial_interval};
 pub use vec3::{Mirror, Ray, Vec3};
