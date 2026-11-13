@@ -70,6 +70,7 @@ function Invoke-Remote {
 # session that builds in place leaves its own; both are searched and the newest
 # file wins, so this tool never depends on which route produced the build.
 $searchRoots = @(
+    '/home/oskar/canlab-win-target',
     '/home/oskar/canlab-target',
     '/home/oskar/canlab-remote/target',
     '/home/oskar/Documents/deepseek-harness/default-workspace/cas/target'
@@ -127,6 +128,21 @@ function Get-RemoteCommitTime {
     return $null
 }
 
+# The build's own record, written beside it by `remote.ps1 build`. A hash read
+# from the checkout is a guess about the past; this is the fact.
+function Get-RemoteStamp {
+    param([string]$BuildPath)
+    $dir = $BuildPath -replace '/[^/]*$', ''
+    $text = Invoke-Remote "cat '$dir/canlab-gui.stamp'" -AllowFailure
+    if (-not $text -or $text -match 'No such file') { return $null }
+    $record = @{}
+    foreach ($line in ($text -split "`n")) {
+        if ($line -match '^\s*([a-z_]+)=(.*)$') { $record[$Matches[1]] = $Matches[2].Trim() }
+    }
+    if (-not $record.ContainsKey('commit')) { return $null }
+    return [pscustomobject]@{ commit = $record['commit']; built_at = $record['built_at'] }
+}
+
 function Show-Status {
     $build = Find-RemoteBuild
     if (-not $build) {
@@ -136,7 +152,12 @@ function Show-Status {
         return
     }
     $when = [DateTimeOffset]::FromUnixTimeSeconds([long]$build.Epoch).ToLocalTime()
-    $commit = Get-RemoteCommit -BuildPath $build.Path
+    $stamp = Get-RemoteStamp -BuildPath $build.Path
+    if ($stamp) {
+        $commit = $stamp.commit
+    } else {
+        $commit = 'unknown (this build has no stamp)'
+    }
     $commitTime = Get-RemoteCommitTime -BuildPath $build.Path
     Write-Host "server build" -ForegroundColor Cyan
     Write-Host ("  commit : {0}" -f $commit)
@@ -157,8 +178,12 @@ function Show-Status {
     if (Test-Path $sidecar) {
         $record = Get-Content $sidecar -Raw | ConvertFrom-Json
         Write-Host ("  commit : {0}  (fetched {1})" -f $record.commit, $record.fetched_at)
-        if ($record.commit -ne $commit) {
-            Write-Host "  stale  : the server has a newer commit" -ForegroundColor Yellow
+        if ($commit -match "^unknown") {
+            # The server build predates stamping; the local record cannot be
+            # compared with anything, so say that instead of guessing.
+            Write-Host "  provenance: the server build has no stamp, so its commit is unknown" -ForegroundColor Yellow
+        } elseif ($record.commit -ne $commit) {
+            Write-Host "  stale  : the server has a newer build ($commit)" -ForegroundColor Yellow
         }
     } else {
         Write-Host "  commit : unknown (no sidecar)"
@@ -198,7 +223,14 @@ function Get-Build {
         return $exe
     }
 
-    $commit = Get-RemoteCommit -BuildPath $build.Path
+    $stamp = Get-RemoteStamp -BuildPath $build.Path
+    if ($stamp) {
+        $commit = $stamp.commit
+    } else {
+        # No stamp: say so rather than label the binary with whatever the checkout
+        # is at now, which is how a day-old build got a newer commit's name.
+        $commit = Get-RemoteCommit -BuildPath $build.Path
+    }
     if (-not $Quiet) {
         Write-Host ("fetching {0:N1} MiB from {1} ({2}) ..." -f ($build.Bytes / 1MB), $target, $commit) -ForegroundColor Cyan
     }
@@ -226,8 +258,32 @@ switch ($Action) {
     'where' { $build = Find-RemoteBuild; if ($build) { $build.Path } else { exit 2 } }
     'get' { Get-Build | Out-Null }
     'build' {
-        & (Join-Path $PSScriptRoot 'remote.ps1') build
-        if ($LASTEXITCODE -ne 0) { throw "the remote build failed" }
+        # "The latest build" means the newest *code*, and the newest code is the
+        # server's checkout - which is where the other session works, commits and
+        # (often) leaves uncommitted. Building the tarball of this machine's HEAD
+        # would produce a binary from an older tree and call it current, which is
+        # exactly the confusion this command exists to remove.
+        $checkout = '/home/oskar/Documents/deepseek-harness/default-workspace/cas'
+        $targetDir = '/home/oskar/canlab-win-target'
+        # Single-quoted here-string: the remote shell's own `$(...)` and `$COMMIT`
+        # must survive, and PowerShell has no backslash escapes - `\"` here is a
+        # literal backslash followed by the quote that ends the string, which is a
+        # parse error, not an escape.
+        $template = @'
+set -e
+cd {checkout}
+export PATH="/home/$(id -un)/.cargo/bin:$PATH"
+export CARGO_TARGET_DIR={target}
+cargo xwin build -p canlab-gui --release --target x86_64-pc-windows-msvc -j 8
+COMMIT=$(git rev-parse --short HEAD)
+if ! git diff-index --quiet HEAD --; then COMMIT="$COMMIT-dirty"; fi
+mkdir -p {target}/x86_64-pc-windows-msvc/release
+{ echo "commit=$COMMIT"; echo "built_at=$(date -u +%FT%TZ)"; } > {target}/x86_64-pc-windows-msvc/release/canlab-gui.stamp
+echo "built $COMMIT"
+'@
+        $script = $template.Replace('{checkout}', $checkout).Replace('{target}', $targetDir)
+        Write-Host "building on ${target} from $checkout (the long one on a cold tree)" -ForegroundColor Cyan
+        Invoke-Remote $script
         Get-Build -Force | Out-Null
     }
     'run' {

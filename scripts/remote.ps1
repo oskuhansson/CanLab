@@ -205,7 +205,14 @@ switch ($Action) {
     'build' {
         Sync-Tree
         $jobs = if ($Jobs -gt 0) { $Jobs } else { 8 }
-        $script = "$cargoPrelude && cargo xwin build -p canlab-gui --release --target x86_64-pc-windows-msvc -j $jobs"
+        # A build has to say which commit it is. The executable cannot carry that,
+        # so a stamp is written beside it, from the checkout that produced it, at
+        # the moment it finished. Without this, a client can only guess the commit
+        # from whatever the checkout happens to be at *now*, which is how a
+        # day-old binary got labelled with a newer commit.
+        $stamp = "$RemoteTarget/x86_64-pc-windows-msvc/release/canlab-gui.stamp"
+        $localCommit = (& git -C $root rev-parse --short HEAD).Trim()
+        $script = "$cargoPrelude && cargo xwin build -p canlab-gui --release --target x86_64-pc-windows-msvc -j $jobs && { echo `"commit=$localCommit`"; echo `"built_at=`$(date -u +%FT%TZ)`"; } > '$stamp'"
         Invoke-Remote $script
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         if (-not $Out) { $Out = Join-Path $root 'target\remote' }
