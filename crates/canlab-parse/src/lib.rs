@@ -72,7 +72,11 @@
 use std::fmt;
 
 mod lexer;
-mod parser;
+pub mod calculus;
+pub mod figure;
+pub mod integral;
+pub mod limit;
+pub mod parser;
 
 /// The Abitti formula palette: which glyph inserts which LaTeX.
 ///
@@ -134,6 +138,17 @@ pub fn parse_latex(src: &str) -> Result<canlab_core::Expr, ParseError> {
     parser::parse(src)
 }
 
+/// Parse a statement, keeping a definite integral's error bound.
+///
+/// [`parse_latex`] collapses a numeric integral to a bare float, because an
+/// `Expr` has nowhere to put the bound — and that collapse is why
+/// `\int_0^1 e^{-x^2} dx` prints sixteen digits with no marker. A caller that
+/// shows an answer should use this and print the bound; a caller that only needs
+/// the value can call [`parser::Statement::to_expr`] and say so.
+pub fn parse_statement(src: &str) -> Result<parser::Statement, ParseError> {
+    parser::parse_statement(src)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,6 +156,27 @@ mod tests {
 
     fn parse(src: &str) -> Expr {
         parse_latex(src).unwrap_or_else(|err| panic!("{src:?} should parse: {err}"))
+    }
+
+    #[test]
+    fn an_approximate_integral_keeps_its_bound() {
+        // The bug this entry exists for: `parse_latex` collapses a numeric
+        // integral to a bare float, so the bound is gone by the time anyone
+        // could print it. `parse_statement` keeps it.
+        let statement = parse_statement(r"\int_0^1 e^{-x^2} dx").expect("a statement");
+        let error = statement.error().expect("a bound");
+        assert!(error > 0.0, "the bound is {error}");
+        assert!(error < 1e-6, "the bound is {error}, which is not a Simpson bound");
+        // And the value is the same one `parse_latex` gives.
+        assert_eq!(statement.to_expr(), parse(r"\int_0^1 e^{-x^2} dx"));
+        // An exact integral has no bound.
+        let statement = parse_statement(r"\int_1^2 \frac{1}{x^2} dx").expect("a statement");
+        assert_eq!(statement.error(), None, "{statement:?}");
+        assert!(matches!(statement, parser::Statement::Exact(_)), "{statement:?}");
+        // A plain expression is a value with no bound.
+        let statement = parse_statement("2x + 1").expect("a statement");
+        assert_eq!(statement.error(), None);
+        assert!(matches!(statement, parser::Statement::Value(_)), "{statement:?}");
     }
 
     fn parse_err(src: &str) -> ParseError {
