@@ -649,30 +649,37 @@ than by a commit. The same applies to the opposite choice: the version that was
 kept answers its six tests in 0.01 s, which is evidence, where "this algorithm
 looks cleaner" is not.
 
-## A picture is a claim, and I could not verify this one
+## A picture is a claim, and the surface I chose had no picture to check it against
 
 An SVG writer for the surface mesh looked straightforward: project the vertices
 with `canlab-scene`, sort back to front, fill each triangle by its shade. The
 structural tests passed — one polygon per visible triangle, three points each, no
 `NaN` in any attribute, the depth order monotone.
 
-Then I looked at the picture. `z = x² + y²` came out as a pinched sail with two
-spikes, not a bowl.
+Then I looked at the picture. `z = x² + y²` over `[−2, 2]²` came out as a pinched
+sail with two spikes. I concluded the render was inside-out and reverted it.
 
-The checks that had passed were all about *shape of the document* and none about
-*shape of the surface*. A horizontal plane rendered exactly right (412 × 299 px,
-the correct foreshortening for `[−2, 2]²` at 34°), so the projection and the pixel
-mapping are sound; pulling the camera back changed the size and nothing else, so
-it is not perspective. The shading said the far rim was low-`z` when a bowl's far
-rim must be high-`z`, which means the picture is showing the surface inside-out.
+**That conclusion was wrong.** The surface is a funnel twice as deep as it is wide
+— `z` runs from 0 to 8 against a width of 4 — and from 28° above a deep funnel
+genuinely does look pinched. `0.2·(x² + y²)`, a shallow dish, renders as a dish on
+the first try: rounded square, dark centre, tan rim.
 
-I did not find the cause. So the code was reverted rather than committed, and the
-tree is exactly as it was.
+Two things went wrong, and the second is the interesting one.
 
-The rule this is an instance of: **a rendering is an answer, and an answer that
-has not been looked at is not verified.** Every other module in this project can
-be checked by asserting a number; a picture can only be checked by looking at it,
-and "the SVG has 288 polygons" is not a check of whether the surface is in them.
-The next attempt should start from a case whose picture is unambiguous — a
-horizontal plane from above, a sphere — and compare against the known silhouette
-before adding shading or a camera.
+The first was a real bug that the odd picture led me to: **back faces were not
+culled**, so the far wall's inside was drawn through the surface. Six of 32
+triangles on a 4×4 grid are back-facing. Fixing it changed the picture and did not
+fix the shape, which is what sent me looking in the right place.
+
+The second is the rule. The previous entry in this file says to start from a case
+whose picture is unambiguous. I wrote that and then picked `x² + y²` over
+`[−2, 2]²` — a surface whose correct picture I had never predicted. A rendering
+can only be checked against an expectation, and I had none: I knew what a *dish*
+looks like and not what a *funnel* looks like from 28°. The horizontal plane I did
+check (`z = 0`, 412 × 299 px, the right foreshortening) was the only surface whose
+silhouette I could state in advance, and it rendered correctly the whole time.
+
+So: **state the expected picture before rendering it.** "A dish is a rounded
+square with a dark centre" is a check. "A paraboloid should look like a bowl" is
+not, because a paraboloid can be a dish or a funnel and the two look nothing
+alike.
