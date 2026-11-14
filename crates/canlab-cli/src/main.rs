@@ -1254,6 +1254,13 @@ fn free_symbols(expr: &Expr, out: &mut Vec<SymbolId>) {
         ExprNode::Hold(hold) => match &**hold {
             Hold::Integral { body, .. } => free_symbols(body, out),
             Hold::Accent { body, .. } => free_symbols(body, out),
+            Hold::Matrix { rows } => {
+                for row in rows {
+                    for cell in row {
+                        free_symbols(cell, out);
+                    }
+                }
+            }
         },
     }
 }

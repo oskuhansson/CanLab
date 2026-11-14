@@ -55,6 +55,8 @@ pub enum TokenKind {
     Pipe,
     /// `.`, which only appears as `\right.` — a delimiter that is not drawn.
     Dot,
+    /// `&`, the column separator in a matrix.
+    Amp,
     Comma,
     /// The synthetic token at `src.len()`; always the last token.
     Eof,
@@ -84,6 +86,7 @@ impl TokenKind {
             TokenKind::Bang => "`!`".to_string(),
             TokenKind::Pipe => "`|`".to_string(),
             TokenKind::Dot => "`.`".to_string(),
+            TokenKind::Amp => "`&`".to_string(),
             TokenKind::Comma => "`,`".to_string(),
         }
     }
@@ -161,6 +164,10 @@ pub(crate) fn tokenize(src: &str) -> Result<Vec<Token>, ParseError> {
             b'|' => {
                 i += 1;
                 tokens.push(Token { kind: TokenKind::Pipe, pos: start });
+            }
+            b'&' => {
+                i += 1;
+                tokens.push(Token { kind: TokenKind::Amp, pos: start });
             }
             // A bare `.` is not a number and not an operator; the only place it
             // appears is `\right.`, and the parser is what gives it meaning. A

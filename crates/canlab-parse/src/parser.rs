@@ -1011,6 +1011,10 @@ impl Parser {
                 format!("unexpected `\\{name}`; expected an expression"),
                 pos,
             )),
+            // `\begin{pmatrix}…\end{pmatrix}`: rows of expressions, `&` between
+            // columns and `\\` between rows.
+            "begin" => self.parse_environment(pos),
+            "end" => Err(ParseError::new("unexpected `\\end`", pos)),
             // `\binom{n}{k}` is `C(n, k)`: two braced arguments, in that order.
             "binom" => {
                 let n = self.parse_prefix()?;
@@ -1098,6 +1102,106 @@ impl Parser {
     ///
     /// The delimiters are checked for a matching pair; the grouping itself is
     /// only structural and leaves no node behind.
+    /// `\begin{pmatrix}…\end{pmatrix}`.
+    ///
+    /// Only `pmatrix` is read. A table is not an expression, and the refusal
+    /// names the environment rather than guessing at one.
+    fn parse_environment(&mut self, begin_pos: usize) -> Result<Expr, ParseError> {
+        let name = self.braced_name("\\begin")?;
+        if name != "pmatrix" {
+            return Err(ParseError::new(
+                format!(
+                    "`\\begin{{{name}}}` is not an environment this reads; `pmatrix` is the one it does"
+                ),
+                begin_pos,
+            ));
+        }
+        let mut rows: Vec<Vec<Expr>> = vec![Vec::new()];
+        loop {
+            // At the start of a cell: is it the end?
+            if self.at_end_environment()? {
+                break;
+            }
+            let cell = self.parse_expr(0)?;
+            rows.last_mut().expect("a row").push(cell);
+            match &self.peek().kind {
+                TokenKind::Amp => {
+                    self.advance();
+                }
+                // `\\` ends a row.
+                TokenKind::Command(name) if name == "\\" => {
+                    self.advance();
+                    rows.push(Vec::new());
+                }
+                _ => break,
+            }
+        }
+        if !self.at_end_environment()? {
+            return Err(ParseError::new(
+                "unclosed `\\begin{pmatrix}`: expected `\\end{pmatrix}`",
+                begin_pos,
+            ));
+        }
+        // The `\end` and its `{pmatrix}`.
+        self.advance();
+        let closing = self.braced_name("\\end")?;
+        if closing != "pmatrix" {
+            return Err(ParseError::new(
+                format!("`\\begin{{pmatrix}}` closed by `\\end{{{closing}}}`"),
+                begin_pos,
+            ));
+        }
+        // A trailing `\\` leaves an empty last row, which is not a row.
+        if rows.last().is_some_and(Vec::is_empty) {
+            rows.pop();
+        }
+        if rows.is_empty() || rows.iter().any(Vec::is_empty) {
+            return Err(ParseError::new("a matrix has no empty row", begin_pos));
+        }
+        let width = rows[0].len();
+        if rows.iter().any(|row| row.len() != width) {
+            return Err(ParseError::new(
+                "a matrix's rows must have the same number of columns",
+                begin_pos,
+            ));
+        }
+        Ok(ExprNode::hold(canlab_core::Hold::Matrix { rows }))
+    }
+
+    /// Whether the next tokens are `\end{pmatrix}`.
+    fn at_end_environment(&mut self) -> Result<bool, ParseError> {
+        Ok(matches!(&self.peek().kind, TokenKind::Command(name) if name == "end"))
+    }
+
+    /// The name inside the braces after a command, e.g. `{pmatrix}`.
+    fn braced_name(&mut self, who: &str) -> Result<String, ParseError> {
+        if !matches!(self.peek().kind, TokenKind::LBrace) {
+            return Err(ParseError::new(
+                format!("expected `{{` after `{who}` (found {})", self.peek().kind.describe()),
+                self.peek().pos,
+            ));
+        }
+        self.advance();
+        let name = match &self.peek().kind {
+            TokenKind::Ident(name) => name.clone(),
+            other => {
+                return Err(ParseError::new(
+                    format!("expected an environment name after `{who}{{` (found {})", other.describe()),
+                    self.peek().pos,
+                ))
+            }
+        };
+        self.advance();
+        if !matches!(self.peek().kind, TokenKind::RBrace) {
+            return Err(ParseError::new(
+                format!("expected `}}` after `{who}{{{name}`"),
+                self.peek().pos,
+            ));
+        }
+        self.advance();
+        Ok(name)
+    }
+
     fn parse_left_right(&mut self, left_pos: usize) -> Result<Expr, ParseError> {
         let open = self.take_open_delimiter("\\left")?;
         let inner = self.parse_expr(0)?;
@@ -1342,7 +1446,12 @@ fn is_terminator_command(name: &str) -> bool {
     // `\int` is a statement's head, not a factor: `2\int_0^1` has no reading in
     // this grammar, and reading it as `2 * (an integral)` would need the whole
     // integral inside the expression grammar, which has no node for it.
-    name == "right"
+    // `\end` and `\\` close a matrix cell rather than starting a factor: without
+    // them here, `3\end{pmatrix}` read as `3 · \end`, and the error was
+    // "unexpected `\end`" instead of a parsed matrix.
+    name == "end"
+        || name == "\\"
+        || name == "right"
         || name == "int"
         || name == "lim"
         || name == "to"

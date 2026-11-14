@@ -260,6 +260,31 @@ fn solve_all_reports_a_decline_with_its_reason() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn a_matrix_round_trips_and_a_ragged_one_is_refused() {
+    // W11.1: `\begin{pmatrix}` appears in every linear-algebra problem.
+    for source in [
+        r"\begin{pmatrix}1&2\\3&4\end{pmatrix}",
+        r"\begin{pmatrix}1&2&3\end{pmatrix}",
+    ] {
+        let (ok, stdout, stderr) = canlab(&["tex", source]);
+        assert!(ok, "{source}: {stderr}");
+        assert!(
+            stdout.trim().starts_with(r"\begin{pmatrix}")
+                && stdout.trim().ends_with(r"\end{pmatrix}"),
+            "{source} printed as {stdout}"
+        );
+    }
+    // A ragged matrix has no meaning, and the refusal says which rule broke.
+    let (ok, _stdout, stderr) = canlab(&["tex", r"\begin{pmatrix}1&2\\3\end{pmatrix}"]);
+    assert!(!ok, "a ragged matrix was accepted");
+    assert!(stderr.contains("same number of columns"), "{stderr}");
+    // An environment this does not read is refused by name.
+    let (ok, _stdout, stderr) = canlab(&["tex", r"\begin{array}1\end{array}"]);
+    assert!(!ok);
+    assert!(stderr.contains("array") && stderr.contains("pmatrix"), "{stderr}");
+}
+
+#[test]
 fn a_binomial_coefficient_round_trips_and_has_a_value() {
     // W11.1: `\binom{n}{k}` appears in every combinatorics problem.
     let (ok, stdout, stderr) = canlab(&["tex", r"\binom{5}{2}"]);

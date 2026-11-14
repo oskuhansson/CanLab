@@ -39,6 +39,12 @@ pub enum Hold {
     /// has no number. `\vec{v}` is a *name for a vector*, and what that vector
     /// is comes from the document that defines it.
     Accent { kind: Accent, body: Expr },
+    /// A matrix: `\begin{pmatrix}a & b \\ c & d\end{pmatrix}`.
+    ///
+    /// Rows of expressions. Held for the same reason the accent is: it can be
+    /// printed and compared, and it has no single number — a matrix is a
+    /// `Value::Matrix` when it is evaluated, and the tree has no node for one.
+    Matrix { rows: Vec<Vec<Expr>> },
 }
 
 /// Which accent a [`Hold::Accent`] draws.
@@ -270,6 +276,9 @@ fn write_node(node: &ExprNode, f: &mut fmt::Formatter<'_>, min_prec: u8) -> fmt:
                 write!(f, "Accent({}, ", kind.command())?;
                 write_node(body, f, PREC_ADD)?;
                 write!(f, ")")?;
+            }
+            Hold::Matrix { rows } => {
+                write!(f, "Matrix({}x{})", rows.len(), rows.first().map_or(0, Vec::len))?;
             }
         },
     }

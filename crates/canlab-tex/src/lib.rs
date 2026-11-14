@@ -511,6 +511,21 @@ fn write_hold(hold: &Hold, out: &mut String) {
             out.push_str("\\, d");
             write_symbol(*var, out);
         }
+        Hold::Matrix { rows } => {
+            out.push_str("\\begin{pmatrix}");
+            for (index, row) in rows.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(" \\\\ ");
+                }
+                for (column, cell) in row.iter().enumerate() {
+                    if column > 0 {
+                        out.push_str(" & ");
+                    }
+                    write_node(cell, out, PREC_ADD);
+                }
+            }
+            out.push_str("\\end{pmatrix}");
+        }
         Hold::Accent { kind, body } => {
             out.push('\\');
             out.push_str(kind.command());

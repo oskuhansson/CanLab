@@ -832,6 +832,13 @@ pub(crate) fn collect_symbols(expression: &Expr, out: &mut Vec<SymbolId>) {
                 out.push(*var);
             }
             canlab_core::Hold::Accent { body, .. } => collect_symbols(body, out),
+            canlab_core::Hold::Matrix { rows } => {
+                for row in rows {
+                    for cell in row {
+                        collect_symbols(cell, out);
+                    }
+                }
+            }
         },
         _ => {}
     }

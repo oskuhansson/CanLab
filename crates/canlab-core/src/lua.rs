@@ -186,6 +186,8 @@ fn write(expression: &Expr, variables: &[SymbolId], out: &mut String) -> Result<
                 // An accent is a decoration of a name, and a kernel computes
                 // numbers; there is nothing to emit for `\vec{v}`.
                 crate::expr::Hold::Accent { .. } => "an accent",
+                // A matrix is not a number either.
+                crate::expr::Hold::Matrix { .. } => "a matrix",
             };
             Err(LuaError::Hold(what.to_string()))
         }

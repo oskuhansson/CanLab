@@ -563,6 +563,21 @@ fn write_expr(e: &Expr, out: &mut String) {
                 write_expr(body, out);
                 out.push_str("}}");
             }
+            Hold::Matrix { rows } => {
+                out.push_str("{\"Matrix\":[[");
+                for (index, row) in rows.iter().enumerate() {
+                    if index > 0 {
+                        out.push_str("],[");
+                    }
+                    for (column, cell) in row.iter().enumerate() {
+                        if column > 0 {
+                            out.push(',');
+                        }
+                        write_expr(cell, out);
+                    }
+                }
+                out.push_str("]]}");
+            }
         },
     }
 }

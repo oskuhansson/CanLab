@@ -57,6 +57,13 @@ fn collect(expression: &Expr, out: &mut BTreeSet<SymbolId>) {
             // An accent's body is an expression, so its symbols are the
             // document's symbols: `\vec{v}` mentions `v`.
             canlab_core::Hold::Accent { body, .. } => collect(body, out),
+            canlab_core::Hold::Matrix { rows } => {
+                for row in rows {
+                    for cell in row {
+                        collect(cell, out);
+                    }
+                }
+            }
         },
     }
 }

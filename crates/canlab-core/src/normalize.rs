@@ -35,6 +35,9 @@ pub fn normalize(expr: &Expr) -> Expr {
                 kind: *kind,
                 body: normalize(body),
             }),
+            Hold::Matrix { rows } => ExprNode::hold(Hold::Matrix {
+                rows: rows.iter().map(|row| row.iter().map(normalize).collect()).collect(),
+            }),
         },
     }
 }
