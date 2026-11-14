@@ -86,14 +86,14 @@ carry the same claims in more detail.
 
 ## Test counts, last run
 
-`cargo test --offline -j 2` on the tree this note describes: **1281 passed, 0
+`cargo test --offline -j 2` on the tree this note describes: **1282 passed, 0
 failed, 5 ignored.** The five ignored are the snapshot frames, and they are
 ignored because this machine is not the one they were rendered on (see below).
 
 | Suite | Count |
 |---|---:|
 | `canlab-solver` | 216 |
-| `canlab-gui` | 141 |
+| `canlab-gui` | 142 |
 | `canlab-cli` | 44 |
 | `canlab-core` | 117 |
 | `canlab-parse` | 107 |
