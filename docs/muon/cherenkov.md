@@ -147,16 +147,17 @@ the same six-point polygon and the transport never asks which.
 
 | Block | Mass | Horizontal area | Median | Within 30° |
 |---|---|---|---|---|
-| 20 mm tent, 10 mm | 36 g | 400 mm² | 27.5° | 56 % |
-| 24 mm tent, 20 mm | 103 g | 960 mm² | 26.1° | 58 % |
-| 28 mm hexagon, 20 mm | 48 g | 2 036 mm² | 27.5° | 56 % |
-| **28 mm hexagon, 30 mm** | **73 g** | **2 036 mm²** | **25.5°** | **60 %** |
-| 28 mm hexagon, 40 mm | 97 g | 2 036 mm² | 25.1° | 61 % |
+| 20 mm tent, 10 mm | 36 g | 400 mm² | 27.2° | 56 % |
+| 24 mm tent, 20 mm | 103 g | 960 mm² | 25.1° | 59 % |
+| 28 mm hexagon, 20 mm | 48 g | 2 036 mm² | 26.7° | 57 % |
+| 28 mm hexagon, 30 mm | 73 g | 2 036 mm² | 25.9° | 62 % |
+| **28 mm hexagon, 40 mm** | **97 g** | **2 036 mm²** | **24.2°** | **62 %** |
 
-The 30 mm depth is the knee: the chord a vertical muon crosses *is* the thickness,
-so 30 mm makes 630 photons where 10 mm makes 210. The 40 mm block is 0.4° better
-and 24 g heavier, which is inside the training noise — the 30 mm is the one to
-build.
+The depth buys accuracy because the chord a vertical muon crosses *is* the
+thickness: 30 mm makes 630 photons where 10 mm makes 210. The 40 mm block is the
+best of the five at 24.2°, but it is 24 g heavier for 1.7°, and the run-to-run
+noise of the training is about half a degree — the 30 mm is the one to build, and
+the 40 mm is the one to build if the mass budget turns out to have room.
 
 ---
 
@@ -303,17 +304,26 @@ end-to-end.
 |---|---|---|
 | Linear fit, `t = t₀ + (r·d)/v` | 119.5° | the model is wrong: the light does not leave from a point |
 | Cherenkov model, **true** track point | 81.1° | the model is right, but four timestamps cannot determine the track position |
-| **Network (16 features)** | **27.2°** | learns `p(direction \| features)`, marginalising over the track position |
+| **Network (24 features)** | **27.0°** | learns `p(direction \| features)`, marginalising over the track position |
 
 The network is not doing better physics. It is doing something the analytic
 inversion cannot: the track position is a **latent variable**, and the network
 absorbs it into the conditional distribution. The photon counts depend on the path
 length, and the path length depends on where the track is, so the counts are worth
-**2.6°** on their own.
+**2.9°** on their own.
 
-The 16 features are: four first arrival times, four **second** arrival times (the
-stop a multi-hit TDC records and a single-threshold readout throws away), four
-"did it fire" flags, and four photon counts.
+The 24 features are: four first arrival times, four **second** arrival times, four
+**mean** arrival times, four **spreads**, four "did it fire" flags, and four photon
+counts. The second, mean and spread are what a multi-hit TDC records and a
+single-threshold readout throws away.
+
+**The multi-hit summary does not pay.** The ablation is direct: the hexagon at
+30 mm is 25.9° with the mean and spread and 25.5° without, and the tent at 20 mm is
+27.2° with and 27.5° without — a half-degree in opposite directions, which is the
+run-to-run noise. The first photon and the count already carry most of what the
+extra stops know, and the mean is dominated by the emission-time spread, which is
+noise for the direction. The features are kept because they cost nothing and the
+panel shows the data they summarise, but the design should not be sold on them.
 
 ### 7.2 The measured results
 
@@ -321,9 +331,9 @@ Through the realistic readout, on the corrected photon count:
 
 | Block | Median | 68th | Within 30° | Within 60° |
 |---|---|---|---|---|
-| 20 mm tent, 10 mm | 27.5° | 36.0° | 56 % | 94 % |
-| 24 mm tent, 20 mm | 26.1° | 35.2° | 58 % | 95 % |
-| 28 mm hexagon, 30 mm | 25.5° | 34.0° | 60 % | 95 % |
+| 20 mm tent, 10 mm | 27.2° | 36.2° | 56 % | 94 % |
+| 24 mm tent, 20 mm | 25.1° | 34.9° | 59 % | 95 % |
+| 28 mm hexagon, 30 mm | 25.9° | 33.3° | 62 % | 95 % |
 
 The mission's criterion is 30°. The hexagon reaches it for three events in five,
 which is **borderline rather than a pass** — the mission wants most events inside

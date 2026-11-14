@@ -160,10 +160,32 @@ pub struct TimingOutcome {
     /// on how far the track is from the sensor, which is the latent variable the
     /// direction fit needs.
     pub second_times: [Option<f64>; 4],
+    /// The mean arrival at each sensor, over every photon it saw.
+    ///
+    /// The first photon is the earliest and the noisiest; the mean of the
+    /// multi-hit record is the centre of the light, which averages the jitter
+    /// down. A multi-hit TDC records it, and a single-threshold readout does not.
+    pub mean_times: [Option<f64>; 4],
+    /// The standard deviation of the arrivals at each sensor.
+    ///
+    /// The spread of the flight times is the path-length spread, which is the
+    /// track's position — the latent variable the direction fit needs.
+    pub spreads: [Option<f64>; 4],
     /// How many photons each sensor registered.
     pub counts: [usize; 4],
     /// The muon's true direction, as the two horizontal components.
     pub direction: [f64; 2],
+}
+
+/// The mean and the standard deviation of a set of arrival times.
+fn moments(times: &[f64]) -> (Option<f64>, Option<f64>) {
+    if times.is_empty() {
+        return (None, None);
+    }
+    let mean = times.iter().sum::<f64>() / times.len() as f64;
+    let variance = times.iter().map(|time| (time - mean) * (time - mean)).sum::<f64>()
+        / times.len() as f64;
+    (Some(mean), Some(variance.sqrt()))
 }
 
 /// Simulate one muon through the block and reconstruct its heading.
@@ -235,11 +257,16 @@ pub fn simulate_one(
     };
     let mut times = [None; 4];
     let mut second_times = [None; 4];
+    let mut mean_times = [None; 4];
+    let mut spreads = [None; 4];
     let mut counts = [0usize; 4];
     for index in 0..4 {
         times[index] = event.arrivals_ps[index].first().copied();
         second_times[index] = event.arrivals_ps[index].get(1).copied();
         counts[index] = event.arrivals_ps[index].len();
+        let (mean, spread) = moments(&event.arrivals_ps[index]);
+        mean_times[index] = mean;
+        spreads[index] = spread;
     }
     Some(TimingOutcome {
         timed,
@@ -248,6 +275,8 @@ pub fn simulate_one(
         photons: event.photons_born,
         times,
         second_times,
+        mean_times,
+        spreads,
         counts,
         direction: [heading.x, heading.y],
     })
@@ -307,9 +336,14 @@ pub fn simulate_one_realistic(
     let mut times = [None; 4];
     let mut second_times = [None; 4];
     let mut counts = [0usize; 4];
+    let mut mean_times = [None; 4];
+    let mut spreads = [None; 4];
     for (index, position) in positions.iter().enumerate() {
         let extended = readout.with_crosstalk(&event.arrivals_ps[index], rng);
         counts[index] = extended.len();
+        let (mean, spread) = moments(&extended);
+        mean_times[index] = mean;
+        spreads[index] = spread;
         let needed = readout.photons_needed();
         if let Some(time) = readout.timestamp(&extended, rng) {
             times[index] = Some(time);
@@ -334,6 +368,8 @@ pub fn simulate_one_realistic(
         photons: event.photons_born,
         times,
         second_times,
+        mean_times,
+        spreads,
         counts,
         direction: [heading.x, heading.y],
     })
@@ -632,7 +668,7 @@ pub fn reconstruct_cherenkov(
 /// depends on how far the track is from the sensor, which is exactly the latent
 /// variable the direction fit is missing — so it is the most valuable feature
 /// the readout can add without a second threshold.
-pub const FEATURES: usize = 16;
+pub const FEATURES: usize = 24;
 
 /// Turn an event into a training sample.
 ///
@@ -646,7 +682,7 @@ pub const FEATURES: usize = 16;
 /// is not a hundred times more influential than one with ten.
 pub fn features(outcome: &TimingOutcome) -> [f64; FEATURES] {
     let present: Vec<f64> = outcome.times.iter().flatten().copied().collect();
-    let mean = if present.is_empty() {
+    let centre = if present.is_empty() {
         0.0
     } else {
         present.iter().sum::<f64>() / present.len() as f64
@@ -657,7 +693,7 @@ pub fn features(outcome: &TimingOutcome) -> [f64; FEATURES] {
             Some(time) => {
                 // A thousand picoseconds is the natural scale: the spread across
                 // the block is a few hundred, and the jitter is tens.
-                features[index] = (time - mean) / 1000.0;
+                features[index] = (time - centre) / 1000.0;
                 features[8 + index] = 1.0;
             }
             None => {
@@ -665,18 +701,30 @@ pub fn features(outcome: &TimingOutcome) -> [f64; FEATURES] {
                 features[8 + index] = 0.0;
             }
         }
-        // The second arrival, relative to the same mean, and its gap from the
+        // The second arrival, relative to the same centre, and its gap from the
         // first. A sensor with no second photon gets zero, which the flag
         // disambiguates from a real zero.
         match outcome.second_times[index] {
             Some(second) => {
-                features[4 + index] = (second - mean) / 1000.0;
+                features[4 + index] = (second - centre) / 1000.0;
             }
             None => {
                 features[4 + index] = 0.0;
             }
         }
         features[12 + index] = (outcome.counts[index] as f64 / 10.0).min(3.0) / 3.0;
+        // The multi-hit record's own summary: where the light's centre is and
+        // how wide it is. The first photon is the earliest and the noisiest; the
+        // mean averages the jitter down, and the spread is the path-length
+        // spread, which is the track's position.
+        match outcome.mean_times[index] {
+            Some(mean) => features[16 + index] = (mean - centre) / 1000.0,
+            None => features[16 + index] = 0.0,
+        }
+        match outcome.spreads[index] {
+            Some(spread) => features[20 + index] = spread / 1000.0,
+            None => features[20 + index] = 0.0,
+        }
     }
     features
 }

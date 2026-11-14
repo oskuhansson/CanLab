@@ -150,7 +150,7 @@ study gave. Light crosses the 54.1 mm between the two furthest sensors in
 measurement. The failure is the **sensor placement**, not the clock.
 
 The **network** does much better than the analytic inversion, because it
-marginalises over the unknown track position: **27.5° median, 36.0° at 68 %**, and
+marginalises over the unknown track position: **27.2° median, 36.2° at 68 %**, and
 **56 % of events within 30°** through the realistic readout. That is borderline
 rather than a pass — the mission wants most events inside 30°, not a bare
 majority — but it is the design's real number, and it is what the corrected photon
@@ -182,9 +182,9 @@ Measured through the realistic readout, on the corrected photon count:
 
 | Block | Mass | Horizontal area | Median | Within 30° |
 |---|---|---|---|---|
-| 20 mm tent, 10 mm | 36 g | 400 mm² | 27.5° | 56 % |
-| 24 mm tent, 20 mm | 103 g | 960 mm² | 26.1° | 58 % |
-| **28 mm hexagon, 30 mm** | **73 g** | **2 036 mm²** | **25.5°** | **60 %** |
+| 20 mm tent, 10 mm | 36 g | 400 mm² | 27.2° | 56 % |
+| 24 mm tent, 20 mm | 103 g | 960 mm² | 25.1° | 59 % |
+| **28 mm hexagon, 30 mm** | **73 g** | **2 036 mm²** | **25.9°** | **62 %** |
 
 The hexagon is the better shape on every axis that matters: five times the muon
 rate, half the mass of the comparable tent, and the best direction resolution of

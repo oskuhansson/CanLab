@@ -3420,21 +3420,15 @@ pub fn designs(app: &mut CasApp, ui: &mut Ui) {
         .striped(true)
         .show(ui, |ui| {
             ui.label("sensor");
-            ui.label("true ps");
-            ui.label("recorded ps");
+            ui.label("true arrivals, ps");
+            ui.label("recorded arrivals, ps");
             ui.label("photons");
             ui.label("fired");
             ui.end_row();
             for index in 0..4 {
                 ui.label(format!("{index}"));
-                ui.label(match scene.event.true_ps[index].first() {
-                    Some(time) => format!("{time:.1}"),
-                    None => "—".to_owned(),
-                });
-                ui.label(match scene.event.arrivals_ps[index].first() {
-                    Some(time) => format!("{time:.1}"),
-                    None => "—".to_owned(),
-                });
+                ui.label(arrival_list(&scene.event.true_ps[index]));
+                ui.label(arrival_list(&scene.event.arrivals_ps[index]));
                 ui.label(format!("{}", scene.event.arrivals_ps[index].len()));
                 let lit = scene
                     .first_arrival_ps(index)
@@ -3519,6 +3513,26 @@ pub fn designs(app: &mut CasApp, ui: &mut Ui) {
     });
 }
 
+/// Every arrival at a sensor, as a line of whole picoseconds.
+///
+/// Six are enough to see the shape, and a tenth would make the column wider than
+/// the panel. The count in the next column says how many there really were.
+fn arrival_list(times: &[f64]) -> String {
+    if times.is_empty() {
+        return "—".to_owned();
+    }
+    let mut text = times
+        .iter()
+        .take(6)
+        .map(|time| format!("{time:.0}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if times.len() > 6 {
+        text.push_str(" …");
+    }
+    text
+}
+
 /// The features the network reads, from the event the view is showing.
 fn event_features(
     scene: &crate::detector::DetectorScene,
@@ -3526,11 +3540,21 @@ fn event_features(
     let event = &scene.event;
     let mut times = [None; 4];
     let mut second_times = [None; 4];
+    let mut mean_times = [None; 4];
+    let mut spreads = [None; 4];
     let mut counts = [0; 4];
     for index in 0..4 {
-        times[index] = event.arrivals_ps[index].first().copied();
-        second_times[index] = event.arrivals_ps[index].get(1).copied();
-        counts[index] = event.arrivals_ps[index].len();
+        let arrivals = &event.arrivals_ps[index];
+        times[index] = arrivals.first().copied();
+        second_times[index] = arrivals.get(1).copied();
+        counts[index] = arrivals.len();
+        if !arrivals.is_empty() {
+            let mean = arrivals.iter().sum::<f64>() / arrivals.len() as f64;
+            let variance = arrivals.iter().map(|time| (time - mean) * (time - mean)).sum::<f64>()
+                / arrivals.len() as f64;
+            mean_times[index] = Some(mean);
+            spreads[index] = Some(variance.sqrt());
+        }
     }
     let outcome = canlab_muon::TimingOutcome {
         timed: times.iter().filter(|time| time.is_some()).count(),
@@ -3539,6 +3563,8 @@ fn event_features(
         photons: event.photons_born,
         times,
         second_times,
+        mean_times,
+        spreads,
         counts,
         direction: scene.truth,
     };

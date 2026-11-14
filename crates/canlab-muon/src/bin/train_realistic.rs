@@ -78,6 +78,7 @@ fn generate(
     realistic: bool,
     count: usize,
     seed: u64,
+    trim: bool,
 ) -> Vec<Sample> {
     let mut rng = Rng::new(seed);
     let mut samples = Vec::with_capacity(count);
@@ -98,7 +99,12 @@ fn generate(
         } else {
             training_sample(&varied, &mut rng)
         };
-        if let Some(sample) = sample {
+        if let Some(mut sample) = sample {
+            // The ablation: the first and second arrivals, the flags and the
+            // counts, without the multi-hit summary the last eight features add.
+            if trim {
+                sample.features.truncate(16);
+            }
             samples.push(sample);
         }
     }
@@ -112,9 +118,10 @@ fn run_configuration(
     domain: &Domain,
     readout: &Readout,
     realistic: bool,
+    trim: bool,
 ) -> Summary {
-    let training = generate(design, domain, readout, realistic, TRAINING, 1);
-    let testing = generate(design, domain, readout, realistic, TESTING, 2);
+    let training = generate(design, domain, readout, realistic, TRAINING, 1, trim);
+    let testing = generate(design, domain, readout, realistic, TESTING, 2, trim);
     let inputs = training.first().map(|s| s.features.len()).unwrap_or(0);
     let mut rng = Rng::new(3);
     let mut network = Network::new(inputs, HIDDEN, &mut rng);
@@ -174,6 +181,7 @@ fn main() {
     println!("matters, not the median. A design that is usually 20° and sometimes");
     println!("150° is not the same as one that is always 25°.\n");
 
+    let trim = std::env::args().any(|argument| argument == "--first-second-only");
     let design = design_from_args();
     println!(
         "design: {:.0} mm tent, {:.0} mm deep, n = {:.2}\n",
@@ -190,9 +198,9 @@ fn main() {
     );
     println!("{}", "-".repeat(75));
 
-    run_configuration("ideal readout", &design, &domain, &ideal, false);
-    run_configuration("nominal readout", &design, &domain, &nominal, true);
-    run_configuration("conservative readout", &design, &domain, &conservative, true);
+    run_configuration("ideal readout", &design, &domain, &ideal, false, trim);
+    run_configuration("nominal readout", &design, &domain, &nominal, true, trim);
+    run_configuration("conservative readout", &design, &domain, &conservative, true, trim);
 
     println!("\nWhat this means");
     println!("{}", "-".repeat(75));

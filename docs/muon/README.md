@@ -86,7 +86,7 @@ crossing time to differ between sensors.
 | Design | EUR | g | Sensors | Angle | Directed muons | Verdict |
 |---|---|---|---|---|---|---|
 | Counter | 148 | 37.2 | 1 | none | 31.3 | No direction |
-| Cherenkov timing (hexagon) | 218 | 73 | 4 | 81.2° bound | 26 | 25.5° network, 60 % within 30° |
+| Cherenkov timing (hexagon) | 218 | 73 | 4 | 81.2° bound | 26 | 25.9° network, 62 % within 30° |
 | **Short tracker** | **278** | **28.0** | **8** | **(23.4°) formula** | **10.1** | **Passes** |
 | Coarse tracker | 278 | 28.0 | 8 | (11.7°) formula | 5.3 | Too few muons |
 | Fine tracker | 923 | 28.0 | 32 | (3.9°) formula | 3.1 | Over budget |
