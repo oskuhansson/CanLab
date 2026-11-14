@@ -341,12 +341,25 @@ fn handle_field_keys(app: &mut CasApp, ui: &mut Ui, response: &egui::Response) {
         ours
     });
 
+    let changed = apply_field_events(app, &events);
+    if changed {
+        ui.ctx().request_repaint();
+    }
+}
+
+/// Apply the events a focused field has claimed, and say whether anything changed.
+///
+/// Split out of [`handle_field_keys`] so that the routing can be tested without a
+/// `Response`: every GUI test used to type by calling `field.type_str` directly,
+/// which skipped this function entirely — and this function is where a keystroke
+/// becomes an edit.
+fn apply_field_events(app: &mut CasApp, events: &[egui::Event]) -> bool {
     let mut changed = false;
     for event in events {
         match event {
             egui::Event::Text(text) => {
                 app.note_edit(false);
-                app.field.type_str(&text);
+                app.field.type_str(text);
                 changed = true;
             }
             egui::Event::Key {
@@ -406,8 +419,8 @@ fn handle_field_keys(app: &mut CasApp, ui: &mut Ui, response: &egui::Response) {
 
     if changed {
         app.recompute();
-        ui.ctx().request_repaint();
     }
+    changed
 }
 
 /// The buttons that act on the *document*, shown in the Variables panel because
@@ -2576,6 +2589,65 @@ fn vertical_extent(curve: &Curve) -> Option<(f64, f64)> {
         span * 0.10
     };
     Some((min - pad, max + pad))
+}
+
+#[cfg(test)]
+mod typing_tests {
+    use super::*;
+
+    fn text(text: &str) -> Vec<egui::Event> {
+        vec![egui::Event::Text(text.to_string())]
+    }
+
+    fn app() -> CasApp {
+        let mut app = CasApp::new();
+        app.field = canlab_input::MathField::from_latex("").expect("an empty field");
+        app
+    }
+
+    #[test]
+    fn typing_a_bracket_puts_the_caret_inside_it() {
+        // Reported: typing `(` then `x` gave `x()` instead of `(x)`. The model
+        // was right — `MathField` alone does this correctly — so the bug, if it
+        // is one, is in the routing this test drives.
+        let mut app = app();
+        apply_field_events(&mut app, &text("("));
+        assert_eq!(app.field.to_latex(), "\\left(\\right)");
+        apply_field_events(&mut app, &text("x"));
+        assert_eq!(
+            app.field.to_latex(),
+            "\\left(x\\right)",
+            "typing into a bracket put the character outside it"
+        );
+    }
+
+    #[test]
+    fn typing_the_closing_bracket_steps_past_the_ghost() {
+        // Reported: no way to get past the ghost closing half.
+        let mut app = app();
+        apply_field_events(&mut app, &text("("));
+        apply_field_events(&mut app, &text("x"));
+        apply_field_events(&mut app, &text(")"));
+        assert_eq!(
+            app.field.to_latex(),
+            "\\left(x\\right)",
+            "the closing bracket was inserted instead of stepping past the ghost"
+        );
+        // And typing after it lands outside the pair, not inside.
+        apply_field_events(&mut app, &text("+"));
+        assert_eq!(app.field.to_latex(), "\\left(x\\right)+");
+    }
+
+    #[test]
+    fn a_bracket_typed_around_a_selection_wraps_it() {
+        // The other half of the pair rule: with a selection the ghost is
+        // hardened immediately, because the content already delimits it.
+        let mut app = app();
+        apply_field_events(&mut app, &text("x"));
+        app.field.select_all();
+        apply_field_events(&mut app, &text("("));
+        assert_eq!(app.field.to_latex(), "\\left(x\\right)");
+    }
 }
 
 #[cfg(test)]
