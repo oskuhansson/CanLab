@@ -218,6 +218,11 @@ enum Delim {
     Paren,
     Bracket,
     Brace,
+    /// `|`, which is both halves of an absolute-value pair.
+    Abs,
+    /// `\right.` — a delimiter that is not drawn. It closes an absolute value
+    /// written for "evaluate here", which is how an exam writes it.
+    None,
 }
 
 impl Delim {
@@ -225,6 +230,8 @@ impl Delim {
         match self {
             Delim::Paren => "(",
             Delim::Bracket => "[",
+            Delim::Abs => "|",
+            Delim::None => ".",
             Delim::Brace => "{",
         }
     }
@@ -234,6 +241,8 @@ impl Delim {
             Delim::Paren => ")",
             Delim::Bracket => "]",
             Delim::Brace => "}",
+            Delim::Abs => "|",
+            Delim::None => ".",
         }
     }
 
@@ -243,6 +252,7 @@ impl Delim {
             (Delim::Paren, TokenKind::RParen)
                 | (Delim::Bracket, TokenKind::RBracket)
                 | (Delim::Brace, TokenKind::RBrace)
+                | (Delim::Abs, TokenKind::Pipe)
         )
     }
 }
@@ -1085,7 +1095,8 @@ impl Parser {
         };
         self.advance(); // `\right`
         let close = self.take_close_delimiter("\\right")?;
-        if open != close {
+        // `\right.` draws nothing and matches anything.
+        if open != close && close != Delim::None {
             return Err(ParseError::new(
                 format!(
                     "mismatched delimiters: `\\left{}` closed by `\\right{}`",
@@ -1095,6 +1106,12 @@ impl Parser {
                 right_pos,
             ));
         }
+        // An absolute value is a value, not a decoration: `\left|x\right|` is
+        // `abs(x)`, which the evaluator and the differentiator both know. The
+        // brackets around a group are grouping and produce nothing.
+        if open == Delim::Abs {
+            return Ok(ExprNode::fn_raw(SymbolId::intern("abs"), vec![inner]));
+        }
         Ok(inner)
     }
 
@@ -1102,6 +1119,7 @@ impl Parser {
         let delim = match &self.peek().kind {
             TokenKind::LParen => Some(Delim::Paren),
             TokenKind::LBracket => Some(Delim::Bracket),
+            TokenKind::Pipe => Some(Delim::Abs),
             _ => None,
         };
         match delim {
@@ -1111,7 +1129,7 @@ impl Parser {
             }
             None => Err(ParseError::new(
                 format!(
-                    "expected `(` or `[` after `{who}` (found {})",
+                    "expected `(`, `[` or `|` after `{who}` (found {})",
                     self.peek().kind.describe()
                 ),
                 self.peek().pos,
@@ -1120,9 +1138,16 @@ impl Parser {
     }
 
     fn take_close_delimiter(&mut self, who: &str) -> Result<Delim, ParseError> {
+        // `\right.` draws nothing and matches anything.
+        if matches!(self.peek().kind, TokenKind::Dot) {
+            self.advance();
+            return Ok(Delim::None);
+        }
         let delim = match &self.peek().kind {
             TokenKind::RParen => Some(Delim::Paren),
             TokenKind::RBracket => Some(Delim::Bracket),
+            TokenKind::RBrace => Some(Delim::Brace),
+            TokenKind::Pipe => Some(Delim::Abs),
             _ => None,
         };
         match delim {
@@ -1133,7 +1158,7 @@ impl Parser {
             None => Err(ParseError::new(
                 format!(
                     "expected `)` or `]` after `{who}` (found {})",
-                    self.peek().kind.describe()
+                    "expected `)`, `]`, `}}`, `|` or `.` after `{who}` (found {})",
                 ),
                 self.peek().pos,
             )),

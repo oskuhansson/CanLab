@@ -51,6 +51,10 @@ pub enum TokenKind {
     Star,
     Slash,
     Bang,
+    /// `|`, which is either half of an absolute-value pair.
+    Pipe,
+    /// `.`, which only appears as `\right.` — a delimiter that is not drawn.
+    Dot,
     Comma,
     /// The synthetic token at `src.len()`; always the last token.
     Eof,
@@ -78,6 +82,8 @@ impl TokenKind {
             TokenKind::Star => "`*`".to_string(),
             TokenKind::Slash => "`/`".to_string(),
             TokenKind::Bang => "`!`".to_string(),
+            TokenKind::Pipe => "`|`".to_string(),
+            TokenKind::Dot => "`.`".to_string(),
             TokenKind::Comma => "`,`".to_string(),
         }
     }
@@ -151,6 +157,18 @@ pub(crate) fn tokenize(src: &str) -> Result<Vec<Token>, ParseError> {
             b',' => {
                 i += 1;
                 tokens.push(Token { kind: TokenKind::Comma, pos: start });
+            }
+            b'|' => {
+                i += 1;
+                tokens.push(Token { kind: TokenKind::Pipe, pos: start });
+            }
+            // A bare `.` is not a number and not an operator; the only place it
+            // appears is `\right.`, and the parser is what gives it meaning. A
+            // `.` that starts a decimal is the arm below, so this one is guarded
+            // — without the guard it shadowed that arm.
+            b'.' if !starts_decimal(bytes, start) => {
+                i += 1;
+                tokens.push(Token { kind: TokenKind::Dot, pos: start });
             }
             b'\\' => {
                 let (name, end) = lex_command(src, start)?;

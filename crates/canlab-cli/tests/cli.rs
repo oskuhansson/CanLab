@@ -257,6 +257,29 @@ fn solve_all_reports_a_decline_with_its_reason() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn absolute_value_parses_and_prints_back_as_delimiters() {
+    // W11.1: `\left| … \right|` appears in every absolute-value or
+    // evaluation-at-a-point problem, and it was refused as an unexpected `|`.
+    for source in [r"\left|x\right|", r"\left|-3\right|", r"\left| x + 1 \right|"] {
+        let (ok, stdout, stderr) = canlab(&["tex", source]);
+        assert!(ok, "{source}: {stderr}");
+        assert!(
+            stdout.trim().starts_with(r"\left|") && stdout.trim().ends_with(r"\right|"),
+            "{source} printed as {stdout}"
+        );
+    }
+    // `\right.` is a delimiter that is not drawn, and it closes an absolute
+    // value written for "evaluate here".
+    let (ok, stdout, stderr) = canlab(&["tex", r"\left|x\right."]);
+    assert!(ok, "stderr: {stderr}");
+    assert!(stdout.trim().starts_with(r"\left|"), "{stdout}");
+    // And it is a value: `\left|-3\right|` is 3.
+    let (ok, stdout, _) = canlab(&["eval", r"\left|-3\right|"]);
+    assert!(ok);
+    assert!(stdout.contains('3'), "{stdout}");
+}
+
+#[test]
 fn a_vector_accent_round_trips_through_the_parser_and_the_printer() {
     // `canlab-tex` is reachable here and not in `canlab-parse`'s own tests, so
     // this is where the round trip is checked end to end.

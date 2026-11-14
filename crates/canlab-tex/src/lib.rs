@@ -417,6 +417,16 @@ fn greek_command(name: &str) -> Option<&'static str> {
 
 fn write_function(name: SymbolId, args: &[Expr], out: &mut String) {
     let function = name.as_str();
+    // `abs` is the one function whose LaTeX is a delimiter pair, not a name and
+    // a call: `\left|x\right|` is how an exam writes it, and it is what the
+    // parser reads back. Printing `\operatorname{abs}(x)` would be correct and
+    // would not round-trip.
+    if function == "abs" && args.len() == 1 {
+        out.push_str("\\left|");
+        write_node(&args[0], out, PREC_ADD);
+        out.push_str("\\right|");
+        return;
+    }
     match function_command(&function) {
         Some(command) => out.push_str(command),
         // An unknown name still has to look like a function, not a product of
