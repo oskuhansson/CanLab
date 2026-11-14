@@ -1227,6 +1227,44 @@ fn surface(app: &mut CasApp, ui: &mut Ui, rect: Rect, response: &egui::Response)
             egui::Stroke::new(0.4, egui::Color32::from_rgb(27, 27, 27)),
         ));
     }
+    // Hover picking, drawn last so the marker sits on the surface.
+    //
+    // The pointer is read from the input and not from `response.hover_pos()`:
+    // egui decides "hovered" from the *previous* frame's pointer, so a response
+    // in the frame the pointer arrives reports nothing. The rectangle test is the
+    // same question and does not need a frame of history.
+    if let Some(position) = ui.input(|input| input.pointer.hover_pos())
+        && rect.contains(position)
+    {
+        let ndc = (
+            f64::from((position.x - rect.left()) / rect.width()) * 2.0 - 1.0,
+            1.0 - f64::from((position.y - rect.top()) / rect.height()) * 2.0,
+        );
+        if let Some(hit) = canlab_scene::pick::pick(&mesh, &camera, ndc)
+            && let Some(projected) = camera.project(hit.point)
+        {
+            let (x, y) = canlab_scene::Camera::to_pixels(
+                projected,
+                f64::from(rect.width()),
+                f64::from(rect.height()),
+            );
+            let at = rect.min + egui::vec2(x as f32, y as f32);
+            painter.circle_stroke(at, 4.0, egui::Stroke::new(1.2, crate::theme::accent()));
+            // The coordinates of the point under the pointer, which is the whole
+            // reason to pick: the picture says where the surface is, and this
+            // says what it is worth there.
+            painter.text(
+                at + egui::vec2(8.0, -8.0),
+                egui::Align2::LEFT_BOTTOM,
+                format!(
+                    "({:.2}, {:.2}, {:.2})",
+                    hit.point.x, hit.point.y, hit.point.z
+                ),
+                egui::FontId::proportional(10.0),
+                crate::theme::accent(),
+            );
+        }
+    }
     true
 }
 
@@ -2544,11 +2582,13 @@ mod surface_tests {
     /// How many convex polygons the frame painted.
     fn painted_polygons(app: &mut CasApp) -> usize {
         let ctx = egui::Context::default();
-        let mut raw = egui::RawInput::default();
-        raw.screen_rect = Some(egui::Rect::from_min_size(
-            egui::Pos2::ZERO,
-            egui::vec2(400.0, 400.0),
-        ));
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(400.0, 400.0),
+            )),
+            ..Default::default()
+        };
         let mut output = ctx.run_ui(raw, |ui| plot(app, ui));
         output.textures_delta.clear();
         output
@@ -2577,11 +2617,13 @@ mod surface_tests {
     /// Every text run the frame painted.
     fn painted_text(app: &mut CasApp) -> Vec<String> {
         let ctx = egui::Context::default();
-        let mut raw = egui::RawInput::default();
-        raw.screen_rect = Some(egui::Rect::from_min_size(
-            egui::Pos2::ZERO,
-            egui::vec2(400.0, 400.0),
-        ));
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(400.0, 400.0),
+            )),
+            ..Default::default()
+        };
         let mut output = ctx.run_ui(raw, |ui| plot(app, ui));
         output.textures_delta.clear();
         output
@@ -2615,17 +2657,63 @@ mod surface_tests {
     }
 
     #[test]
+    fn hovering_the_surface_names_the_point_under_the_pointer() {
+        // The reason to pick: the picture says where the surface is, and the
+        // label says what it is worth there. Without this test the picking
+        // function could be perfect and never called.
+        let mut app = app_with("0.2*(x^2 + y^2)");
+        app.view_3d = true;
+        let ctx = egui::Context::default();
+        let mut raw = egui::RawInput::default();
+        let size = egui::vec2(400.0, 400.0);
+        raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size));
+        // The pointer at the centre of the canvas, where the surface is.
+        raw.events.push(egui::Event::PointerMoved(egui::pos2(
+            size.x * 0.5,
+            size.y * 0.5,
+        )));
+        let mut output = ctx.run_ui(raw, |ui| plot(&mut app, ui));
+        output.textures_delta.clear();
+        let text: Vec<String> = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+                _ => None,
+            })
+            .collect();
+        let label = text
+            .iter()
+            .find(|run| run.starts_with('(') && run.ends_with(')'))
+            .unwrap_or_else(|| panic!("no coordinates under the pointer: {text:?}"));
+        // Three numbers, and the `z` is the surface's own value at that `x, y`.
+        let inner = label.trim_start_matches('(').trim_end_matches(')');
+        let parts: Vec<f64> = inner
+            .split(", ")
+            .map(|part| part.parse().expect("a number"))
+            .collect();
+        assert_eq!(parts.len(), 3, "{label}");
+        let expected = 0.2 * (parts[0] * parts[0] + parts[1] * parts[1]);
+        assert!(
+            (parts[2] - expected).abs() < 0.05,
+            "{label}: z should be about {expected}"
+        );
+    }
+
+    #[test]
     fn the_3d_mode_is_only_offered_for_two_variables() {
         // The toggle clears the mode for a document it cannot draw, so the panel
         // cannot be left in a mode that shows nothing.
         let mut app = app_with("x^2 + y^2");
         app.view_3d = true;
         let ctx = egui::Context::default();
-        let mut raw = egui::RawInput::default();
-        raw.screen_rect = Some(egui::Rect::from_min_size(
-            egui::Pos2::ZERO,
-            egui::vec2(200.0, 200.0),
-        ));
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(200.0, 200.0),
+            )),
+            ..Default::default()
+        };
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 200.0));
         // `run_ui` hands back a `FullOutput` whose texture deltas must be cleared
         // before it is dropped, or epaint panics. The snapshot test does the same.
