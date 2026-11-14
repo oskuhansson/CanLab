@@ -181,6 +181,12 @@ pub struct PhotonRecord {
     /// is *not* the arrival: the photon was emitted when the muon passed its
     /// birth point, which is tens of picoseconds into the crossing.
     pub birth_ps: f64,
+    /// The sensor that detected it, if one did.
+    ///
+    /// `None` for a photon that escaped through a face no sensor covers, one
+    /// the sensor's coverage missed, and one below the PDE — the three ways an
+    /// escaped photon is still not a timestamp.
+    pub detected: Option<usize>,
 }
 
 /// Simulate one muon crossing the block and return what the four sensors see.
@@ -360,6 +366,7 @@ fn simulate_inner(
                 face: traced.face,
                 time_ps: traced.time_ps,
                 birth_ps,
+                detected: None,
             });
         }
         match traced.fate {
@@ -399,6 +406,11 @@ fn simulate_inner(
         let jitter = box_muller(random) * sensor.jitter_ps;
         event.true_ps[sensor_index].push(birth_ps + traced.time_ps);
         event.arrivals_ps[sensor_index].push(birth_ps + traced.time_ps + jitter);
+        if let Some(records) = records.as_deref_mut() {
+            if let Some(record) = records.last_mut() {
+                record.detected = Some(sensor_index);
+            }
+        }
     }
     for times in &mut event.arrivals_ps {
         times.sort_by(f64::total_cmp);

@@ -3405,12 +3405,18 @@ pub fn designs(app: &mut CasApp, ui: &mut Ui) {
                 egui::Slider::new(&mut scene.photon_limit, 0..=total.max(1))
                     .text(format!("of {total}")),
             );
+            ui.separator();
+            for (colour, label) in [
+                (crate::detector::DETECTED, "detected"),
+                (crate::detector::LOST, "lost"),
+                (crate::detector::ABSORBED, "absorbed"),
+                (crate::detector::TRAPPED, "trapped"),
+            ] {
+                ui.colored_label(colour, format!("● {label}"));
+            }
         }
         ui.label(format!("t = {:.0} ps", scene.time_ps));
-        ui.label(format!(
-            "seed {} · {} photons reached a sensor",
-            scene.seed, scene.detected
-        ));
+        ui.label(format!("seed {} · {} photons detected", scene.seed, scene.detected));
     });
 
     // The timestamps.

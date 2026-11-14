@@ -15,8 +15,18 @@
 //! photon that reached it gets there.
 
 use canlab_muon::timing_study::TimingDesign;
-use canlab_optics::{Block, Event, Optical, PhotonRecord, SiPM, Vec3};
+use canlab_optics::{Block, Event, Fate, Optical, PhotonRecord, SiPM, Vec3};
 use canlab_scene::Camera;
+
+/// A photon a sensor detected: the signal.
+pub const DETECTED: egui::Color32 = egui::Color32::from_rgb(120, 255, 170);
+/// A photon that escaped through a face no sensor covers, or that the sensor's
+/// coverage or PDE missed.
+pub const LOST: egui::Color32 = egui::Color32::from_rgb(255, 220, 120);
+/// A photon absorbed in the block.
+pub const ABSORBED: egui::Color32 = egui::Color32::from_gray(96);
+/// A photon still inside when its bounce budget ran out.
+pub const TRAPPED: egui::Color32 = egui::Color32::from_rgb(255, 120, 120);
 
 /// The speed of light, millimetres per picosecond.
 const C_MM_PER_PS: f64 = 0.299_792_458;
@@ -114,10 +124,9 @@ impl DetectorScene {
         )
         .ok()?;
         let (inside_start, inside_end) = inside_segment(&block, entry, heading)?;
-        let detected = photons
-            .iter()
-            .filter(|photon| photon.face.is_some_and(|face| sensors.iter().any(|s| s.face == face)))
-            .count();
+        // The photons a sensor actually detected — not the ones that reached a
+        // sensor's face and were lost to its coverage or its PDE.
+        let detected = photons.iter().filter(|photon| photon.detected.is_some()).count();
         // A stable shuffle, so the subset is random but does not change from
         // frame to frame — a subset that re-drew every frame would flicker.
         let mut order: Vec<usize> = (0..photons.len()).collect();
@@ -381,8 +390,17 @@ pub fn draw(scene: &mut DetectorScene, ui: &mut egui::Ui, rect: egui::Rect) -> e
         // along the track, so a stride samples the track's positions rather
         // than the emission. The subset is fixed per scene, so it does not
         // flicker as the clock runs.
-        let photon_colour = Stroke::new(1.3, Color32::from_rgb(126, 198, 255));
         for photon in scene.visible() {
+            // The fate is the point of the picture: a photon that reached a
+            // sensor is the signal, and the three ways of not reaching one are
+            // three different losses.
+            let colour = match (photon.detected, photon.fate) {
+                (Some(_), _) => DETECTED,
+                (None, Fate::Escaped) => LOST,
+                (None, Fate::Absorbed) => ABSORBED,
+                (None, Fate::Trapped) => TRAPPED,
+            };
+            let photon_colour = Stroke::new(1.3, colour);
             let birth = scene.birth_ps(photon);
             if scene.time_ps < birth {
                 continue;
