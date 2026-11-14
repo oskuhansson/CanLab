@@ -13,3 +13,9 @@ wgpu = { version = "30.0.1", default-features = false, features = ["vulkan", "wg
 canlab-core = { path = "../canlab-core" }
 # `enumerate_adapters` is async in wgpu 30, and a probe binary has no runtime.
 pollster = "1.0.1"
+
+[dev-dependencies]
+# The photon kernel is the one that matters: it draws random numbers and has real
+# physics, so it is the kernel the differential test should run. A dev-dependency
+# and not a dependency, so that `canlab-optics` stays free of the graphics stack.
+canlab-optics = { path = "../canlab-optics" }

@@ -2268,6 +2268,7 @@ name = "canlab-gpu"
 version = "0.1.0"
 dependencies = [
  "canlab-core",
+ "canlab-optics",
  "pollster",
  "wgpu",
 ]

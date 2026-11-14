@@ -174,7 +174,11 @@ pub fn reference(photon: &Photon, seed: u64) -> Result<f64, KernelError> {
         let rp = (photon.index * cos_out - cos_t) / (photon.index * cos_out + cos_t);
         r = (rs * rs + rp * rp) / 2.0;
     }
-    let mut stream = Stream { state: seed };
+    // The same seeding the interpreter and the shader use: the seed hashed and
+    // forced odd, because xorshift from zero is zero forever.
+    let mut stream = Stream {
+        state: (seed as u32).wrapping_mul(0x9E37_79B9) | 1,
+    };
     let mut path = 0.0;
     let mut bounces = 0u32;
     let mut alive = true;
@@ -188,19 +192,23 @@ pub fn reference(photon: &Photon, seed: u64) -> Result<f64, KernelError> {
     Ok(path)
 }
 
-/// The same splitmix64 stream the interpreter draws from.
+/// The same `u32` xorshift stream the interpreter and the shader draw from.
+///
+/// `u32` and not splitmix64 because WGSL has no `u64`: a generator the shader
+/// language cannot express would make the CPU and GPU runs two different
+/// photons, and the differential test meaningless.
 struct Stream {
-    state: u64,
+    state: u32,
 }
 
 impl Stream {
     fn next(&mut self) -> f64 {
-        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^= z >> 31;
-        (z >> 11) as f64 / (1u64 << 53) as f64
+        let mut state = self.state;
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        self.state = state;
+        f64::from(state >> 8) / 16_777_216.0
     }
 }
 
@@ -231,7 +239,11 @@ mod tests {
         let kernel = canlab_core::wgsl::compile(SOURCE).expect("the kernel compiles");
         assert!(kernel.wgsl.contains("fn kernel("), "{}", kernel.wgsl);
         assert!(kernel.wgsl.contains("sqrt("), "{}", kernel.wgsl);
-        assert!(kernel.wgsl.contains("rand(seed)"), "{}", kernel.wgsl);
+        // `rand()` and not `rand(seed)`: the shader owns the stream's state and
+        // seeds it from the invocation index, and the interpreter seeds its own
+        // from the caller's seed. A `rand(seed)` that re-seeded on every call
+        // would draw the same number forever.
+        assert!(kernel.wgsl.contains("rand()"), "{}", kernel.wgsl);
         // A condition is a `bool`, not a `select`, which is the bug the Solver
         // owner found in the emitter.
         assert!(!kernel.wgsl.contains("while (select("), "{}", kernel.wgsl);

@@ -968,7 +968,11 @@ impl Compiler {
             ("math.min", 2) => format!("min({joined})"),
             ("math.max", 2) => format!("max({joined})"),
             ("math.pow", 2) => format!("pow({joined})"),
-            ("rand", 0) => String::from("rand(seed)"),
+            // `rand()` takes no argument: the shader owns the state and
+            // seeds it from the invocation index, and the interpreter seeds
+            // its own from the seed the caller passes. A `rand(seed)` that
+            // re-seeded on every call would draw the same number forever.
+            ("rand", 0) => String::from("rand()"),
             ("math.random", 0) => String::from("rand(seed)"),
             (other, count) => {
                 return Err(Diagnostic::new(
@@ -1097,7 +1101,9 @@ pub fn interpret(
     let mut machine = Machine {
         variables: HashMap::new(),
         precision,
-        rng: seed,
+        // The seed is hashed and then forced odd: xorshift from zero is zero
+        // forever, and `seed | 1` alone would map 42 and 43 to the same state.
+        rng: (seed as u32).wrapping_mul(0x9E37_79B9) | 1,
         steps: 0,
     };
     for (name, value) in arguments {
@@ -1120,9 +1126,9 @@ enum Flow {
 struct Machine {
     variables: HashMap<String, f64>,
     precision: Precision,
-    /// The random stream's state. splitmix64, so that a seed gives the same
-    /// draws on every machine and in every language.
-    rng: u64,
+    /// The random stream's state: a `u32` xorshift, so that the same seed gives
+    /// the same draws here and in the emitted WGSL.
+    rng: u32,
     steps: u64,
 }
 
@@ -1139,17 +1145,21 @@ impl Machine {
 
     /// The next draw in `[0, 1)`.
     ///
-    /// splitmix64 and not a language's default generator: the same seed must
-    /// give the same stream here and in the WGSL, or a differential test is
-    /// comparing two different photons.
+    /// A **u32** xorshift, and not splitmix64, because WGSL has no `u64`: a
+    /// kernel that draws has to compute the same stream on the GPU, and a
+    /// generator the shader language cannot express makes the differential test
+    /// compare two different photons. The top 24 bits are taken because `f32`
+    /// represents integers exactly only up to `2²⁴`, so `state >> 8` divided by
+    /// `2²⁴` is exact in single precision on both sides.
+    ///
+    /// The state is `seed | 1`, so a seed of zero still draws.
     fn random(&mut self) -> f64 {
-        self.rng = self.rng.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.rng;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^= z >> 31;
-        // The top 53 bits, so the result is a `f64` in `[0, 1)` without a bias.
-        (z >> 11) as f64 / (1u64 << 53) as f64
+        let mut state = self.rng;
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        self.rng = state;
+        f64::from(state >> 8) / 16_777_216.0
     }
 
     fn run(&mut self, statements: &[Statement]) -> Result<Flow, RunError> {
@@ -1440,7 +1450,7 @@ mod tests {
     #[test]
     fn the_random_stream_is_a_call_the_shader_defines() {
         let kernel = compile_ok("return rand()");
-        assert!(kernel.wgsl.contains("rand(seed)"), "{}", kernel.wgsl);
+        assert!(kernel.wgsl.contains("rand()"), "{}", kernel.wgsl);
     }
 
     #[test]

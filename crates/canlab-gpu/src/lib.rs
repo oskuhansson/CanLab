@@ -147,6 +147,16 @@ fn shader(kernel: &Kernel, parameters: usize) -> String {
         .collect();
     format!(
         "{}\n\
+         // The random stream, in the same u32 xorshift the interpreter uses. The\n\
+         // state is a private global seeded from the invocation index, so each\n\
+         // photon has its own stream and every call advances it.\n\
+         var<private> rng: u32 = 1u;\n\
+         fn rand() -> f32 {{\n\
+         \x20 rng = rng ^ (rng << 13u);\n\
+         \x20 rng = rng ^ (rng >> 17u);\n\
+         \x20 rng = rng ^ (rng << 5u);\n\
+         \x20 return f32(rng >> 8u) / 16777216.0;\n\
+         }}\n\
          @group(0) @binding(0) var<storage, read> inputs: array<f32>;\n\
          @group(0) @binding(1) var<storage, read_write> outputs: array<f32>;\n\
          @compute @workgroup_size(64)\n\
@@ -154,6 +164,7 @@ fn shader(kernel: &Kernel, parameters: usize) -> String {
          \x20 let i = id.x;\n\
          \x20 if (i >= arrayLength(&outputs)) {{ return; }}\n\
          \x20 let base = i * {parameters}u;\n\
+         \x20 rng = (i * 0x9E3779B9u) | 1u;\n\
          \x20 outputs[i] = kernel({});\n\
          }}\n",
         kernel.wgsl,
