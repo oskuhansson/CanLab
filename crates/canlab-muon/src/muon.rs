@@ -35,21 +35,32 @@
 //!
 //! # Altitude
 //!
-//! Two effects, and they are different sizes:
+//! **The flux rises; the shape does not measurably change.**
 //!
 //! * **The flux rises.** `I(H) = I(0) · e^{H/L(p)}` with `L(p) = 4900 + 750p`
 //!   metres and `p` in GeV/c. At 1 km that is **+13.5 %** for a 4 GeV muon and
-//!   **+19.4 %** for a 1 GeV one. The measured jump from sea level to 600 m is
-//!   +36 % in the integrated vertical flux.
-//! * **The distribution flattens slightly.** At altitude the vertical depth is
-//!   smaller, so the decay suppression of inclined muons is weaker and `n` falls.
-//!   The measured trend is about `n = 2.0` at sea level, `1.95` at 1 km and `1.83`
-//!   at 3.1 km — a **3 % change at 1 km**, against the flux's 15 %.
+//!   **+19.4 %** for a 1 GeV one. The integrated flux is dominated by the lower
+//!   energies, so the measured rise at 1 km is nearer **+15–25 %**.
 //!
-//! So the altitude matters mostly as a rate, not as a shape. That is worth saying
-//! because the mission's science is a rate comparison, and the shape change is
-//! small enough that a network trained at one altitude sees almost the same
-//! angular distribution at another.
+//!   The often-quoted "+36 % at 600 m" is **not an altitude measurement**: it
+//!   compares Mumbai (19°N, geomagnetic cutoff 16.4 GV) with Prince Albert
+//!   (53°N, cutoff below 1 GV). The vertical sea-level flux itself runs from
+//!   ~67 m⁻²s⁻¹sr⁻¹ at 19°N to ~91 at 53°N, so the latitude alone accounts for
+//!   the difference.
+//!
+//! * **The shape does not change measurably.** The depth effect (less decay at
+//!   altitude, which would *flatten* the distribution) and the spectral effect
+//!   (a softer spectrum at altitude, and low-energy muons have a *steeper*
+//!   distribution) nearly cancel. The measurements bear that out: sea level
+//!   `n = 2.10 ± 0.05 ± 0.25` (Mumbai), 2.27 km `n = 1.90 ± 0.06 ± 0.10` and
+//!   `2.12 ± 0.19 ± 0.11` (two analyses of Mexico City), 3.1 km `n = 1.83 ± 0.13`
+//!   (Riggi). The sea-level scatter alone (1.745–2.345 across experiments) is
+//!   larger than any altitude trend, so **there is no resolved trend** and this
+//!   module does not model one.
+//!
+//! So the altitude matters as a **rate**, not as a shape. That is worth saying
+//! because the mission's science is a rate comparison, and a network trained at
+//! one altitude sees the same angular distribution at another.
 //!
 //! # The inverse
 //!
@@ -79,23 +90,30 @@ impl MuonFlux {
         MuonFlux { vertical: 70.0, exponent: 2.0, altitude_m: 0.0 }
     }
 
-    /// The same flux at an altitude, with the flux scaled and the exponent
-    /// flattened by the measured trend.
+    /// The measured sea-level flux: Mumbai, `I₀ = 66.7`, `n = 2.10`.
+    ///
+    /// The simulation draws from this rather than from the round `70, 2`, because
+    /// it is what the best sea-level measurement gives. The difference is small —
+    /// the CDF moves by a few per cent — but it is the measured value, and the
+    /// point of carrying a distribution at all is not to round it back.
+    pub fn measured() -> MuonFlux {
+        MuonFlux { vertical: 66.7, exponent: 2.10, altitude_m: 0.0 }
+    }
+
+    /// The same flux at an altitude: the rate rises, the shape does not.
     ///
     /// The scale uses `e^{H/L(p)}` at the mean muon momentum, 4 GeV, which is the
-    /// number the mission's own documents quote. The exponent falls by 0.0005 per
-    /// gram per square centimetre of depth lost, which is the line through the
-    /// three measured points (sea level 2.0, 1 km 1.95, 3.1 km 1.83).
+    /// number the mission's own documents quote. The exponent is left alone: the
+    /// measured values at sea level and at 2.3 km overlap within their errors, and
+    /// the depth and spectral effects that would move it in opposite directions
+    /// nearly cancel. The 3.1 km point is lower, but it is one measurement and the
+    /// sea-level scatter is as large.
     pub fn at_altitude(altitude_m: f64) -> MuonFlux {
         let base = MuonFlux::sea_level();
-        let depth = atmospheric_depth(altitude_m);
-        let sea_level_depth = atmospheric_depth(0.0);
         // L(4 GeV) = 4900 + 750·4 = 7900 m.
         let scale_height = 4900.0 + 750.0 * 4.0;
         let vertical = base.vertical * (altitude_m / scale_height).exp();
-        // The exponent falls with the depth lost, 0.0005 per g/cm².
-        let exponent = (base.exponent - 0.0005 * (sea_level_depth - depth)).clamp(1.7, 2.2);
-        MuonFlux { vertical, exponent, altitude_m }
+        MuonFlux { vertical, exponent: base.exponent, altitude_m }
     }
 
     /// The vertical atmospheric depth at an altitude, g/cm².
@@ -182,21 +200,26 @@ mod tests {
     }
 
     #[test]
-    fn the_altitude_raises_the_flux_and_flattens_the_distribution() {
-        // The two altitude effects, and their relative size: the flux moves about
-        // 15 % at 1 km and the exponent about 3 %.
+    fn the_altitude_raises_the_flux_and_leaves_the_shape_alone() {
+        // The two altitude effects: the rate moves, the shape does not. The flux
+        // rises by e^{H/7900} — 13.5 % at 1 km — and the exponent is unchanged,
+        // because the sea-level and 2.3 km measurements overlap within their
+        // errors and the depth and spectral effects cancel.
         let ground = MuonFlux::sea_level();
         let kilometre = MuonFlux::at_altitude(1000.0);
         assert!(kilometre.vertical > ground.vertical);
         let rise = kilometre.vertical / ground.vertical;
         assert!((rise - 1.135).abs() < 0.01, "{rise}");
-        // The exponent falls, and by less than a tenth.
-        assert!(kilometre.exponent < ground.exponent);
-        assert!((ground.exponent - kilometre.exponent).abs() < 0.1, "{}", kilometre.exponent);
-        // At 3.1 km the measured exponent is 1.83, and the trend must reach it.
+        assert_eq!(kilometre.exponent, ground.exponent);
+        // The rate keeps rising with altitude.
         let three_km = MuonFlux::at_altitude(3100.0);
-        assert!((three_km.exponent - 1.83).abs() < 0.05, "{}", three_km.exponent);
         assert!(three_km.vertical > kilometre.vertical);
+        assert_eq!(three_km.exponent, ground.exponent);
+        // The measured sea-level value is what the simulation draws from, and it
+        // is steeper than the textbook 2.
+        let measured = MuonFlux::measured();
+        assert!((measured.exponent - 2.10).abs() < 1e-12);
+        assert!(measured.exponent > ground.exponent);
     }
 
     #[test]

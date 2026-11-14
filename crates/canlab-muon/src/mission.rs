@@ -95,7 +95,15 @@ pub const MUON_FLUX_VERTICAL_M2_S_SR: f64 = 70.0;
 /// The integrated flux over the upper hemisphere, per square metre per second.
 pub const MUON_FLUX_INTEGRATED_M2_S: f64 = 127.0;
 /// How much higher the flux is at 1 km than at sea level, as a factor.
-pub const MUON_FLUX_1KM_FACTOR: (f64, f64) = (1.25, 1.40);
+///
+/// The formula `e^{H/L(p)}` with `L(p) = 4900 + 750p` gives 1.135 at 4 GeV and
+/// 1.194 at 1 GeV; the integrated flux is dominated by the lower energies, so
+/// the range starts at 1.15. The measured cross-site comparisons reach higher,
+/// but they compare different geomagnetic cutoffs as well as altitudes — the
+/// sea-level flux alone runs from ~67 m⁻²s⁻¹sr⁻¹ at 19°N to ~91 at 53°N — so
+/// the upper end stops at 1.30 rather than at the +72 % a naive comparison of
+/// Mumbai and Mexico City would give.
+pub const MUON_FLUX_1KM_FACTOR: (f64, f64) = (1.15, 1.30);
 /// The mean muon energy at sea level, GeV.
 pub const MUON_MEAN_ENERGY_GEV: f64 = 4.0;
 

@@ -24,8 +24,11 @@
 //!
 //! # What is *not* randomised, and why that is a decision
 //!
-//! The muon's angular distribution is not randomised: it is the `cos²θ` flux, and
-//! varying it would be varying the physics rather than the uncertainty. The
+//! The muon's angular distribution is not randomised: it is the measured
+//! `cos²·¹θ` flux (`MuonFlux::measured`), and varying it would be varying the
+//! physics rather than the uncertainty. The exponent's own scatter across
+//! experiments is ±0.25, which is larger than the altitude trend, so a single
+//! measured value is the honest choice. The
 //! geometry's *nominal* dimensions are not randomised either — only their
 //! tolerances — because a design that fits the can at 40 mm and not at 44 mm is a
 //! design decision, not an uncertainty.

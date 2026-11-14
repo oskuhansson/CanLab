@@ -22,7 +22,7 @@ and a time-to-digital converter timestamps them. Twelve numbers per event — fo
 times, four "did it fire" flags and four photon counts — go into a small neural
 network, which returns the muon's direction.
 
-**The measured resolution is 23.8° median (32.4° at the 68th percentile).**
+**The measured resolution is 28.5° median (37.6° at the 68th percentile).**
 
 ---
 
@@ -45,7 +45,7 @@ flowchart LR
     subgraph G_NET["The network"]
         FEAT["12 features: 4 times, 4 flags, 4 counts"]
         MLP["64 x 64 network, 5122 parameters"]
-        DIR{{"Direction, 23.8 deg median"}}
+        DIR{{"Direction, 28.5 deg median"}}
     end
     MUON -->|"emits"| CONE
     CONE -->|"trapped"| TIR
@@ -76,7 +76,7 @@ sensors cover 15 % of the faces they sit on.
 | Readout jitter | 47.4 ps total (42.5 SiPM, 20 timer, 6 amp, 2 comparator) | `components::total_jitter_ps` |
 | Timestamps per event | 3.25 of 4 on average; 44 % of events have all four | `timing_study::run` |
 | Timing signal | 224 ps across the detector | `timing_signal_ps` |
-| **Direction resolution** | **23.8° median, 32.4° at 68 %** | `train_timing` |
+| **Direction resolution** | **28.5° median, 37.6° at 68 %** | `train_timing` |
 | Cost | 218 € | `Design::cherenkov_timing` |
 
 ---
@@ -88,15 +88,22 @@ The network is a **regressor**, not a classifier: it outputs two continuous numb
 recovered from the unit constraint. The loss is mean squared error, so it converges
 to the conditional mean `E[direction | features]`.
 
-The reported 23.8° is therefore the **median angular error of that point estimate**
+The reported 28.5° is therefore the **median angular error of that point estimate**
 over held-out events — the irreducible spread of the true direction around its own
-conditional mean. Half the muons are reconstructed to better than 23.8°.
+conditional mean. Half the muons are reconstructed to better than 28.5°, and the
+**realistic readout** (a threshold, dark counts, crosstalk and walk) keeps **52 %**
+of events within the mission's 30°.
 
 | Configuration | Median | 68th percentile |
 |---|---|---|
-| timestamps only (8 features) | 31.6° | 41.7° |
-| **timestamps and counts (12 features)** | **23.8°** | **32.4°** |
-| randomised detector | 24.1° | 33.5° |
+| timestamps only (8 features) | 30.3° | 39.8° |
+| **timestamps and counts (16 features)** | **28.5°** | **37.6°** |
+| randomised detector | 29.1° | 37.6° |
+
+The four extra features are the **second arrival** at each sensor — the stop a
+multi-hit TDC records and a single-threshold readout throws away. The gap between
+the first and second photon depends on how far the track is from the sensor, which
+is the latent variable the direction fit needs.
 
 ### Why the network beats the algebra
 
@@ -106,13 +113,16 @@ Two analytic reconstructions were tried first, and both are worse:
 |---|---|---|
 | Linear fit, `t = t₀ + (r·d)/v` | 119.5° | The model is wrong: the light does not leave from a point |
 | Cherenkov model, **true** track point | 81.1° | The model is right, but four timestamps cannot determine the track position |
-| **Network** | **23.8°** | Learns `p(direction | features)`, marginalising over the track position |
+| **Network** | **28.5°** | Learns `p(direction | features)`, marginalising over the track position |
 
 The network is not doing better physics. It is doing something the analytic
 inversion cannot: the track position is a **latent variable**, and the network
 absorbs it into the conditional distribution. The ablation shows where the
 information comes from — the photon counts depend on the path length, and the path
-length depends on where the track is, so the counts are worth **7.8°** on their own.
+length depends on where the track is, so the counts are worth **1.8°** on their own.
+That is less than the earlier study reported, and the difference is a bug fix: the
+photon count used to be taken from the caller's 200 mm path instead of the block's
+own chord, which credited the block with six times the light it makes.
 
 ---
 
@@ -194,7 +204,7 @@ than corrected for.
 2. **The tracker's light model is a kernel, not a transport.** It gives the
    expected photoelectrons per pixel and draws the Poisson count; it does not trace
    individual photons.
-3. **The network's 23.8° is a simulation result.** The sim-to-real gap is
+3. **The network's 28.5° is a simulation result.** The sim-to-real gap is
    unmeasured, and the domain randomisation only covers the parameters that were
    varied.
 4. **The timer part is wrong.** The MAX35101 cannot timestamp four independent

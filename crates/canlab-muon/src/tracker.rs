@@ -592,10 +592,8 @@ mod tests {
         let trials = 20_000;
         let mut accepted = 0;
         for _ in 0..trials {
-            // The cos²θ flux, sampled by inverting its CDF.
-            let u = rng.uniform();
-            let cosine = (1.0 - u).cbrt();
-            let zenith = cosine.acos();
+            // The measured sea-level flux, sampled by inverting its CDF.
+            let zenith = crate::muon::MuonFlux::measured().sample_zenith(rng.uniform());
             let azimuth = rng.range(0.0, std::f64::consts::TAU);
             if simulate(&tracker, &light, zenith, azimuth, &mut rng).is_some() {
                 accepted += 1;

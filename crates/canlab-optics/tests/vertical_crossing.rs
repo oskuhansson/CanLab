@@ -53,7 +53,7 @@ fn a_vertical_muon_in_a_high_index_block_reaches_no_thin_face_sensor() {
         &sensors(),
         Vec3::new(0.0, 0.0, -20.0),
         Vec3::new(0.0, 0.0, 1.0),
-        15.0,
+        30.0,
         1.0,
         &mut random,
     )

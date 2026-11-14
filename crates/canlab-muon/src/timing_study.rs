@@ -18,7 +18,7 @@
 //!
 //! For each event:
 //!
-//! 1. Draw a muon direction from the sea-level `cos²θ` flux.
+//! 1. Draw a muon direction from the measured sea-level flux, `cos²·¹θ`.
 //! 2. Draw a point inside the block, and put the track through it.
 //! 3. Run [`canlab_optics::detector::simulate`] — the real photon transport, with
 //!    total internal reflection, Fresnel loss, absorption, the sensors' coverage
@@ -40,6 +40,7 @@ use canlab_optics::{Block, Optical, SiPM, Tropical, Vec3, SENSOR_FACES};
 
 use crate::bound::timing_bound;
 use crate::components;
+use crate::readout::Readout;
 use crate::timing::{reconstruct, Observation};
 use crate::tracker::Rng;
 
@@ -131,6 +132,13 @@ pub struct TimingOutcome {
     pub photons: usize,
     /// The first arrival at each sensor, picoseconds; `None` for no photon.
     pub times: [Option<f64>; 4],
+    /// The second arrival at each sensor, picoseconds.
+    ///
+    /// A multi-hit TDC records it, and it is information a single-threshold
+    /// readout throws away: the gap between the first and second photon depends
+    /// on how far the track is from the sensor, which is the latent variable the
+    /// direction fit needs.
+    pub second_times: [Option<f64>; 4],
     /// How many photons each sensor registered.
     pub counts: [usize; 4],
     /// The muon's true direction, as the two horizontal components.
@@ -205,9 +213,11 @@ pub fn simulate_one(
         None
     };
     let mut times = [None; 4];
+    let mut second_times = [None; 4];
     let mut counts = [0usize; 4];
     for index in 0..4 {
         times[index] = event.arrivals_ps[index].first().copied();
+        second_times[index] = event.arrivals_ps[index].get(1).copied();
         counts[index] = event.arrivals_ps[index].len();
     }
     Some(TimingOutcome {
@@ -216,6 +226,93 @@ pub fn simulate_one(
         error_exact_deg,
         photons: event.photons_born,
         times,
+        second_times,
+        counts,
+        direction: [heading.x, heading.y],
+    })
+}
+
+/// Simulate one muon through the block with a **realistic readout**.
+///
+/// The ideal [`simulate_one`] takes the first photon at each sensor, which is
+/// what a threshold at half a photoelectron would record. This one runs the
+/// same transport and then puts the readout in the way: the threshold needs
+/// `ceil(threshold_pe)` photoelectrons, crosstalk adds delayed photons, a dark
+/// count can fire before the real one, and the comparator's walk shifts the
+/// timestamp. The result is what the instrument would actually record.
+///
+/// The reconstruction is the same linear fit. The difference between this and
+/// the ideal case is the price of the readout, and it is the number to quote for
+/// a real build.
+pub fn simulate_one_realistic(
+    design: &TimingDesign,
+    readout: &Readout,
+    zenith_rad: f64,
+    azimuth_rad: f64,
+    rng: &mut Rng,
+) -> Option<TimingOutcome> {
+    let block = design.block()?;
+    let optical = Optical::block_in_air(design.index, 10_000.0);
+    let sensors = design.sensors();
+
+    let heading = Vec3::new(
+        zenith_rad.sin() * azimuth_rad.cos(),
+        zenith_rad.sin() * azimuth_rad.sin(),
+        -zenith_rad.cos(),
+    )
+    .normalized()?;
+
+    let mut inside = None;
+    for _ in 0..64 {
+        let point = Vec3::new(
+            rng.range(-design.scale_mm, design.scale_mm),
+            rng.range(-1.5 * design.scale_mm, 3.0 * design.scale_mm),
+            rng.range(-design.thickness_mm / 2.0, design.thickness_mm / 2.0),
+        );
+        if block.strictly_contains(point) {
+            inside = Some(point);
+            break;
+        }
+    }
+    let inside = inside?;
+
+    let entry = inside.sub(heading.scale(100.0));
+    let mut random = || rng.uniform();
+    let event = simulate(&block, &optical, &sensors, entry, heading, 200.0, 1.0, &mut random).ok()?;
+
+    // The readout, per sensor: crosstalk, then the threshold and the dark count.
+    let positions = block.sensor_positions();
+    let mut observations = Vec::new();
+    let mut times = [None; 4];
+    let mut second_times = [None; 4];
+    let mut counts = [0usize; 4];
+    for (index, position) in positions.iter().enumerate() {
+        let extended = readout.with_crosstalk(&event.arrivals_ps[index], rng);
+        counts[index] = extended.len();
+        let needed = readout.photons_needed();
+        if let Some(time) = readout.timestamp(&extended, rng) {
+            times[index] = Some(time);
+            // The next photon after the threshold is the multi-hit TDC's second
+            // stop. It is `None` when there is no next photon.
+            second_times[index] = extended.get(needed).copied();
+            observations.push(Observation { position_mm: *position, time_ps: time });
+        }
+    }
+    let timed = observations.len();
+    let error_deg = if timed >= 4 {
+        reconstruct(&observations).ok().map(|fit| {
+            fit.heading.cos_with(heading).clamp(-1.0, 1.0).acos().to_degrees()
+        })
+    } else {
+        None
+    };
+    Some(TimingOutcome {
+        timed,
+        error_deg,
+        error_exact_deg: None,
+        photons: event.photons_born,
+        times,
+        second_times,
         counts,
         direction: [heading.x, heading.y],
     })
@@ -234,6 +331,12 @@ pub struct TimingRun {
     pub median_error_deg: Option<f64>,
     /// The 68th percentile of the same.
     pub p68_error_deg: Option<f64>,
+    /// The fraction of reconstructed events within 30° of the truth.
+    ///
+    /// The mission's criterion. A design that is usually 20° and occasionally
+    /// 150° is not the same as one that is always 25°, and the median cannot
+    /// tell them apart.
+    pub within_30: f64,
     /// The median error of the Cherenkov model **with the true track point**.
     pub median_exact_deg: Option<f64>,
     /// The mean Cherenkov photon count.
@@ -252,10 +355,8 @@ pub fn run(design: &TimingDesign, events: usize, seed: u64) -> TimingRun {
     let mut exact_errors = Vec::new();
     let mut simulated = 0usize;
     for _ in 0..events {
-        // The cos²θ flux, by inverting its CDF: cos θ = (1 − u)^(1/3).
-        let u = rng.uniform();
-        let cosine = (1.0 - u).cbrt();
-        let zenith = cosine.acos();
+        // The measured sea-level flux, by inverting its CDF.
+        let zenith = crate::muon::MuonFlux::measured().sample_zenith(rng.uniform());
         let azimuth = rng.range(0.0, std::f64::consts::TAU);
         let Some(outcome) = simulate_one(design, zenith, azimuth, &mut rng) else {
             continue;
@@ -280,6 +381,7 @@ pub fn run(design: &TimingDesign, events: usize, seed: u64) -> TimingRun {
             full_fraction: 0.0,
             median_error_deg: None,
             p68_error_deg: None,
+            within_30: 0.0,
             median_exact_deg: None,
             mean_photons: 0.0,
             bound_deg: design.bound_deg(),
@@ -294,17 +396,96 @@ pub fn run(design: &TimingDesign, events: usize, seed: u64) -> TimingRun {
         let index = ((errors.len() as f64 - 1.0) * fraction).round() as usize;
         Some(errors[index.min(errors.len() - 1)])
     };
+    let within_30 = if errors.is_empty() {
+        0.0
+    } else {
+        errors.iter().filter(|error| **error <= 30.0).count() as f64 / errors.len() as f64
+    };
     TimingRun {
         events: simulated,
         mean_timed: timed_total as f64 / simulated as f64,
         full_fraction: full as f64 / simulated as f64,
         median_error_deg: percentile(0.5),
         p68_error_deg: percentile(0.68),
+        within_30,
         median_exact_deg: if exact_errors.is_empty() {
             None
         } else {
             Some(exact_errors[exact_errors.len() / 2])
         },
+        mean_photons: photons as f64 / simulated as f64,
+        bound_deg: design.bound_deg(),
+    }
+}
+
+/// Run `events` muons through a design with a realistic readout.
+///
+/// The same summary as [`run`], but every timestamp goes through the readout's
+/// threshold, dark counts, crosstalk and walk. The difference between the two
+/// runs is the readout's price, and it is the number a real build should be
+/// designed around.
+pub fn run_realistic(
+    design: &TimingDesign,
+    readout: &Readout,
+    events: usize,
+    seed: u64,
+) -> TimingRun {
+    let mut rng = Rng::new(seed);
+    let mut timed_total = 0usize;
+    let mut full = 0usize;
+    let mut photons = 0usize;
+    let mut errors = Vec::new();
+    let mut simulated = 0usize;
+    for _ in 0..events {
+        let zenith = crate::muon::MuonFlux::measured().sample_zenith(rng.uniform());
+        let azimuth = rng.range(0.0, std::f64::consts::TAU);
+        let Some(outcome) = simulate_one_realistic(design, readout, zenith, azimuth, &mut rng) else {
+            continue;
+        };
+        simulated += 1;
+        timed_total += outcome.timed;
+        photons += outcome.photons;
+        if outcome.timed >= 4 {
+            full += 1;
+        }
+        if let Some(error) = outcome.error_deg {
+            errors.push(error);
+        }
+    }
+    if simulated == 0 {
+        return TimingRun {
+            events: 0,
+            mean_timed: 0.0,
+            full_fraction: 0.0,
+            median_error_deg: None,
+            p68_error_deg: None,
+            within_30: 0.0,
+            median_exact_deg: None,
+            mean_photons: 0.0,
+            bound_deg: design.bound_deg(),
+        };
+    }
+    errors.sort_by(f64::total_cmp);
+    let percentile = |fraction: f64| -> Option<f64> {
+        if errors.is_empty() {
+            return None;
+        }
+        let index = ((errors.len() as f64 - 1.0) * fraction).round() as usize;
+        Some(errors[index.min(errors.len() - 1)])
+    };
+    let within_30 = if errors.is_empty() {
+        0.0
+    } else {
+        errors.iter().filter(|error| **error <= 30.0).count() as f64 / errors.len() as f64
+    };
+    TimingRun {
+        events: simulated,
+        mean_timed: timed_total as f64 / simulated as f64,
+        full_fraction: full as f64 / simulated as f64,
+        median_error_deg: percentile(0.5),
+        p68_error_deg: percentile(0.68),
+        within_30,
+        median_exact_deg: None,
         mean_photons: photons as f64 / simulated as f64,
         bound_deg: design.bound_deg(),
     }
@@ -423,8 +604,14 @@ pub fn reconstruct_cherenkov(
 
 /// The number of features one event gives the network.
 ///
-/// Four arrival times, four "did it fire" flags, and four photon counts.
-pub const FEATURES: usize = 12;
+/// Four first arrival times, four **second** arrival times, four "did it fire"
+/// flags, and four photon counts.
+///
+/// The second arrival is the multi-hit TDC's extra stop. Its gap from the first
+/// depends on how far the track is from the sensor, which is exactly the latent
+/// variable the direction fit is missing — so it is the most valuable feature
+/// the readout can add without a second threshold.
+pub const FEATURES: usize = 16;
 
 /// Turn an event into a training sample.
 ///
@@ -450,14 +637,25 @@ pub fn features(outcome: &TimingOutcome) -> [f64; FEATURES] {
                 // A thousand picoseconds is the natural scale: the spread across
                 // the block is a few hundred, and the jitter is tens.
                 features[index] = (time - mean) / 1000.0;
-                features[4 + index] = 1.0;
+                features[8 + index] = 1.0;
             }
             None => {
                 features[index] = 0.0;
+                features[8 + index] = 0.0;
+            }
+        }
+        // The second arrival, relative to the same mean, and its gap from the
+        // first. A sensor with no second photon gets zero, which the flag
+        // disambiguates from a real zero.
+        match outcome.second_times[index] {
+            Some(second) => {
+                features[4 + index] = (second - mean) / 1000.0;
+            }
+            None => {
                 features[4 + index] = 0.0;
             }
         }
-        features[8 + index] = (outcome.counts[index] as f64 / 10.0).min(3.0) / 3.0;
+        features[12 + index] = (outcome.counts[index] as f64 / 10.0).min(3.0) / 3.0;
     }
     features
 }
@@ -479,11 +677,29 @@ pub fn training_sample(
     design: &TimingDesign,
     rng: &mut Rng,
 ) -> Option<crate::net::Sample> {
-    let u = rng.uniform();
-    let cosine = (1.0 - u).cbrt();
-    let zenith = cosine.acos();
+    let zenith = crate::muon::MuonFlux::measured().sample_zenith(rng.uniform());
     let azimuth = rng.range(0.0, std::f64::consts::TAU);
     let outcome = simulate_one(design, zenith, azimuth, rng)?;
+    Some(crate::net::Sample {
+        features: features(&outcome).to_vec(),
+        target: outcome.direction,
+    })
+}
+
+/// One training sample from the design, through the realistic readout.
+///
+/// The same sample as [`training_sample`], but the timestamps are what the
+/// instrument would record: the threshold's k-th photon, a dark count that may
+/// fire first, and the comparator's walk. A network trained on these is trained
+/// on what a real build delivers, not on the ideal first photon.
+pub fn training_sample_realistic(
+    design: &TimingDesign,
+    readout: &Readout,
+    rng: &mut Rng,
+) -> Option<crate::net::Sample> {
+    let zenith = crate::muon::MuonFlux::measured().sample_zenith(rng.uniform());
+    let azimuth = rng.range(0.0, std::f64::consts::TAU);
+    let outcome = simulate_one_realistic(design, readout, zenith, azimuth, rng)?;
     Some(crate::net::Sample {
         features: features(&outcome).to_vec(),
         target: outcome.direction,

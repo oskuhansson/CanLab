@@ -729,7 +729,7 @@ pub fn coincidence_acceptance(width_mm: f64, height_mm: f64, gap_mm: f64) -> f64
     let mut total = 0.0;
     for i in 0..STEPS {
         let u = (i as f64 + 0.5) / STEPS as f64;
-        let cosine = (1.0 - u).cbrt();
+        let cosine = crate::muon::MuonFlux::measured().sample_zenith(u).cos();
         let sine = (1.0 - cosine * cosine).max(0.0).sqrt();
         let tangent = if cosine > 1e-12 { sine / cosine } else { f64::INFINITY };
         let mut row = 0.0;

@@ -143,11 +143,17 @@ point is not a line.
 **Optimises: the existing parts.** The block, four sensors, a time-to-digital
 converter.
 
-This is the design the study started from, and it fails the 30° direction
-requirement at **81.2°** — but not for the reason the first version of this study
-gave. Light crosses the 54.1 mm between the two furthest sensors in **269 ps**,
-against 47.4 ps of jitter: a signal-to-noise of 4.7, which is a measurement. The
-failure is the **sensor placement**, not the clock.
+This is the design the study started from. Its **analytic** reconstruction fails
+the 30° requirement at **81.2°** — but not for the reason the first version of this
+study gave. Light crosses the 54.1 mm between the two furthest sensors in
+**269 ps**, against 47.4 ps of jitter: a signal-to-noise of 4.7, which is a
+measurement. The failure is the **sensor placement**, not the clock.
+
+The **network** does much better than the analytic inversion, because it
+marginalises over the unknown track position: **28.5° median, 37.6° at 68 %**, and
+**52 % of events within 30°** through the realistic readout. That is borderline
+rather than a pass — the mission wants most events inside 30°, not half — but it is
+the design's real number, and it is what the corrected photon count gives.
 
 The two end sensors sit at the centres of the block's `±z` faces, which are
 **10 mm apart** — the block's thickness. A heading along that axis therefore has
@@ -180,7 +186,7 @@ coincidence acceptance.
 A muon entering the first plane at some angle drifts sideways before it reaches
 the second. A muon at 30° drifts `40 × tan 30° = 23 mm` over a 40 mm gap, which is
 most of the plane's 40 mm width — so it misses. Averaged over the sea-level
-`cos²θ` flux, a 40 mm gap keeps **30 %** of the crossings and a 20 mm gap keeps
+measured `cos²·¹θ` flux, a 40 mm gap keeps **30 %** of the crossings and a 20 mm gap keeps
 **54 %**.
 
 The gap is also what buys the angle, so the two are one trade:

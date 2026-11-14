@@ -182,19 +182,33 @@ pub fn simulate(
     let side = heading.cross(reference).normalized().ok_or(EventError::BadOptics)?;
     let up = side.cross(heading).normalized().ok_or(EventError::BadOptics)?;
 
-    let expected = source::expected_photons(path_mm, beta, index).ok_or(EventError::NoPhotons)?;
+    // The photon's path is the *inside* of the block, not the caller's `path_mm`.
+    // A caller that hands a path from outside the block to beyond it — as a
+    // vertical muon's caller does — would otherwise have every birth point
+    // rejected, and the event would report zero photons, zero trapped and zero
+    // lost, which is a "nothing happened" that a reader cannot tell from a
+    // physics result. The `let` binding is the reason: the clip is the path.
+    let (inside, inside_length) = clip_to_block(block, entry, heading, path_mm);
+    if inside_length <= 0.0 {
+        return Err(EventError::NoPhotons);
+    }
+    // The count is the photons the muon makes *inside the block*, which is the
+    // chord the clip measured — not the caller's path, which may run from
+    // outside the block to beyond it. Counting the caller's path would credit a
+    // 20 mm block with the light of a 200 mm one.
+    let expected =
+        source::expected_photons(inside_length, beta, index).ok_or(EventError::NoPhotons)?;
     if expected <= 0.0 {
         return Err(EventError::NoPhotons);
     }
-    // Poisson around the mean, by the exponential-free method that is exact for
-    // a mean this size: sample `k` whose PMF is `e^-mu mu^k / k!` by multiplying
-    // uniforms until their product falls below `e^-mu`. For mu in the hundreds
-    // this is a few hundred draws per event and no approximation.
-    let mut uniform_product = 1.0;
+    // Poisson around the mean, in log space: the product of uniforms underflows
+    // to zero at a mean of about 709, so the product form would cap a long path
+    // at that count instead of sampling its mean. The sum of logs does not
+    // underflow.
+    let mut log_product = 0.0;
     let mut count = 0usize;
-    let limit = (-expected).exp();
-    while uniform_product > limit && count < 1_000_000 {
-        uniform_product *= random();
+    while log_product > -expected && count < 1_000_000 {
+        log_product += random().max(1e-300).ln();
         count += 1;
     }
     // The loop stops after the draw that crossed the line; that draw is the
@@ -224,16 +238,6 @@ pub fn simulate(
         missed: 0,
         photons_born: count,
     };
-    // The photon's path is the *inside* of the block, not the caller's `path_mm`.
-    // A caller that hands a path from outside the block to beyond it — as a
-    // vertical muon's caller does — would otherwise have every birth point
-    // rejected, and the event would report zero photons, zero trapped and zero
-    // lost, which is a "nothing happened" that a reader cannot tell from a
-    // physics result. The `let` binding is the reason: the clip is the path.
-    let (inside, inside_length) = clip_to_block(block, entry, heading, path_mm);
-    if inside_length <= 0.0 {
-        return Err(EventError::NoPhotons);
-    }
     // A photon is born in the material, not on its surface. The clip's start is
     // the crossing, where the signed distance is zero and the transport — which
     // asks whether a photon is *strictly* inside — refuses the trace. One
@@ -577,7 +581,7 @@ mod tests {
         // and "photons that were thrown away" is visible.
         let (block, optical, sensors) = setup();
         for (entry, heading, length) in [
-            (Vec3::new(0.0, 0.0, -20.0), Vec3::new(0.0, 0.0, 1.0), 15.0),
+            (Vec3::new(0.0, 0.0, -20.0), Vec3::new(0.0, 0.0, 1.0), 30.0),
             (Vec3::new(-20.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), 40.0),
         ] {
             let mut uniform = Uniform(11);

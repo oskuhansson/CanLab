@@ -25,7 +25,7 @@ ground, arriving at about **1 per cm² per minute**.
 | β | 0.99996 |
 | Vertical flux | ~70 m⁻²s⁻¹sr⁻¹ |
 | Integrated over the sky | ~127 m⁻²s⁻¹ |
-| Angular distribution | `I(θ) ∝ cos²θ` |
+| Angular distribution | `I(θ) ∝ cos²·¹θ` (measured) |
 | Energy loss in plastic | 1.95 MeV per (g/cm²) |
 
 ### The angular distribution, and why `cos²θ` is a fiction
@@ -49,24 +49,43 @@ distribution, which is why `n ≈ 2` is the usual working value.
 
 The inverse CDF is `cos θ = (1 − u)^{1/(n+1)}` — one `powf`, no rejection.
 
-### Altitude
+### Altitude: the rate rises, the shape does not
 
-Two effects, and they are very different sizes:
+**The flux rises** by `e^{H/L(p)}` with `L(p) = 4900 + 750p` metres. At 1 km that
+is **+13.5 %** for a 4 GeV muon and **+19.4 %** for a 1 GeV one. The integrated
+flux is dominated by the lower energies, so the measured rise at 1 km is nearer
+**+15–25 %**.
 
-- **The flux rises** by `e^{H/L(p)}` with `L(p) = 4900 + 750p` metres. At 1 km that
-  is **+13.5 %** for a 4 GeV muon and **+19.4 %** for a 1 GeV one. The measured
-  jump from sea level to 600 m is +36 % in the integrated vertical flux.
-- **The distribution flattens** because the vertical depth is smaller, so the
-  decay suppression of inclined muons is weaker. The measured trend is `n = 2.0`
-  at sea level, **1.95 at 1 km** and 1.83 at 3.1 km — a **3 % change at 1 km**.
+The often-quoted “+36 % at 600 m” is **not an altitude measurement**: it compares
+Mumbai (19°N, geomagnetic cutoff 16.4 GV) with Prince Albert (53°N, cutoff below
+1 GV). The vertical sea-level flux itself runs from ~67 m⁻²s⁻¹sr⁻¹ at 19°N to
+~91 at 53°N, so the latitude alone accounts for the difference.
 
-So the altitude matters mostly as a **rate**, not as a shape. A network trained at
-one altitude sees almost the same angular distribution at another, which is worth
-saying because the mission's science is a rate comparison.
+**The shape does not measurably change.** The depth effect (less decay at
+altitude, which would *flatten* the distribution) and the spectral effect (a
+softer spectrum at altitude, and low-energy muons have a *steeper* distribution)
+nearly cancel. The measurements bear that out:
 
-`canlab_muon::muon::MuonFlux` carries both: `at_altitude`, `at_zenith`,
-`integrated`, `sample_zenith` and `fraction_above`, with the depth
-`X = 1030 e^{−h/8400}` g/cm².
+| Where | Altitude | n |
+|---|---|---|
+| Mumbai, 19°N | sea level | 2.10 ± 0.05 ± 0.25 |
+| Mexico City, 19°N | 2.27 km | 1.90 ± 0.06 ± 0.10 and 2.12 ± 0.19 ± 0.11 |
+| Riggi et al. | 3.1 km | 1.83 ± 0.13 |
+
+The sea-level scatter alone (1.745–2.345 across experiments) is larger than any
+altitude trend, so **there is no resolved trend** and the model does not carry
+one. The 3.1 km point is lower, but it is one measurement and the sea-level
+scatter is as large.
+
+So the altitude matters as a **rate**, not as a shape. A network trained at one
+altitude sees the same angular distribution at another, which is what the
+mission's rate comparison needs.
+
+`canlab_muon::muon::MuonFlux` carries the measured sea-level flux
+(`measured`, `I₀ = 66.7`, `n = 2.10`) and the altitude scaling (`at_altitude`,
+`at_zenith`, `integrated`, `sample_zenith`, `fraction_above`), with the depth
+`X = 1030 e^{−h/8400}` g/cm². The simulation draws its directions from
+`MuonFlux::measured().sample_zenith`, not from a hardcoded `cos²θ`.
 
 ---
 
@@ -382,7 +401,7 @@ second at
 ```
 
 which is inside the plane only if that displacement is smaller than the room left on
-each side. Averaged over a uniform crossing point and the `cos²θ` flux, the
+each side. Averaged over a uniform crossing point and the measured `cos²·¹θ` flux, the
 acceptance is
 
 | Gap | Acceptance | Angle | Directed muons |

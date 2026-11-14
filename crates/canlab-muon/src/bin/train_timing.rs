@@ -161,12 +161,12 @@ fn main() {
     // --- timestamps and counts, one detector ---
     let training = generate(&design, &fixed, false, TRAINING, 11, true);
     let testing = generate(&design, &fixed, false, TESTING, 12, true);
-    let (with_counts, _) = run("timestamps and counts, fixed", 12, &training, &testing, 2026);
+    let (with_counts, _) = run("timestamps and counts, fixed", 16, &training, &testing, 2026);
 
     // --- timestamps and counts, a different detector every event ---
     let training = generate(&design, &standard, true, TRAINING, 21, true);
     let testing = generate(&design, &standard, true, TESTING, 22, true);
-    let (randomised, p68) = run("randomised detector", 12, &training, &testing, 2026);
+    let (randomised, p68) = run("randomised detector", 16, &training, &testing, 2026);
 
     println!();
     println!("For comparison, the analytic reconstructions on the same design:");

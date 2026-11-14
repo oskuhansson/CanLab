@@ -56,13 +56,20 @@ minutes of data has to say so.
 |---|---|
 | Vertical flux at sea level | ~70 m⁻²s⁻¹sr⁻¹ |
 | Integrated over the sky | ~127 m⁻²s⁻¹ |
-| At 1 km | 1.25–1.40 times sea level |
+| At 1 km | 1.15–1.30 times sea level |
 | Mean energy at sea level | ~4 GeV |
 
 The integrated flux is the one a counter's rate is compared with: 127 m⁻²s⁻¹ is
 0.76 muons per cm² per minute, or about one per cm² per minute. A 36 cm² plane
 therefore sees **~46 muons in a 100 s flight**, which is a real sample and a small
 one.
+
+The 1 km factor is the **rate** change only. The angular distribution does not
+measurably change with altitude: the sea-level and 2.3 km measurements of the
+`cosⁿ θ` exponent overlap within their errors, and the sea-level scatter across
+experiments (±0.25) is larger than the altitude trend. The often-quoted “+36 % at
+600 m” is a latitude comparison (Mumbai 19°N against Prince Albert 53°N), not an
+altitude one.
 
 ---
 

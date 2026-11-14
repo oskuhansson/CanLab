@@ -124,6 +124,19 @@ first sample, which is at once, and every event reported zero photons.
 is 26.9 photons per millimetre. The count is drawn from a Poisson with that mean,
 then clamped to the smallest microcell count among the four sensors.
 
+*The length is the chord, not the caller's path.* The mean is computed from the
+length the path has **inside the block**, after the clip — not from the `path_mm`
+the caller handed in. A caller that passes a 200 mm path from outside the block to
+beyond it would otherwise credit a 10 mm-thick block with the light of a 200 mm
+one, which is a factor of twenty. This was a real bug: the timing study passed
+200 mm and the count was six times the chord's.
+
+*The Poisson is sampled in log space.* The textbook product-of-uniforms method
+compares the running product with `e^{−μ}`, and `e^{−μ}` underflows to zero at
+μ ≈ 709. A long path would then be capped at ~709 photons instead of sampling its
+mean. Summing `ln(u)` and comparing with `−μ` does not underflow, and it is the
+same distribution.
+
 A scintillator does not go through this path: it is not a Cherenkov radiator, and
 the transport's source is the Cherenkov law. `canlab_muon::scintillator` carries
 the scintillation yield as a separate model, and no event simulation uses it yet.

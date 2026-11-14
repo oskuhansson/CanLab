@@ -310,7 +310,7 @@ the light — but the observable is the hit position.
 
 **The gap buys the angle and costs the sample.** A muon at 30° drifts
 `40 × tan 30° = 23 mm` sideways over a 40 mm gap, which is most of the plane's
-40 mm width, so it misses the second plane. Averaged over the sea-level `cos²θ`
+40 mm width, so it misses the second plane. Averaged over the measured sea-level `cos²·¹θ`
 flux, a 40 mm gap keeps **27 %** of the crossings and a 20 mm gap keeps **51 %**.
 
 ---
@@ -499,7 +499,7 @@ the network cannot learn it, so it learns the physics that survives the variatio
 | `pitch_mm` | ±0.3 mm | The array's own tolerance |
 | `thickness_mm` | ±0.2 mm | The sheet's thickness has a tolerance |
 
-The muon's angular distribution is **not** randomised: it is the `cos²θ` flux, and
+The muon's angular distribution is **not** randomised: it is the measured `cos²·¹θ` flux, and
 varying it would be varying the physics rather than the uncertainty.
 
 Two ways randomisation can go wrong. **Too narrow**, and the network has learned

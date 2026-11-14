@@ -43,7 +43,7 @@ fn a_vertical_muons_light_is_trapped_and_what_escapes_misses_the_sensors() {
         &sensors,
         Vec3::new(0.0, 0.0, -20.0),
         Vec3::new(0.0, 0.0, 1.0),
-        15.0,
+        30.0,
         1.0,
         &mut random,
     )
