@@ -44,6 +44,21 @@ use crate::readout::Readout;
 use crate::timing::{reconstruct, Observation};
 use crate::tracker::Rng;
 
+/// The block's outline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shape {
+    /// The tent prism: a tall thin slab, the original design.
+    Tent,
+    /// A regular hexagonal prism inscribed in the can.
+    ///
+    /// The cylinder approximation. The can is round, so a hexagonal block fills
+    /// it far better than the tent: its horizontal cross section is `3√3/2 · r²`
+    /// against the tent's `2 · scale²`-ish slab, which is five times the area at
+    /// the same thickness. The six flat faces also give the sensors six distinct
+    /// faces to sit on, where the tent has four useful ones.
+    Hexagon,
+}
+
 /// A Cherenkov timing design: the block and the readout.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TimingDesign {
@@ -57,17 +72,23 @@ pub struct TimingDesign {
     pub index: f64,
     /// The sensor's photon-detection efficiency.
     pub pde: f64,
+    /// The block's outline.
+    pub shape: Shape,
 }
 
 impl TimingDesign {
     /// The design point: a 20 mm tent, 10 mm deep, PMMA.
     pub fn design() -> TimingDesign {
-        TimingDesign { name: "design", scale_mm: 20.0, thickness_mm: 10.0, index: 1.49, pde: 0.35 }
+        TimingDesign { name: "design", scale_mm: 20.0, thickness_mm: 10.0, index: 1.49, pde: 0.35, shape: Shape::Tent }
     }
 
     /// The block, or `None` for a size the outline refuses.
     pub fn block(&self) -> Option<Block> {
-        Tropical::fits_in(self.scale_mm, self.thickness_mm).ok().map(Block::new)
+        let outline = match self.shape {
+            Shape::Tent => Tropical::fits_in(self.scale_mm, self.thickness_mm),
+            Shape::Hexagon => Tropical::hexagon(self.scale_mm, self.thickness_mm),
+        };
+        outline.ok().map(Block::new)
     }
 
     /// The four sensors, with the readout's total jitter.
@@ -763,8 +784,8 @@ mod tests {
         // The photon count is the block's own chord, so a bigger block makes
         // more light. A run of a small block and a large one must differ in the
         // direction the geometry says.
-        let small = TimingDesign { name: "small", scale_mm: 15.0, thickness_mm: 5.0, index: 1.49, pde: 0.35 };
-        let large = TimingDesign { name: "large", scale_mm: 24.0, thickness_mm: 20.0, index: 1.49, pde: 0.35 };
+        let small = TimingDesign { name: "small", scale_mm: 15.0, thickness_mm: 5.0, index: 1.49, pde: 0.35, shape: Shape::Tent };
+        let large = TimingDesign { name: "large", scale_mm: 24.0, thickness_mm: 20.0, index: 1.49, pde: 0.35, shape: Shape::Tent };
         let small_run = run(&small, 60, 11);
         let large_run = run(&large, 60, 11);
         assert!(

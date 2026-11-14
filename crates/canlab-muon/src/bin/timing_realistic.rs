@@ -14,7 +14,7 @@
 //! The columns are the same as the design table's, so the two can be read
 //! together. The "readout" column names the case: ideal, nominal, conservative.
 
-use canlab_muon::timing_study::{run, run_realistic, TimingDesign};
+use canlab_muon::timing_study::{run, run_realistic, Shape, TimingDesign};
 use canlab_muon::Readout;
 
 fn main() {
@@ -81,15 +81,23 @@ fn main() {
         ("20 mm tent, 10 mm", TimingDesign::design()),
         (
             "24 mm tent, 20 mm",
-            TimingDesign { name: "large", scale_mm: 24.0, thickness_mm: 20.0, index: 1.49, pde: 0.35 },
+            TimingDesign { name: "large", scale_mm: 24.0, thickness_mm: 20.0, index: 1.49, pde: 0.35, shape: Shape::Tent },
         ),
         (
             "16 mm tent, 10 mm",
-            TimingDesign { name: "small", scale_mm: 16.0, thickness_mm: 10.0, index: 1.49, pde: 0.35 },
+            TimingDesign { name: "small", scale_mm: 16.0, thickness_mm: 10.0, index: 1.49, pde: 0.35, shape: Shape::Tent },
         ),
         (
             "20 mm tent, 20 mm",
-            TimingDesign { name: "deep", scale_mm: 20.0, thickness_mm: 20.0, index: 1.49, pde: 0.35 },
+            TimingDesign { name: "deep", scale_mm: 20.0, thickness_mm: 20.0, index: 1.49, pde: 0.35, shape: Shape::Tent },
+        ),
+        (
+            "28 mm hexagon, 10 mm",
+            TimingDesign { name: "hex", scale_mm: 28.0, thickness_mm: 10.0, index: 1.49, pde: 0.35, shape: Shape::Hexagon },
+        ),
+        (
+            "28 mm hexagon, 20 mm",
+            TimingDesign { name: "hex-deep", scale_mm: 28.0, thickness_mm: 20.0, index: 1.49, pde: 0.35, shape: Shape::Hexagon },
         ),
     ];
     for (name, candidate) in &candidates {

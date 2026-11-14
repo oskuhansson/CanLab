@@ -100,6 +100,7 @@ fn generate(
             thickness_mm: design.thickness_mm,
             index: if randomise { light.lambda_mm.mul_add(0.0, design.index) } else { design.index },
             pde: if randomise { light.pde } else { design.pde },
+            shape: design.shape,
         };
         let Some(sample) = training_sample(&varied, &mut rng) else {
             continue;

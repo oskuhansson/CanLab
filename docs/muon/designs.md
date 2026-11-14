@@ -165,6 +165,32 @@ So the honest verdict is: timing works, this placement does not. It is still not
 the recommendation, because a tracker reaches 11.7° with no timer and no
 picosecond electronics at all.
 
+### The hexagon: the can is round, so fill it
+
+The tent is a tall thin slab. Its **horizontal** cross section is only
+`40 × 10 = 400 mm²`, so it presents a small target to the sky and catches few
+muons. The can's inner diameter is 56 mm, and a regular hexagonal prism inscribed
+in it has a horizontal area of `3√3/2 · 28² = 2 036 mm²` — **five times** the
+tent's — for *less* mass at the same thickness (24 g against 36 g).
+
+The hexagon is the cylinder approximation: a 24-sided prism would be closer to a
+circle, but six sides already capture 83 % of the circle's area, and the six flat
+faces give the sensors six distinct faces to sit on.
+
+Measured through the realistic readout, on the corrected photon count:
+
+| Block | Mass | Horizontal area | Median | Within 30° |
+|---|---|---|---|---|
+| 20 mm tent, 10 mm | 36 g | 400 mm² | 28.7° | 52 % |
+| 24 mm tent, 20 mm | 103 g | 960 mm² | 25.2° | 60 % |
+| 28 mm hexagon, 20 mm | 48 g | 2 036 mm² | 26.4° | 59 % |
+| **28 mm hexagon, 30 mm** | **73 g** | **2 036 mm²** | **21.6°** | **66 %** |
+
+The hexagon is the better shape on every axis that matters: five times the muon
+rate, half the mass of the comparable tent, and the best direction resolution of
+the four. The 30 mm depth is what buys the resolution — the chord for a vertical
+muon is the thickness, so 30 mm makes 630 photons where 10 mm makes 210.
+
 The photon count is the other half of the problem. The transport measures **8
 photoelectrons** per muon for the Cherenkov block — not the 18 that a
 born-times-collection estimate gives, because 11 % of the light is trapped by

@@ -28,7 +28,7 @@
 //!   index makes more Cherenkov light and traps more of it, and the sweep exists
 //!   to show which wins.
 
-use canlab_muon::timing_study::{run, TimingDesign};
+use canlab_muon::timing_study::{run, Shape, TimingDesign};
 
 /// How many muons per design. Two hundred is enough for a median and a fraction
 /// and quick enough that the whole sweep is a few seconds.
@@ -58,6 +58,7 @@ fn main() {
                     thickness_mm: thickness,
                     index,
                     pde: 0.35,
+                    shape: Shape::Tent,
                 };
                 let result = run(&design, EVENTS, 2026);
                 let median = result

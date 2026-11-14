@@ -16,7 +16,7 @@
 
 use canlab_muon::domain::Domain;
 use canlab_muon::net::{Network, Sample};
-use canlab_muon::timing_study::{training_sample, training_sample_realistic, TimingDesign};
+use canlab_muon::timing_study::{training_sample, training_sample_realistic, Shape, TimingDesign};
 use canlab_muon::{Readout, Rng};
 
 /// How many events to train on.
@@ -91,6 +91,7 @@ fn generate(
             thickness_mm: design.thickness_mm,
             index: design.index,
             pde: light.pde,
+            shape: design.shape,
         };
         let sample = if realistic {
             training_sample_realistic(&varied, readout, &mut rng)
@@ -139,6 +140,32 @@ fn run_configuration(
     summary
 }
 
+/// The design to train on, from `--scale`, `--thickness` and `--index`, defaulting
+/// to the study's design point.
+fn design_from_args() -> TimingDesign {
+    let args: Vec<String> = std::env::args().collect();
+    let get = |flag: &str, default: f64| -> f64 {
+        args.iter()
+            .position(|value| value == flag)
+            .and_then(|index| args.get(index + 1))
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(default)
+    };
+    let base = TimingDesign::design();
+    TimingDesign {
+        name: "cli",
+        scale_mm: get("--scale", base.scale_mm),
+        thickness_mm: get("--thickness", base.thickness_mm),
+        index: get("--index", base.index),
+        pde: base.pde,
+        shape: if args.iter().any(|value| value == "--hexagon") {
+            Shape::Hexagon
+        } else {
+            base.shape
+        },
+    }
+}
+
 fn main() {
     println!("The network on what the instrument actually records\n");
     println!(
@@ -147,7 +174,11 @@ fn main() {
     println!("matters, not the median. A design that is usually 20° and sometimes");
     println!("150° is not the same as one that is always 25°.\n");
 
-    let design = TimingDesign::design();
+    let design = design_from_args();
+    println!(
+        "design: {:.0} mm tent, {:.0} mm deep, n = {:.2}\n",
+        design.scale_mm, design.thickness_mm, design.index
+    );
     let domain = Domain::fixed();
     let ideal = Readout::ideal();
     let nominal = Readout::nominal();

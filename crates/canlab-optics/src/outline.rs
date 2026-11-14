@@ -86,7 +86,29 @@ pub struct Tropical {
     pub scale_mm: f64,
     /// The extrusion thickness, millimetres.
     pub thickness_mm: f64,
+    /// The outline's six corners, in can units, clockwise.
+    ///
+    /// The tent is one choice of six corners; a regular hexagon — the closest a
+    /// six-sided prism gets to the can's circle — is another. The transport reads
+    /// the corners and never asks which shape they came from.
+    pub corners: [Point2; 6],
 }
+
+/// The regular hexagon's corners, in can units, clockwise.
+///
+/// A prism of this outline is the **cylinder approximation**: the can is round,
+/// so a hexagonal block fills it far better than the tent does. The hexagon's
+/// area is `3√3/2 · r² ≈ 2.60 r²`, which is 83 % of the circle's `π r²`; the
+/// tent's is `9 r²` in its own units but only `2 r²` of *horizontal* cross
+/// section, because it is a tall thin slab.
+pub const HEXAGON: [Point2; 6] = [
+    (-1.0, 0.0),
+    (-0.5, 0.866_025_403_784_438_6),
+    (0.5, 0.866_025_403_784_438_6),
+    (1.0, 0.0),
+    (0.5, -0.866_025_403_784_438_6),
+    (-0.5, -0.866_025_403_784_438_6),
+];
 
 impl Tropical {
     /// A prism for a can of `radius_mm` and a block `thickness_mm` deep.
@@ -99,12 +121,31 @@ impl Tropical {
         Ok(Tropical {
             scale_mm: radius_mm,
             thickness_mm,
+            corners: CORNERS,
+        })
+    }
+
+    /// A regular hexagonal prism inscribed in the can: the cylinder approximation.
+    ///
+    /// `radius_mm` is the circumradius, so the block touches the can's wall at six
+    /// points. The area is 83 % of a cylinder of the same radius, against the
+    /// tent's much smaller horizontal cross section.
+    pub fn hexagon(radius_mm: f64, thickness_mm: f64) -> Result<Tropical, OutlineError> {
+        if !(radius_mm.is_finite() && radius_mm > 0.0)
+            || !(thickness_mm.is_finite() && thickness_mm > 0.0)
+        {
+            return Err(OutlineError::BadScale);
+        }
+        Ok(Tropical {
+            scale_mm: radius_mm,
+            thickness_mm,
+            corners: HEXAGON,
         })
     }
 
     /// The corners in millimetres, clockwise.
     pub fn corners_mm(&self) -> [Point2; 6] {
-        CORNERS.map(|(x, y)| (x * self.scale_mm, y * self.scale_mm))
+        self.corners.map(|(x, y)| (x * self.scale_mm, y * self.scale_mm))
     }
 
     /// The signed distance to the outline in the block's plane: negative inside.
