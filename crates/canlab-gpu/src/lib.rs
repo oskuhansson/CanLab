@@ -177,6 +177,45 @@ fn shader(kernel: &Kernel, parameters: usize) -> String {
 /// Each row supplies the kernel's parameters in the order
 /// [`Kernel::parameters`] lists them.
 pub fn run(kernel: &Kernel, inputs: &[Vec<f32>]) -> Result<Vec<f32>, GpuError> {
+    Session::new()?.run(kernel, inputs)
+}
+
+/// A device, kept open across many kernels.
+///
+/// Creating a device costs more than running a small kernel: the 512-point
+/// differential test spends most of its 1.4 s in `request_device`. A sweep over
+/// two hundred programs would pay that two hundred times, so the device is a
+/// value the caller can hold.
+pub struct Session {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+}
+
+impl Session {
+    /// Open the first adapter and a device on it.
+    pub fn new() -> Result<Session, GpuError> {
+        let _guard = GPU_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let adapter = first_adapter().ok_or(GpuError::NoAdapter)?;
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                label: Some("canlab-gpu"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::downlevel_defaults(),
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                memory_hints: wgpu::MemoryHints::default(),
+                trace: wgpu::Trace::Off,
+            }))
+            .map_err(|error| GpuError::NoDevice(format!("{error:?}")))?;
+        Ok(Session { device, queue })
+    }
+
+    /// Run a compiled kernel once per row of `inputs`.
+    pub fn run(&self, kernel: &Kernel, inputs: &[Vec<f32>]) -> Result<Vec<f32>, GpuError> {
+        let _guard = GPU_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        self.dispatch(kernel, inputs)
+    }
+
+    fn dispatch(&self, kernel: &Kernel, inputs: &[Vec<f32>]) -> Result<Vec<f32>, GpuError> {
     let parameters = kernel.parameters.len();
     if parameters == 0 {
         return Err(GpuError::NoParameters);
@@ -189,18 +228,8 @@ pub fn run(kernel: &Kernel, inputs: &[Vec<f32>]) -> Result<Vec<f32>, GpuError> {
             });
         }
     }
-    let _guard = GPU_LOCK.lock().unwrap_or_else(|error| error.into_inner());
-    let adapter = first_adapter().ok_or(GpuError::NoAdapter)?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("canlab-gpu"),
-        required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::downlevel_defaults(),
-        experimental_features: wgpu::ExperimentalFeatures::disabled(),
-        memory_hints: wgpu::MemoryHints::default(),
-        trace: wgpu::Trace::Off,
-    }))
-    .map_err(|error| GpuError::NoDevice(format!("{error:?}")))?;
-
+    let device = &self.device;
+    let queue = &self.queue;
     let source = shader(kernel, parameters);
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("kernel"),
@@ -323,6 +352,7 @@ pub fn run(kernel: &Kernel, inputs: &[Vec<f32>]) -> Result<Vec<f32>, GpuError> {
     drop(data);
     readback.unmap();
     Ok(values)
+    }
 }
 
 /// W7.5's accuracy check: how close a shader's `f64` gets to the CPU's.
