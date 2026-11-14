@@ -343,8 +343,12 @@ pub fn draw(scene: &mut DetectorScene, ui: &mut egui::Ui, rect: egui::Rect) -> e
 
     // The photons, up to where the clock has them.
     if scene.show_photons {
+        // A few hundred photons is a few thousand line segments, and egui
+        // tessellates every one of them. Every `stride`-th photon is a picture
+        // of the cone and the paths without the frame cost of all of them.
+        let stride = (scene.photons.len() / 220).max(1);
         let photon_colour = Stroke::new(1.3, Color32::from_rgb(126, 198, 255));
-        for photon in &scene.photons {
+        for photon in scene.photons.iter().step_by(stride) {
             let birth = scene.birth_ps(photon);
             if scene.time_ps < birth {
                 continue;
