@@ -61,6 +61,18 @@ impl Number {
         }
     }
 
+    /// The magnitude: `|self|`.
+    ///
+    /// A method and not `abs()` on an `f64` conversion, because the exact
+    /// variants must stay exact: `|−4/15|` is `4/15`, not `0.2666…`.
+    pub fn absolute(&self) -> Number {
+        match self {
+            Number::Int(value) => Number::Int(value.abs()),
+            Number::Rat(numerator, denominator) => Number::Rat(numerator.abs(), *denominator),
+            Number::Float(value) => Number::Float(value.abs()),
+        }
+    }
+
     pub fn is_negative(&self) -> bool {
         match self {
             Number::Int(i) => *i < 0,

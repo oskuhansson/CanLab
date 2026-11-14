@@ -29,8 +29,18 @@ pub fn value_of(expression: &Expr) -> Option<f64> {
 
 /// `pi`, `e` and `tau` are constants the evaluator folds; anything else is a
 /// variable.
+///
+/// `i` is deliberately **not** here even though it is a constant: the evaluator
+/// is real-valued, so `i` has no `f64` to fold to, and `value_of` answers `None`
+/// for an expression containing it rather than a wrong number. It is a constant
+/// of the *algebra*, and the solver handles it exactly.
 fn is_constant(symbol: SymbolId) -> bool {
     matches!(symbol.as_str().as_str(), "pi" | "e" | "tau")
+}
+
+/// Whether a symbol is the imaginary unit, which the real evaluator cannot fold.
+pub fn is_imaginary_unit(symbol: SymbolId) -> bool {
+    symbol.as_str().as_str() == "i"
 }
 
 fn free_symbols(expression: &Expr, out: &mut Vec<SymbolId>) {

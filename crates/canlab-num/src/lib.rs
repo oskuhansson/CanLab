@@ -42,8 +42,10 @@
 use std::fmt;
 
 pub mod brent;
+pub mod distribution;
 pub mod expression;
 pub mod scan;
+pub mod stats;
 
 pub use brent::brent;
 pub use expression::{scan_expression, scan_expression_with_grid};

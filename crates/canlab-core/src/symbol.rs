@@ -7,8 +7,24 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
 pub struct SymbolId(u32);
+
+/// Order by name, not by the slot a name happened to be interned in.
+impl Ord for SymbolId {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        if self == other {
+            return std::cmp::Ordering::Equal;
+        }
+        self.name().cmp(&other.name())
+    }
+}
+
+impl PartialOrd for SymbolId {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
 
 struct Interner {
     map: HashMap<Arc<str>, u32>,
@@ -61,6 +77,19 @@ impl std::fmt::Display for SymbolId {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn symbols_are_ordered_by_name_and_not_by_slot() {
+        // A test-order-independent fact: `Ord` compares names. The slots are in
+        // creation order, so this fails if `Ord` ever goes back to comparing
+        // them — which is how a printed product once became order-dependent.
+        let first = SymbolId::intern("boldsymbol_zeta");
+        let second = SymbolId::intern("boldsymbol_alpha");
+        assert!(first.idx() < second.idx(), "the slots are in creation order");
+        assert!(second < first, "but the names decide the order: alpha < zeta");
+        assert_eq!(first.cmp(&first), std::cmp::Ordering::Equal);
+        assert_eq!(first.partial_cmp(&second), Some(std::cmp::Ordering::Greater));
+    }
 
     #[test]
     fn interning_is_stable() {

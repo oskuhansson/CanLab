@@ -295,8 +295,23 @@ fn emit(expr: &Expr, vars: &[SymbolId], ops: &mut Vec<Op>) -> Option<()> {
             "pi" => ops.push(Op::Const(std::f64::consts::PI)),
             "e" => ops.push(Op::Const(std::f64::consts::E)),
             "tau" => ops.push(Op::Const(std::f64::consts::TAU)),
+            // `i` is the imaginary unit, and this evaluator is real-valued: it
+            // has no value to push. Refusing is what makes `Program::compile`
+            // answer `None` for a complex expression instead of treating `i` as
+            // a variable the caller forgot — the two are different bugs and the
+            // second one is a lie.
+            //
+            // *Unless* the caller has supplied `i` as a variable, which the
+            // plot does when a document happens to use it as an axis name:
+            // `i² + j² = 1` is a circle and nothing about the maths knows what
+            // the letters are called. A caller that says "`i` is my variable"
+            // outranks the constant.
+            "i" => {
+                let index = vars.iter().position(|v| v == s)?;
+                ops.push(Op::Var(index as u16));
+            }
             _ => {
-                let index = vars.iter().position(|v| *v == *s)?;
+                let index = vars.iter().position(|v| v == s)?;
                 ops.push(Op::Var(index as u16));
             }
         },

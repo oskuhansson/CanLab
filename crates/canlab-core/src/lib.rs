@@ -14,13 +14,18 @@
 pub mod approx;
 pub mod eval;
 pub mod expr;
+pub mod lua;
 pub mod normalize;
 pub mod rewrite;
 pub mod number;
+pub mod quantity;
+pub mod sigfig;
 pub mod relation;
 pub mod symbol;
+pub mod wgsl;
 
 pub mod diff;
+pub mod dimension;
 pub use diff::{differentiate, differentiate_n};
 pub use eval::{INLINE_STACK, Op, Program};
 pub use expr::{Expr, ExprNode, FuncId, Hold, int, ratio, sym};
