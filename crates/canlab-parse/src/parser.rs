@@ -1011,6 +1011,24 @@ impl Parser {
                 format!("unexpected `\\{name}`; expected an expression"),
                 pos,
             )),
+            // `\lvert x \rvert` is the same absolute value as `\left|x\right|`,
+            // spelled without the `\left`/`\right` pair. It is how an exam
+            // writes it in running text.
+            "lvert" => {
+                let inner = self.parse_expr(0)?;
+                if !matches!(&self.peek().kind, TokenKind::Command(name) if name == "rvert") {
+                    return Err(ParseError::new(
+                        format!(
+                            "unclosed `\\lvert`: expected `\\rvert` (found {})",
+                            self.peek().kind.describe()
+                        ),
+                        pos,
+                    ));
+                }
+                self.advance();
+                Ok(ExprNode::fn_raw(SymbolId::intern("abs"), vec![inner]))
+            }
+            "rvert" => Err(ParseError::new("unexpected `\\rvert`", pos)),
             // `\begin{pmatrix}…\end{pmatrix}`: rows of expressions, `&` between
             // columns and `\\` between rows.
             "begin" => self.parse_environment(pos),
@@ -1451,6 +1469,7 @@ fn is_terminator_command(name: &str) -> bool {
     // "unexpected `\end`" instead of a parsed matrix.
     name == "end"
         || name == "\\"
+        || name == "rvert"
         || name == "right"
         || name == "int"
         || name == "lim"

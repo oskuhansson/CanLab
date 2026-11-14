@@ -332,6 +332,20 @@ fn absolute_value_parses_and_prints_back_as_delimiters() {
             "{source} printed as {stdout}"
         );
     }
+    // `\lvert … \rvert` is the same absolute value spelled without the
+    // `\left`/`\right` pair, and it prints as the canonical form.
+    for source in [r"\lvert x \rvert", r"\lvert -3 \rvert", r"\lvert x + 1 \rvert"] {
+        let (ok, stdout, stderr) = canlab(&["tex", source]);
+        assert!(ok, "{source}: {stderr}");
+        assert!(
+            stdout.trim().starts_with(r"\left|") && stdout.trim().ends_with(r"\right|"),
+            "{source} printed as {stdout}"
+        );
+    }
+    // An unclosed one is refused by name.
+    let (ok, _stdout, stderr) = canlab(&["tex", r"\lvert x"]);
+    assert!(!ok);
+    assert!(stderr.contains("rvert"), "{stderr}");
     // `\right.` is a delimiter that is not drawn, and it closes an absolute
     // value written for "evaluate here".
     let (ok, stdout, stderr) = canlab(&["tex", r"\left|x\right."]);
