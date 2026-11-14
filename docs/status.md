@@ -86,7 +86,7 @@ carry the same claims in more detail.
 
 ## Test counts, last run
 
-`cargo test --offline -j 2` on the tree this note describes: **1277 passed, 0
+`cargo test --offline -j 2` on the tree this note describes: **1278 passed, 0
 failed, 5 ignored.** The five ignored are the snapshot frames, and they are
 ignored because this machine is not the one they were rendered on (see below).
 
@@ -96,7 +96,7 @@ ignored because this machine is not the one they were rendered on (see below).
 | `canlab-gui` | 141 |
 | `canlab-cli` | 43 |
 | `canlab-core` | 117 |
-| `canlab-parse` | 104 |
+| `canlab-parse` | 105 |
 | `canlab-optics` | 120 |
 | `canlab-input` | 159 |
 | `canlab-plot` | 65 |
