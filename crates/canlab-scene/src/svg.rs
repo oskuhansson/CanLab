@@ -159,6 +159,53 @@ fn ramp(shade: f64, low: [u8; 3], high: [u8; 3]) -> String {
     )
 }
 
+/// A polyline through `points`, as an SVG document.
+///
+/// The same camera and projection as [`mesh_svg`], so a trajectory and a surface
+/// drawn from the same viewpoint line up. A point behind the camera **breaks**
+/// the line rather than being skipped: joining across it would draw a segment
+/// that never existed, which is the rule the plot crate's sampler follows for a
+/// curve.
+pub fn path_svg(points: &[Vec3], camera: &Camera, options: &SvgOptions) -> String {
+    let mut segments: Vec<Vec<String>> = Vec::new();
+    let mut current: Vec<String> = Vec::new();
+    for point in points {
+        match camera.project(*point) {
+            Some(projected) => {
+                let (x, y) = Camera::to_pixels(projected, options.width, options.height);
+                current.push(format!("{x:.2},{y:.2}"));
+            }
+            None => {
+                if current.len() >= 2 {
+                    segments.push(std::mem::take(&mut current));
+                } else {
+                    current.clear();
+                }
+            }
+        }
+    }
+    if current.len() >= 2 {
+        segments.push(current);
+    }
+    let mut svg = String::new();
+    svg.push_str(&format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">\n",
+        options.width, options.height, options.width, options.height
+    ));
+    svg.push_str(&format!(
+        "<rect width=\"{}\" height=\"{}\" fill=\"#ffffff\"/>\n",
+        options.width, options.height
+    ));
+    for segment in &segments {
+        svg.push_str(&format!(
+            "<polyline points=\"{}\" fill=\"none\" stroke=\"#284682\" stroke-width=\"1.6\"/>\n",
+            segment.join(" ")
+        ));
+    }
+    svg.push_str("</svg>\n");
+    svg
+}
+
 /// The camera that frames a mesh, from the angles the caller gives.
 ///
 /// `fit` puts the bounding sphere exactly inside the frustum, which leaves the
@@ -342,6 +389,53 @@ mod tests {
         // And the SVG draws exactly that list.
         let svg = mesh_svg(&mesh, &camera, &SvgOptions::default());
         assert_eq!(svg.matches("<polygon").count(), visible.len());
+    }
+
+    #[test]
+    fn a_path_is_one_polyline_and_breaks_behind_the_camera() {
+        // A circle in the plane `z = 0`, seen from the front: one polyline.
+        let points: Vec<Vec3> = (0..=64)
+            .map(|step| {
+                let angle = f64::from(step) / 64.0 * std::f64::consts::TAU;
+                Vec3::new(angle.cos(), angle.sin(), 0.0)
+            })
+            .collect();
+        let camera = Camera {
+            target: Vec3::ZERO,
+            distance: 5.0,
+            azimuth: 0.0,
+            elevation: 0.0,
+            aspect: 1.0,
+            ..Camera::default()
+        };
+        let svg = path_svg(&points, &camera, &SvgOptions::default());
+        assert_eq!(svg.matches("<polyline").count(), 1, "{}", &svg[..200.min(svg.len())]);
+        // Every point is finite and inside the frame.
+        for line in svg.lines().filter(|line| line.starts_with("<polyline")) {
+            let points = line
+                .split("points=\"")
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+                .expect("points");
+            for pair in points.split(' ') {
+                let (x, y) = pair.split_once(',').expect("a pair");
+                let x: f64 = x.parse().expect("a number");
+                let y: f64 = y.parse().expect("a number");
+                assert!((0.0..=800.0).contains(&x), "{x}");
+                assert!((0.0..=600.0).contains(&y), "{y}");
+            }
+        }
+        // A camera between the points breaks the line rather than joining across.
+        let behind = Camera {
+            target: Vec3::new(0.0, 0.0, -10.0),
+            distance: 0.1,
+            azimuth: 0.0,
+            elevation: 0.0,
+            ..Camera::default()
+        };
+        let svg = path_svg(&points, &behind, &SvgOptions::default());
+        assert_eq!(svg.matches("<polyline").count(), 0);
+        assert!(svg.trim_end().ends_with("</svg>"));
     }
 
     #[test]
