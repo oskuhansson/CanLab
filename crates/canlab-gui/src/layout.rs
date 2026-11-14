@@ -24,7 +24,7 @@ const DIVIDER_WIDTH: f32 = 6.0;
 /// Inner padding of a panel body.
 const BODY_PADDING: f32 = 12.0;
 
-/// The five things a dock leaf can show.
+/// The six things a dock leaf can show.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PanelKind {
     Editor,
@@ -115,7 +115,7 @@ impl Workspace {
         }
     }
 
-    /// All five panels stay reachable in every workspace; the thing that
+    /// All six panels stay reachable in every workspace; the thing that
     /// changes is which one gets the large area.
     pub fn layout(self) -> Layout {
         match self {

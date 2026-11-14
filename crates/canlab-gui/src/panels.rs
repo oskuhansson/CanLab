@@ -1,4 +1,4 @@
-//! The contents of the five dock panels.
+//! The contents of the six dock panels.
 //!
 //! Every function here receives the app plus a UI already clipped to the
 //! panel's body. Keeping the dock chrome in `layout.rs` means these functions
