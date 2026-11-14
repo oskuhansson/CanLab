@@ -81,18 +81,28 @@ crossing time to differ between sensors.
 
 ---
 
-## The five designs
+## The six designs
 
-| Design | EUR | g | Sensors | Angle | Verdict |
-|---|---|---|---|---|---|
-| Counter | 115 | 48.8 | 1 | none | Cheapest; no direction |
-| Cherenkov timing | 185 | 47.7 | 4 | 81.2° | Fails at 30°: placement, not clock |
-| **Coarse tracker** | **245** | **44.7** | **8** | **11.7°** | **Passes every requirement** |
-| Fine tracker | 890 | 44.7 | 32 | 3.9° | Over budget |
-| Ring imager | 490 | 44.7 | 16 | (10.6°) | Unproven |
+| Design | EUR | g | Sensors | Angle | Directed muons | Verdict |
+|---|---|---|---|---|---|---|
+| Counter | 115 | 44.9 | 1 | none | 40.9 | No direction |
+| Cherenkov timing | 185 | 47.7 | 4 | 81.2° bound | 11.4 | Fails at 30° |
+| **Short tracker** | **245** | **31.6** | **8** | **(23.4°) formula** | **13.3** | **Passes** |
+| Coarse tracker | 245 | 31.6 | 8 | (11.7°) formula | 7.3 | Too few muons |
+| Fine tracker | 890 | 31.6 | 32 | (3.9°) formula | 4.4 | Over budget |
+| Ring imager | 490 | 22.7 | 16 | (10.6°) estimate | 11.4 | Unproven |
 
-Only the coarse tracker passes the mission's audit. It is the recommendation, and
+*Directed muons* are the crossings that reach both planes in a 100 s flight — the
+sample a direction measurement has to work with.
+
+Only the short tracker passes the mission's audit. It is the recommendation, and
 [designs.md](designs.md) is why.
+
+**One caveat that matters more than the table:** the tracker's angle is a
+*formula*, not a simulation. No code in this crate generates a tracker hit — there
+is no scintillator transport and no pixel model — so 23.4° is the best case for an
+idealised detector. The Cherenkov timing design's 81.2° *is* a verified bound.
+[designs.md](designs.md) says which is which.
 
 ---
 

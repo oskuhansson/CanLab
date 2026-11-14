@@ -62,9 +62,20 @@ pub enum Approach {
     RingImager,
 }
 
+/// The shape of a plane, because a disc and a rectangle fill a circle differently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaneShape {
+    /// A rectangle, whose diagonal must fit the can's inner diameter.
+    Rectangle,
+    /// A disc, whose diameter must fit it.
+    Disc,
+}
+
 /// A detector proposal, in the terms the comparison is made in.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Design {
+    /// The plane's shape.
+    pub shape: PlaneShape,
     /// What it is called in the table.
     pub name: &'static str,
     /// What it uses for a direction.
@@ -91,6 +102,39 @@ pub struct Design {
     pub board_eur: f64,
 }
 
+/// Where an angle number came from, because they are not the same kind of number.
+///
+/// The distinction is the one a reader is most likely to get wrong: a table of
+/// angles looks like a table of measurements, and only one of these three is a
+/// measurement of anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AngleSource {
+    /// A **Cramér–Rao bound** from the Fisher information of the timestamps,
+    /// checked against a Monte Carlo of the least-squares estimator that attains
+    /// it. This is the strongest kind: it is a limit, and the limit is verified.
+    Bound,
+    /// A **closed-form propagation** of a hit uncertainty, `√2·σ_h/L`. The
+    /// algebra is right for its model and the model has been checked against a
+    /// Monte Carlo of two Gaussian points — but **no simulation generates the
+    /// hits**. It assumes each hit is localised to one pixel with uniform
+    /// uncertainty, that the two hits are independent, and that nothing scatters.
+    Formula,
+    /// A **geometric estimate** with no validation at all: a pixel over a lever
+    /// arm, for a design the transport cannot yet simulate.
+    Estimate,
+}
+
+impl AngleSource {
+    /// A short tag for a table.
+    pub fn tag(&self) -> &'static str {
+        match self {
+            AngleSource::Bound => "bound",
+            AngleSource::Formula => "formula",
+            AngleSource::Estimate => "estimate",
+        }
+    }
+}
+
 /// What a design costs, weighs, and can measure.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Metrics {
@@ -111,10 +155,16 @@ pub struct Metrics {
     /// The angular uncertainty, degrees. `None` when the design cannot measure a
     /// direction at all.
     pub angle_deg: Option<f64>,
-    /// Whether the angle is a checked number or a geometric estimate.
-    pub angle_is_checked: bool,
-    /// Muons through the detector in a 100 s flight.
+    /// Where the angle came from.
+    pub angle_source: AngleSource,
+    /// Muons through the first plane in a 100 s flight.
+    pub crossings_per_flight: f64,
+    /// Muons through both planes: the ones with a direction.
     pub muons_per_flight: f64,
+    /// The fraction of crossings that reach the second plane.
+    pub acceptance: f64,
+    /// The stack's height along the can's axis.
+    pub stack_height_mm: f64,
 }
 
 impl Design {
@@ -128,13 +178,16 @@ impl Design {
         Design {
             name: "counter",
             approach: Approach::Counter,
+            // A disc across the can's axis: Ø64 mm is the largest that fits and
+            // is 57 % more area than the square inscribed in the same circle.
+            shape: PlaneShape::Disc,
             planes: 1,
             pixels_per_side: 1,
             pixel_mm: 0.0,
             separation_mm: 0.0,
             thickness_mm: 10.0,
-            width_mm: 40.0,
-            height_mm: 90.0,
+            width_mm: 64.0,
+            height_mm: 64.0,
             sensor: SiPMChoice::microfc_60035(),
             needs_timer: false,
             board_eur: 25.0,
@@ -146,13 +199,17 @@ impl Design {
         Design {
             name: "cherenkov timing",
             approach: Approach::CherenkovTiming,
+            // The tent prism with its plane holding the can's axis: 40 mm across,
+            // 90 mm tall, 10 mm deep. The muon crosses the walls, so the face it
+            // enters is 90 x 10 mm and the material it crosses is 40 mm.
+            shape: PlaneShape::Rectangle,
             planes: 1,
             pixels_per_side: 1,
             pixel_mm: 0.0,
             separation_mm: 0.0,
             thickness_mm: 10.0,
-            width_mm: 40.0,
-            height_mm: 90.0,
+            width_mm: 90.0,
+            height_mm: 10.0,
             sensor: SiPMChoice::microfc_10035(),
             needs_timer: true,
             board_eur: 60.0,
@@ -167,13 +224,42 @@ impl Design {
         Design {
             name: "coarse tracker",
             approach: Approach::Tracker,
+            // 40 x 48 mm: a 62.5 mm diagonal, the largest rectangle that fits the
+            // 64 mm inner diameter at this width. 40 x 80 would be 89 mm and does
+            // not fit any orientation.
+            shape: PlaneShape::Rectangle,
             planes: 2,
             pixels_per_side: 2,
             pixel_mm: 20.0,
             separation_mm: 40.0,
             thickness_mm: 5.0,
             width_mm: 40.0,
-            height_mm: 80.0,
+            height_mm: 48.0,
+            sensor: SiPMChoice::microfc_10035(),
+            needs_timer: false,
+            board_eur: 45.0,
+        }
+    }
+
+    /// Two planes of 2 x 2 pixels and a 20 mm gap: the sample-first tracker.
+    ///
+    /// The same sensors and pixels as the coarse tracker with half the gap. The
+    /// acceptance nearly doubles — 0.54 against 0.30 — and the angle nearly
+    /// doubles with it, to 23.4°. It is the design for a mission that would
+    /// rather have thirteen muons at 23° than seven at 12°, and which of those
+    /// is better depends on whether the science is a direction or a distribution.
+    pub fn short_tracker() -> Design {
+        Design {
+            name: "short tracker",
+            approach: Approach::Tracker,
+            shape: PlaneShape::Rectangle,
+            planes: 2,
+            pixels_per_side: 2,
+            pixel_mm: 20.0,
+            separation_mm: 20.0,
+            thickness_mm: 5.0,
+            width_mm: 40.0,
+            height_mm: 48.0,
             sensor: SiPMChoice::microfc_10035(),
             needs_timer: false,
             board_eur: 45.0,
@@ -189,13 +275,14 @@ impl Design {
         Design {
             name: "fine tracker",
             approach: Approach::Tracker,
+            shape: PlaneShape::Rectangle,
             planes: 2,
             pixels_per_side: 4,
             pixel_mm: 10.0,
             separation_mm: 60.0,
             thickness_mm: 5.0,
             width_mm: 40.0,
-            height_mm: 80.0,
+            height_mm: 48.0,
             sensor: SiPMChoice::microfc_10035(),
             needs_timer: false,
             board_eur: 90.0,
@@ -216,13 +303,16 @@ impl Design {
         Design {
             name: "ring imager",
             approach: Approach::RingImager,
+            // The same block as the Cherenkov design, read by an array instead
+            // of four sensors.
+            shape: PlaneShape::Rectangle,
             planes: 1,
             pixels_per_side: 4,
             pixel_mm: 10.0,
             separation_mm: 0.0,
             thickness_mm: 10.0,
-            width_mm: 40.0,
-            height_mm: 80.0,
+            width_mm: 90.0,
+            height_mm: 10.0,
             sensor: SiPMChoice::microfc_10035(),
             needs_timer: false,
             board_eur: 90.0,
@@ -230,10 +320,11 @@ impl Design {
     }
 
     /// Every design, in the order the table presents them.
-    pub fn all() -> [Design; 5] {
+    pub fn all() -> [Design; 6] {
         [
             Design::counter(),
             Design::cherenkov_timing(),
+            Design::short_tracker(),
             Design::coarse_tracker(),
             Design::fine_tracker(),
             Design::ring_imager(),
@@ -270,7 +361,7 @@ impl Design {
             Approach::RingImager => 1.19,
             _ => Scintillator::pvt().density_g_per_cm3,
         };
-        let volume_mm3 = self.width_mm * self.height_mm * self.thickness_mm * self.planes as f64;
+        let volume_mm3 = self.area_mm2() * self.thickness_mm * self.planes as f64;
         volume_mm3 / 1000.0 * material + 12.0
     }
 
@@ -333,7 +424,7 @@ impl Design {
         let mut events = 0usize;
         for _ in 0..100 {
             let Ok(event) = canlab_optics::detector::simulate(
-                &block, &optical, &sensors, entry, heading, 17.0, 1.0, &mut random,
+                &block, &optical, &sensors, entry, heading, 50.0, 1.0, &mut random,
             ) else {
                 continue;
             };
@@ -343,11 +434,11 @@ impl Design {
         if events == 0 { 0.0 } else { detected as f64 / events as f64 }
     }
 
-    /// The angular uncertainty, degrees, and whether it is a checked number.
-    pub fn angle_deg(&self) -> (Option<f64>, bool) {
+    /// The angular uncertainty in degrees, and what kind of number it is.
+    pub fn angle_deg(&self) -> (Option<f64>, AngleSource) {
         match self.approach {
             // A counter has no direction: one number is not an angle.
-            Approach::Counter => (None, true),
+            Approach::Counter => (None, AngleSource::Bound),
             // The bound, from the crate's own CRB over the four sensor centres.
             Approach::CherenkovTiming => {
                 let positions = self.cherenkov_positions();
@@ -364,22 +455,27 @@ impl Design {
                         worst = worst.max(bound.sigma_deg());
                     }
                 }
-                (Some(worst), true)
+                (Some(worst), AngleSource::Bound)
             }
-            // The position bound, which is the checked formula for two hits.
+            // A formula, not a simulation: no code in this crate generates a
+            // tracker hit. The algebra is checked against a Monte Carlo of two
+            // Gaussian points, which verifies the formula and says nothing about
+            // whether a scintillator plane produces such points.
             Approach::Tracker => {
                 let sigma_h = self.pixel_mm / 12.0f64.sqrt();
                 crate::bound::position_bound(sigma_h, self.separation_mm)
-                    .map(|bound| (Some(bound.sigma_deg()), true))
-                    .unwrap_or((None, true))
+                    .map(|bound| (Some(bound.sigma_deg()), AngleSource::Formula))
+                    .unwrap_or((None, AngleSource::Formula))
             }
-            // The ring's radius is the lever arm, and the estimate is unchecked.
+            // A geometric estimate with no validation: the ring's radius is the
+            // lever arm, and the transport cannot yet say where on a face a
+            // photon landed.
             Approach::RingImager => {
                 let radius = 20.0 * (47.8f64).to_radians().tan();
                 let sigma_h = self.pixel_mm / 12.0f64.sqrt();
                 crate::bound::position_bound(sigma_h, radius)
-                    .map(|bound| (Some(bound.sigma_deg()), false))
-                    .unwrap_or((None, false))
+                    .map(|bound| (Some(bound.sigma_deg()), AngleSource::Estimate))
+                    .unwrap_or((None, AngleSource::Estimate))
             }
         }
     }
@@ -392,19 +488,113 @@ impl Design {
         }
     }
 
-    /// Muons through the detector during a 100 s flight.
+    /// The face a muon must cross to enter the detector, mm².
     ///
-    /// The integrated flux times the plane's area times the time. The area is the
-    /// plane the muon must cross, and a tracker's two planes have the same area,
-    /// so the coincidence rate is the single-plane rate.
-    pub fn muons_per_flight(&self) -> f64 {
-        let area_m2 = self.width_mm * self.height_mm / 1.0e6;
+    /// A rectangle's area is its two sides; a disc's is `πr²`, which is why the
+    /// counter is a disc — the square inscribed in the same circle is 57 % less
+    /// area for the same can.
+    pub fn area_mm2(&self) -> f64 {
+        match self.shape {
+            PlaneShape::Rectangle => self.width_mm * self.height_mm,
+            PlaneShape::Disc => {
+                std::f64::consts::PI * (self.width_mm / 2.0) * (self.width_mm / 2.0)
+            }
+        }
+    }
+
+    /// The material a muon crosses, millimetres.
+    ///
+    /// Not the plane's thickness for every design: a tracker's muon crosses one
+    /// plane's thickness, but a Cherenkov block's muon crosses the block's width
+    /// because the block is mounted on edge.
+    pub fn path_mm(&self) -> f64 {
+        match self.approach {
+            Approach::CherenkovTiming | Approach::RingImager => 40.0,
+            _ => self.thickness_mm,
+        }
+    }
+
+    /// The stack's height along the can's axis, millimetres.
+    pub fn stack_height_mm(&self) -> f64 {
+        self.planes as f64 * self.thickness_mm
+            + (self.planes.saturating_sub(1)) as f64 * self.separation_mm
+    }
+
+    /// Whether the design fits the can: the plane in the circle, the stack in the
+    /// height.
+    pub fn fits(&self, can: &Can) -> Result<(), String> {
+        if self.is_cherenkov() {
+            // The tent prism, mounted with its plane holding the axis. The
+            // circle constrains the 40 x 10 cross-section and the height
+            // constrains the tent's 90 mm, which is what `Can::admits` checks —
+            // modelling the block as a 90 x 10 flat rectangle in the circle
+            // refuses a block that fits.
+            return can
+                .admits(20.0, self.thickness_mm)
+                .map_err(|error| error.to_string());
+        }
+        let diameter = 2.0 * can.inner_radius_mm();
+        match self.shape {
+            PlaneShape::Rectangle => {
+                let diagonal = (self.width_mm * self.width_mm + self.height_mm * self.height_mm).sqrt();
+                if diagonal > diameter {
+                    return Err(format!(
+                        "the plane's diagonal is {diagonal:.1} mm and the can's inner diameter is {diameter:.1} mm"
+                    ));
+                }
+            }
+            PlaneShape::Disc => {
+                if self.width_mm > diameter {
+                    return Err(format!(
+                        "the disc is {:.1} mm across and the can's inner diameter is {diameter:.1} mm",
+                        self.width_mm
+                    ));
+                }
+            }
+        }
+        if self.stack_height_mm() > can.inner_height_mm() {
+            return Err(format!(
+                "the stack is {:.1} mm tall and the can's inner height is {:.1} mm",
+                self.stack_height_mm(),
+                can.inner_height_mm()
+            ));
+        }
+        Ok(())
+    }
+
+    /// The fraction of crossings that reach the second plane.
+    ///
+    /// One for a single-plane design: a counter needs no coincidence, and a
+    /// Cherenkov block is one solid.
+    pub fn acceptance(&self) -> f64 {
+        if self.planes < 2 {
+            return 1.0;
+        }
+        coincidence_acceptance(self.width_mm, self.height_mm, self.separation_mm)
+    }
+
+    /// Muons that cross the *first* plane during a 100 s flight.
+    ///
+    /// The integrated flux times the plane's area times the time. This is the
+    /// rate a counter would see, and it is **not** the rate a tracker can
+    /// measure a direction from.
+    pub fn crossings_per_flight(&self) -> f64 {
+        let area_m2 = self.area_mm2() / 1.0e6;
         crate::mission::MUON_FLUX_INTEGRATED_M2_S * area_m2 * 100.0
+    }
+
+    /// Muons that cross **both** planes: the ones a tracker can give a direction.
+    ///
+    /// Equal to [`Design::crossings_per_flight`] for a single-plane design. This
+    /// is the number that decides whether a direction measurement has a sample,
+    /// and it is the one the first version of the table left out.
+    pub fn muons_per_flight(&self) -> f64 {
+        self.crossings_per_flight() * self.acceptance()
     }
 
     /// Everything the table prints.
     pub fn metrics(&self) -> Metrics {
-        let (angle_deg, angle_is_checked) = self.angle_deg();
+        let (angle_deg, angle_source) = self.angle_deg();
         Metrics {
             detector_g: self.detector_g(),
             cost_eur: self.cost_eur(),
@@ -414,8 +604,11 @@ impl Design {
             saturation_matters: self.photoelectrons() > self.sensor.cells as f64
                 && self.needs_amplitude(),
             angle_deg,
-            angle_is_checked,
+            angle_source,
+            crossings_per_flight: self.crossings_per_flight(),
             muons_per_flight: self.muons_per_flight(),
+            acceptance: self.acceptance(),
+            stack_height_mm: self.stack_height_mm(),
         }
     }
 
@@ -450,11 +643,16 @@ impl Design {
                 metrics.cost_eur, mission.detector_budget_eur.1
             ));
         }
-        if self.height_mm > mission.can.inner_height_mm() {
+        if let Err(reason) = self.fits(&mission.can) {
+            violations.push(format!("fit: {reason}"));
+        }
+        // A direction measurement with a handful of events is a demonstration,
+        // not a measurement. Ten is a low bar and it is a bar: below it the
+        // angular distribution cannot be measured at all.
+        if metrics.muons_per_flight < 10.0 {
             violations.push(format!(
-                "height: {:.0} mm against the {:.0} mm can",
-                self.height_mm,
-                mission.can.inner_height_mm()
+                "sample: {:.1} muons through both planes in a 100 s flight",
+                metrics.muons_per_flight
             ));
         }
         // The direction requirement, stated as the mission's own: a design that
@@ -468,6 +666,64 @@ impl Design {
         }
         violations
     }
+}
+
+/// The fraction of muons through the first plane that also cross the second.
+///
+/// Two planes and a gap are a **coincidence**, and a muon only gets a direction
+/// if it crosses both. A muon that enters the first plane at `(x, y)` with a
+/// zenith angle `θ` and azimuth `φ` reaches the second plane at
+/// `(x + d·tanθ·cosφ, y + d·tanθ·sinφ)`, which is inside the plane only if that
+/// displacement is smaller than the room left on each side. Averaged over a
+/// uniform crossing point and the sea-level angular distribution, that is this
+/// number.
+///
+/// # The distribution
+///
+/// The sea-level muon flux is `I(θ) ∝ cos²θ`, so `cos θ = (1 − u)^(1/3)` for a
+/// uniform `u` and the zenith angle is peaked at the vertical. A uniform-in-θ
+/// flux would give a lower acceptance, and the difference is not small: at a
+/// 40 mm gap the cos²θ answer is 0.30 and a uniform one is 0.19.
+///
+/// # What it costs
+///
+/// The acceptance is the price of the gap, and the gap is what buys the angle.
+/// At 40 mm the tracker keeps 30 % of its crossings and resolves 11.7°; at 20 mm
+/// it keeps 54 % and resolves 23.4°. The study's first version reported the
+/// single-plane rate and called it the tracker's, which overstated it by a factor
+/// of three.
+pub fn coincidence_acceptance(width_mm: f64, height_mm: f64, gap_mm: f64) -> f64 {
+    // A non-positive side or a negative gap is refused rather than answered;
+    // `NaN` is refused by the same tests because `NaN <= 0.0` is false and
+    // `NaN.is_finite()` is not.
+    if width_mm <= 0.0 || height_mm <= 0.0 || gap_mm < 0.0 || !width_mm.is_finite() {
+        return 0.0;
+    }
+    if gap_mm == 0.0 {
+        // No gap is no displacement: every crossing reaches the second plane.
+        return 1.0;
+    }
+    // A deterministic quadrature, so the number is reproducible and the table
+    // does not move between runs.
+    const STEPS: usize = 200;
+    let mut total = 0.0;
+    for i in 0..STEPS {
+        let u = (i as f64 + 0.5) / STEPS as f64;
+        let cosine = (1.0 - u).cbrt();
+        let sine = (1.0 - cosine * cosine).max(0.0).sqrt();
+        let tangent = if cosine > 1e-12 { sine / cosine } else { f64::INFINITY };
+        let mut row = 0.0;
+        for j in 0..STEPS {
+            let phi = std::f64::consts::TAU * (j as f64 + 0.5) / STEPS as f64;
+            let dx = gap_mm * tangent * phi.cos();
+            let dy = gap_mm * tangent * phi.sin();
+            let room_x = (1.0 - dx.abs() / width_mm).max(0.0);
+            let room_y = (1.0 - dy.abs() / height_mm).max(0.0);
+            row += room_x * room_y;
+        }
+        total += row / STEPS as f64;
+    }
+    total / STEPS as f64
 }
 
 /// The can, for the table's header.
@@ -551,9 +807,17 @@ mod tests {
         )
         .expect("a signal");
         assert!(signal > 47.4, "{signal} ps");
-        // The coarse tracker passes every requirement it is audited on.
-        let tracker = Design::coarse_tracker();
-        assert!(tracker.audit(&mission).is_empty(), "{:#?}", tracker.audit(&mission));
+        // The short tracker passes every requirement it is audited on, and the
+        // coarse one does not: it resolves 11.7 degrees but only 7.3 muons reach
+        // its second plane, which is too few to measure a distribution with.
+        let short = Design::short_tracker();
+        assert!(short.audit(&mission).is_empty(), "{:#?}", short.audit(&mission));
+        let coarse = Design::coarse_tracker();
+        assert!(
+            coarse.audit(&mission).iter().any(|v| v.starts_with("sample:")),
+            "{:#?}",
+            coarse.audit(&mission)
+        );
     }
 
     #[test]
@@ -599,29 +863,75 @@ mod tests {
     }
 
     #[test]
-    fn the_flight_has_enough_muons_to_measure_and_not_enough_to_boast() {
-        // 40 x 80 mm is 32 cm², which at 127 m-2s-1 for 100 s is 41 muons. That
-        // is a real sample and a small one, and the number is the same for every
-        // design with the same plane, because the flux does not care what is
-        // behind the plane.
-        let muons = Design::coarse_tracker().muons_per_flight();
-        assert!((muons - 40.6).abs() < 0.5, "{muons}");
-        // A bigger plane sees more: 40 x 90 mm is 36 cm².
-        let counter = Design::counter().muons_per_flight();
-        assert!(counter > muons, "{counter} vs {muons}");
-        assert!((counter - 45.7).abs() < 0.5, "{counter}");
+    fn the_coincidence_costs_more_than_the_area_does() {
+        // The two rates a tracker has, and the difference between them is the
+        // whole of this test. A 40 x 48 mm plane is 19.2 cm², which at 127 m-2s-1
+        // for 100 s is 24.4 crossings. A 40 mm gap keeps 30 % of them, so 7.3
+        // muons reach the second plane — a factor of 3.3 that the first version
+        // of this table did not apply.
+        let coarse = Design::coarse_tracker();
+        assert!((coarse.crossings_per_flight() - 24.4).abs() < 0.5, "{}", coarse.crossings_per_flight());
+        assert!((coarse.acceptance() - 0.30).abs() < 0.02, "{}", coarse.acceptance());
+        assert!((coarse.muons_per_flight() - 7.3).abs() < 0.3, "{}", coarse.muons_per_flight());
+        // The counter needs no coincidence, so its two rates are one rate, and
+        // its disc is 32.2 cm²: 40.9 muons, five times the tracker's sample.
+        let counter = Design::counter();
+        assert_eq!(counter.acceptance(), 1.0);
+        assert!((counter.crossings_per_flight() - 40.9).abs() < 0.5, "{}", counter.crossings_per_flight());
+        assert!((counter.muons_per_flight() - counter.crossings_per_flight()).abs() < 1e-9);
+        // And halving the gap nearly doubles the acceptance, which is the trade
+        // the short tracker exists to make.
+        let short = Design::short_tracker();
+        assert!((short.acceptance() - 0.54).abs() < 0.02, "{}", short.acceptance());
+        assert!(short.muons_per_flight() > coarse.muons_per_flight());
+        assert!(short.muons_per_flight() > 10.0, "{}", short.muons_per_flight());
     }
 
     #[test]
-    fn the_ring_imager_is_marked_as_unchecked() {
-        // A design whose number has not been simulated must say so, or the table
-        // reads as five checked rows and one of them is a guess.
-        let ring = Design::ring_imager().metrics();
-        assert!(!ring.angle_is_checked);
-        assert!(ring.angle_deg.is_some());
-        // Every other design's number is checked.
-        for design in [Design::counter(), Design::cherenkov_timing(), Design::coarse_tracker(), Design::fine_tracker()] {
-            assert!(design.metrics().angle_is_checked, "{}", design.name);
+    fn the_acceptance_is_one_with_no_gap_and_falls_with_it() {
+        // The limits, so the quadrature is pinned at both ends: no gap means no
+        // displacement and every crossing reaches the second plane; a gap much
+        // larger than the plane means almost none do.
+        assert_eq!(coincidence_acceptance(40.0, 48.0, 0.0), 1.0);
+        let wide = coincidence_acceptance(40.0, 48.0, 200.0);
+        assert!(wide < 0.05, "{wide}");
+        // And it falls monotonically with the gap, which is the shape the trade
+        // depends on.
+        let mut previous = 1.0;
+        for gap in [0.0, 10.0, 20.0, 40.0, 80.0] {
+            let acceptance = coincidence_acceptance(40.0, 48.0, gap);
+            assert!(acceptance <= previous + 1e-12, "gap {gap}: {acceptance} > {previous}");
+            previous = acceptance;
         }
+        // A larger plane accepts more at the same gap.
+        assert!(
+            coincidence_acceptance(60.0, 60.0, 40.0) > coincidence_acceptance(40.0, 48.0, 40.0)
+        );
+    }
+
+    #[test]
+    fn only_the_timing_angle_is_a_bound_and_the_rest_say_what_they_are() {
+        // The distinction a table of angles hides: one of these is a verified
+        // limit and the others are algebra. A reader who cannot tell them apart
+        // will believe the tracker's number is a measurement, and no simulation
+        // in this crate generates a tracker hit.
+        let timing = Design::cherenkov_timing().metrics();
+        assert_eq!(timing.angle_source, AngleSource::Bound);
+        assert!(timing.angle_deg.is_some());
+        // The trackers are a closed form for their model, and the model has no
+        // simulated hits behind it.
+        for design in [Design::short_tracker(), Design::coarse_tracker(), Design::fine_tracker()] {
+            assert_eq!(design.metrics().angle_source, AngleSource::Formula, "{}", design.name);
+        }
+        // The ring imager is geometry alone.
+        assert_eq!(Design::ring_imager().metrics().angle_source, AngleSource::Estimate);
+        // And the tags are distinct, so a table cannot print two of them alike.
+        let tags = [
+            AngleSource::Bound.tag(),
+            AngleSource::Formula.tag(),
+            AngleSource::Estimate.tag(),
+        ];
+        assert_eq!(tags.len(), 3);
+        assert!(tags[0] != tags[1] && tags[1] != tags[2] && tags[0] != tags[2]);
     }
 }

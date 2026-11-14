@@ -50,7 +50,7 @@ carry the same claims in more detail.
 | W4.3 vector geometry | `crates/canlab-solver/src/geometry.rs` | `dot`, `cross`, `norm`, `angle`, `projection`, point-to-line and point-to-plane distances, and two-plane intersection. Exact throughout: `(1,2,2)` has norm `3`, `(1,0,0)` and `(1,1,0)` are at `π/4`, and `1/√2` is recognised as `π/4` rather than left as `arccos`. |
 | W4.4 complex numbers | `crates/canlab-solver/src/complex.rs` | `Complex { re, im }` as exact `Expr` pairs: `(1+i)⁴ = −4`, `z·z̄ = \|z\|²`, `arg` exact on the axes and diagonals, `roots_of_unity`. The solver answers `x² + 1 = 0` with `{i, −i}` and `x² + 2x + 5 = 0` with `{−1 ± 2i}`. |
 | W14 CanSat light transport | `crates/canlab-optics` | Transport, SiPM model, Cherenkov source, closed-form validation, and a picosecond time base whose histogram recovers a known delay exactly. `muon_study --waveform` prints a table, a text histogram and an SVG. |
-| W16 Muon direction study | `crates/canlab-muon` | The can envelope, the mission's parameters and an audit, the four parts' jitter budget, the least-squares heading from timestamps, and the Cramér–Rao bound on it. The bound is 81° at the worst heading — the timing signal is 224 ps against 47.4 ps of jitter, and the block's four sensor faces are a poor tetrahedron (the two end sensors are 10 mm apart); the block's corners give 16° at best. A position-sensitive face gives 1.5°. Five designs compared in `design_study`; the coarse tracker is the only one that passes the audit, at 245 EUR and 11.7°. `docs/muon/` is the study's documentation. |
+| W16 Muon direction study | `crates/canlab-muon` | The can envelope, the mission's parameters and an audit, the four parts' jitter budget, the least-squares heading from timestamps, and the Cramér–Rao bound on it. The bound is 81° at the worst heading — the timing signal is 224 ps against 47.4 ps of jitter, and the block's four sensor faces are a poor tetrahedron (the two end sensors are 10 mm apart); the block's corners give 16° at best. A position-sensitive face gives 1.5°. Six designs compared in `design_study`; the short tracker is the only one that passes the audit, at 245 EUR, 23.4 degrees and 13.3 muons. Only the timing angle is a verified bound — the tracker angles are a closed form with no simulated hits behind them, and the table says so. `docs/muon/` is the study's documentation. |
 | Snapshot portability | `crates/canlab-gui/src/snapshot.rs` | Two tests ask the font system whether every character the app prints has a glyph; the frame test found `→` missing and the Linux font paths absent. |
 
 **What is not done**, stated rather than implied:
@@ -109,7 +109,7 @@ ignored because this machine is not the one they were rendered on (see below).
 | `canlab-num` | 45 |
 | `canlab-corpus` | 79 |
 | `canlab-gpu` | 6 |
-| `canlab-muon` | 58 |
+| `canlab-muon` | 59 |
 
 Each row is `cargo test -p <crate>`, which **includes that crate's doc-tests**, so
 there is no separate doc-test row: adding one would count them twice. The rows sum to
