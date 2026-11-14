@@ -2305,6 +2305,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "canlab-ode"
+version = "0.1.0"
+dependencies = [
+ "canlab-core",
+ "canlab-parse",
+ "canlab-plot",
+ "canlab-poly",
+ "canlab-tex",
+]
+
+[[package]]
+name = "canlab-optics"
+version = "0.1.0"
+dependencies = [
+ "canlab-core",
+ "canlab-parse",
+ "canlab-plot",
+ "canlab-poly",
+ "canlab-solver",
+ "canlab-tex",
+]
+
+[[package]]
 name = "canlab-parse"
 version = "0.1.0"
 dependencies = [
@@ -2326,11 +2349,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "canlab-scene"
+version = "0.1.0"
+dependencies = [
+ "canlab-core",
+]
+
+[[package]]
 name = "canlab-solver"
 version = "0.1.0"
 dependencies = [
  "canlab-core",
  "canlab-num",
+ "canlab-parse",
  "canlab-poly",
  "canlab-tex",
 ]

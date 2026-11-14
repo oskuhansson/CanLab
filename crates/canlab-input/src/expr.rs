@@ -58,6 +58,17 @@ pub fn build(row: &Row) -> Result<Expr, ToExprError> {
 
 /// [`build`], with the document's function definitions available.
 pub fn build_with(row: &Row, definitions: &crate::define::Definitions) -> Result<Expr, ToExprError> {
+    // A calculus statement is one `Raw` node, and the parser is what reads it:
+    // the field holds `\int_0^2 3x^2\,dx` as a unit because its notation is not
+    // an expression, and the answer is the number the parser evaluates it to.
+    // A document-level definition cannot change a limit's target or an
+    // integral's limits, so the definitions are not consulted — and a
+    // definition that names the variable is refused by the parser as a
+    // parameter, which is the right message.
+    if let [Node::Raw(latex)] = row.iter().filter(|n| !is_space_node(n)).collect::<Vec<_>>()[..] {
+        return canlab_parse::parse_latex(latex)
+            .map_err(|error| ToExprError::UnsupportedCommand(error.message));
+    }
     // Spaces are layout, not algebra.
     let nodes: Vec<&Node> = row
         .iter()
@@ -379,6 +390,9 @@ fn atom(node: &Node, definitions: &crate::define::Definitions) -> Result<Expr, T
         )),
         Node::Group { body, .. } => build_with(body, definitions),
         Node::Accent { .. } => Err(ToExprError::UnsupportedConstruct("an accent")),
+        // A calculus statement is read by `canlab-parse`, not by this builder:
+        // its notation is not an expression and never becomes one here.
+        Node::Raw(text) => Err(ToExprError::UnsupportedCommand(text.clone())),
         Node::Binom { .. } => Err(ToExprError::UnsupportedConstruct("\\binom")),
         Node::Sup(_) => Err(ToExprError::DanglingSuperscript),
         Node::Sub(_) => Err(ToExprError::Subscript),

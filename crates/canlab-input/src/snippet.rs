@@ -44,8 +44,33 @@ impl std::fmt::Display for SnippetError {
 
 impl std::error::Error for SnippetError {}
 
+/// Whether a line is a calculus statement, which the field holds as one unit.
+///
+/// `\int_a^b f\,dx`, `\lim_{x\to a} f`, `\vol_a^b y\,dx` and `\area_a^b f, g`
+/// are notation, not expressions: a differential is not a product and an
+/// approach is not an argument. The field's structural model has no node for
+/// them, so a line that starts with one of these commands is held as a single
+/// [`Node::Raw`] and read by `canlab-parse`, which is the one LaTeX grammar that
+/// knows them. Anything else is read structurally, exactly as before.
+pub fn is_calculus_statement(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    let starts_with_command = ["\\int", "\\lim", "\\vol", "\\area"].iter().any(|command| {
+        trimmed.starts_with(command)
+            && !trimmed[command.len()..].starts_with(|c: char| c.is_ascii_alphabetic())
+    });
+    // A line still being *typed* is not a statement. The palette inserts
+    // `\int_{X}^{X}`, whose `X`s are empty slots the cursor lands in, and a row
+    // with an empty slot is a construct under construction — the structural
+    // reader owns it until the slots are filled. Only a line with no `X` left is
+    // a finished statement, and only then does the parser read it.
+    starts_with_command && !trimmed.contains('X')
+}
+
 /// Read one palette `insert` string into the nodes it stands for.
 pub fn parse(snippet: &str) -> Result<Row, SnippetError> {
+    if is_calculus_statement(snippet) {
+        return Ok(vec![crate::tree::Node::Raw(snippet.trim().to_string())]);
+    }
     let mut parser = Parser {
         chars: snippet.chars().collect(),
         pos: 0,
@@ -493,17 +518,28 @@ mod tests {
     }
 
     #[test]
-    fn a_limit_reads_as_a_command_with_a_subscript() {
+    fn a_finished_limit_is_held_as_one_statement() {
+        // A limit's approach is notation, not an argument: `x \to \infty` is
+        // three tokens that mean nothing to the expression grammar, and the
+        // field has no node for them. A *finished* statement (no empty slot
+        // left) is therefore held as one `Raw` and read by `canlab-parse`; the
+        // palette's `\lim_{X}` is still structural while its slot is empty,
+        // which `a_limit_reads_as_a_command_with_a_subscript` used to cover and
+        // `an_integral_carries_its_own_limits` still does.
         let row = parse(r"\lim_{x\rightarrow\infty}").unwrap();
+        assert_eq!(row, vec![Node::Raw(r"\lim_{x\rightarrow\infty}".to_string())]);
+        // And it reads back as the same LaTeX, so the field can show what it
+        // holds.
+        assert_eq!(crate::latex::emit(&row), r"\lim_{x\rightarrow\infty}");
+    }
+
+    #[test]
+    fn a_limit_being_typed_is_still_structural() {
+        // The palette's `\lim_{X}`: the slot is empty, so the cursor can enter
+        // it and the structural reader owns the line.
+        let row = parse(r"\lim_{X}").unwrap();
         assert_eq!(row[0], Node::sym("\\lim"));
-        match &row[1] {
-            Node::Sub(body) => {
-                assert_eq!(body[0], Node::text("x"));
-                assert_eq!(body[1], Node::sym("\\rightarrow"));
-                assert_eq!(body[2], Node::sym("\\infty"));
-            }
-            other => panic!("{other:?}"),
-        }
+        assert!(matches!(row[1], Node::Sub(_)));
     }
 
     #[test]

@@ -141,6 +141,13 @@ pub enum SolveState {
     System {
         assignments: Vec<(SymbolId, Expr)>,
     },
+    /// A system's whole answer, which may be several points or none.
+    ///
+    /// `System` above is the linear case — one assignment list — and this is
+    /// the case a circle and a line need. They are separate states because the
+    /// panel renders them differently: one list of `x = …, y = …`, or one line
+    /// per point.
+    Points(canlab_solver::nonlinear::SystemAnswer),
     Failed(String),
 }
 
@@ -1424,28 +1431,44 @@ impl CasApp {
                 self.solve = SolveState::Solved { var, solutions };
                 self.push_history(&label, self.result_latex.clone());
             }
-            JobOutcome::Assignments(assignments) => {
-                // A system answers per variable, in one list. An empty list is a
-                // contradiction — no point satisfies every equation — which is a
-                // real answer and must read like "no solutions", not like the
-                // solver had nothing to say.
-                if assignments.is_empty() {
-                    self.result_latex = String::from("\\varnothing");
-                    self.result_plain = String::from("no solutions");
-                    self.status = format!("{label}: no solutions");
-                } else {
-                    let parts: Vec<String> = assignments
-                        .iter()
-                        .map(|(variable, value)| {
-                            let name = to_latex(&canlab_core::sym(&variable.as_str()));
-                            format!("{name} = {}", to_latex(value))
-                        })
-                        .collect();
-                    self.result_latex = parts.join(",\\quad ");
-                    self.result_plain = parts.join(", ");
-                    self.status = format!("{label}: {} variable(s)", assignments.len());
+            JobOutcome::System(answer) => {
+                // A system's whole answer. `None` is "no point satisfies the
+                // system", which reads as no solutions; `Points` is one line per
+                // point, because two points are two answers and a single line
+                // would lose one of them.
+                use canlab_solver::nonlinear::SystemAnswer;
+                match &answer {
+                    SystemAnswer::None => {
+                        self.result_latex = String::from("\\varnothing");
+                        self.result_plain = String::from("no solutions");
+                        self.status = format!("{label}: no solutions");
+                    }
+                    SystemAnswer::All => {
+                        self.result_latex = String::from("\\mathbb{R}");
+                        self.result_plain = String::from("every point");
+                        self.status = format!("{label}: every point");
+                    }
+                    SystemAnswer::Points(points) => {
+                        let lines: Vec<String> = points
+                            .iter()
+                            .map(|point| {
+                                let parts: Vec<String> = point
+                                    .iter()
+                                    .map(|(variable, value)| {
+                                        let name =
+                                            to_latex(&canlab_core::sym(&variable.as_str()));
+                                        format!("{name} = {}", to_latex(value))
+                                    })
+                                    .collect();
+                                format!("\\left({}\\right)", parts.join(",\\ "))
+                            })
+                            .collect();
+                        self.result_latex = lines.join("\\quad ");
+                        self.result_plain = format!("{} point(s)", points.len());
+                        self.status = format!("{label}: {} point(s)", points.len());
+                    }
                 }
-                self.solve = SolveState::System { assignments };
+                self.solve = SolveState::Points(answer);
                 self.push_history(&label, self.result_latex.clone());
             }
             JobOutcome::Declined(why) => {
@@ -1888,6 +1911,18 @@ fn solution_lines(solutions: &canlab_solver::Solutions, var: SymbolId) -> Vec<St
             .iter()
             .flat_map(|member| solution_lines(member, var))
             .collect(),
+        // The answer's lines, then one line per rejected candidate. The
+        // rejected values are not solutions and must not read as if they were:
+        // `x = −2 is rejected: …` is a sentence about the working, not an answer.
+        Solutions::Rejected { solutions, rejected } => {
+            let mut lines = solution_lines(solutions, var);
+            let _ = rejected;
+            // One wording for the rejection, from the answer type itself.
+            for rejection in solutions.rejections_latex() {
+                lines.push(rejection);
+            }
+            lines
+        }
         Solutions::None => vec![String::from("no solutions")],
         Solutions::All => vec![String::from("every number")],
     }
@@ -1909,6 +1944,16 @@ fn solution_count(solutions: &canlab_solver::Solutions) -> String {
         Solutions::Inequality { .. } => String::from("an interval"),
         // A union of approximations is still approximate, and the status bar must
         // say so rather than calling them "families".
+        // The count is the answer's count; the rejected candidates are named
+        // separately, because they are not solutions and must not be counted.
+        Solutions::Rejected { solutions, rejected } => {
+            let inner = solution_count(solutions);
+            match rejected.len() {
+                0 => inner,
+                1 => format!("{inner}, 1 rejected"),
+                n => format!("{inner}, {n} rejected"),
+            }
+        }
         Solutions::Union(members) => {
             let approximate = members
                 .iter()
@@ -2114,12 +2159,80 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+        // The answer is now a point set: a linear system has exactly one point,
+        // and both variables are pinned in it.
         match &app.solve {
-            SolveState::System { assignments } => {
-                assert_eq!(assignments.len(), 2, "both variables are pinned down");
+            SolveState::Points(canlab_solver::nonlinear::SystemAnswer::Points(points)) => {
+                assert_eq!(points.len(), 1, "a linear system has one point: {points:?}");
+                assert_eq!(points[0].len(), 2, "both variables are pinned down");
             }
-            other => panic!("expected a system answer, got {other:?}"),
+            other => panic!("expected one point, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_circle_and_a_line_answer_with_two_points() {
+        // The reason `SolveState::Points` exists: a system can have more than
+        // one point, and the panel must show both. `x² + y² = 5` and `y = x + 1`
+        // meet at `(−2, −1)` and `(1, 2)`.
+        let mut app = CasApp::new();
+        app.field = MathField::from_latex_lines(&[
+            String::from("x^2+y^2=5"),
+            String::from("y=x+1"),
+        ])
+        .expect("a two-line system");
+        app.recompute();
+        app.start_solve();
+
+        let ctx = egui::Context::default();
+        for _ in 0..400 {
+            app.poll_jobs(&ctx);
+            if !matches!(app.solve, SolveState::Idle) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        match &app.solve {
+            SolveState::Points(canlab_solver::nonlinear::SystemAnswer::Points(points)) => {
+                assert_eq!(points.len(), 2, "a circle and a line meet twice: {points:?}");
+                // Both points are on the circle *and* on the line, which is the
+                // check that they are answers and not candidates. The first
+                // version of this loop asserted `on_circle || point.len() == 2`,
+                // which is true for any two-variable point and checked nothing.
+                let mut found: Vec<(f64, f64)> = points
+                    .iter()
+                    .map(|point| {
+                        let mut x = f64::NAN;
+                        let mut y = f64::NAN;
+                        for (variable, value) in point {
+                            let number: f64 = value.to_string().parse().expect("a number");
+                            match variable.as_str().as_str() {
+                                "x" => x = number,
+                                "y" => y = number,
+                                other => panic!("unexpected variable {other}"),
+                            }
+                        }
+                        (x, y)
+                    })
+                    .collect();
+                found.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let expected = [(-2.0, -1.0), (1.0, 2.0)];
+                for (point, (ex, ey)) in found.iter().zip(expected) {
+                    assert!((point.0 - ex).abs() < 1e-9, "{found:?}");
+                    assert!((point.1 - ey).abs() < 1e-9, "{found:?}");
+                    // On the circle and on the line, computed here.
+                    assert!((point.0 * point.0 + point.1 * point.1 - 5.0).abs() < 1e-9);
+                    assert!((point.1 - point.0 - 1.0).abs() < 1e-9);
+                }
+            }
+            other => panic!("expected two points, got {other:?}"),
+        }
+        // And the panel's text names both points rather than one.
+        assert!(
+            app.result_plain.contains("2 point"),
+            "the status must count the points: {}",
+            app.result_plain
+        );
     }
 
     #[test]
@@ -2146,7 +2259,9 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         match &app.solve {
-            SolveState::System { assignments } => {
+            SolveState::Points(canlab_solver::nonlinear::SystemAnswer::Points(points)) => {
+                assert_eq!(points.len(), 1, "one point: {points:?}");
+                let assignments = &points[0];
                 assert_eq!(assignments.len(), 3, "{assignments:?}");
                 for (variable, value) in assignments {
                     assert_eq!(
@@ -2157,7 +2272,7 @@ mod tests {
                     );
                 }
             }
-            other => panic!("expected a system answer, got {other:?}"),
+            other => panic!("expected one point, got {other:?}"),
         }
     }
 
@@ -2182,11 +2297,11 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
+        // A contradiction is `SystemAnswer::None`, not an empty list: the two
+        // are different answers and the type tells them apart.
         match &app.solve {
-            SolveState::System { assignments } => {
-                assert!(assignments.is_empty(), "{assignments:?}");
-            }
-            other => panic!("expected an empty system answer, got {other:?}"),
+            SolveState::Points(canlab_solver::nonlinear::SystemAnswer::None) => {}
+            other => panic!("expected no points, got {other:?}"),
         }
         assert_eq!(app.result_latex, "\\varnothing");
         assert_eq!(app.result_plain, "no solutions");

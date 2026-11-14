@@ -75,6 +75,10 @@ impl Emitter {
                 let s = format!("{}{{{}}}", kind.command(), braced(body));
                 self.operand(&s, false);
             }
+            // Verbatim: the text was rendered by the reader that understood it,
+            // and re-escaping or re-spacing it would be a second opinion about
+            // LaTeX this emitter never parsed.
+            Node::Raw(text) => self.operand(text, false),
         }
     }
 

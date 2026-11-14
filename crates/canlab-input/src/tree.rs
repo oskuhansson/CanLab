@@ -226,6 +226,17 @@ pub enum Node {
     },
     /// A vector arrow, overline or underarrow.
     Accent { kind: AccentKind, body: Row },
+    /// Pre-rendered LaTeX that the field holds as one unit.
+    ///
+    /// A definite integral's differential and a limit's approach are notation,
+    /// not expressions: `dx` is two letters and one symbol, and `x \to 0` is
+    /// three tokens that mean nothing on their own. The field's structural
+    /// model has no node for either, and giving it one would mean a cursor rule,
+    /// a template and a slot for a construct that is never edited character by
+    /// character. A `Raw` is the smallest thing that lets the field *hold* such
+    /// a statement: it emits its text verbatim and refuses to become an
+    /// expression, because the parser is what reads it.
+    Raw(String),
 }
 
 impl Node {
@@ -274,6 +285,7 @@ impl Node {
             Node::Sup(_) => vec![Slot::Sup],
             Node::Sub(_) => vec![Slot::Sub],
             Node::Group { .. } | Node::Accent { .. } => vec![Slot::Body],
+            Node::Raw(_) => Vec::new(),
         }
     }
 
@@ -290,6 +302,7 @@ impl Node {
             (Node::Sub(row), Slot::Sub) => Some(row),
             (Node::Group { body, .. }, Slot::Body) => Some(body),
             (Node::Accent { body, .. }, Slot::Body) => Some(body),
+            (Node::Raw(_), _) => None,
             _ => None,
         }
     }
@@ -307,6 +320,7 @@ impl Node {
             (Node::Sub(row), Slot::Sub) => Some(row),
             (Node::Group { body, .. }, Slot::Body) => Some(body),
             (Node::Accent { body, .. }, Slot::Body) => Some(body),
+            (Node::Raw(_), _) => None,
             _ => None,
         }
     }

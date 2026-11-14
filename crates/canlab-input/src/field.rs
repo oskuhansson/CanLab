@@ -1921,5 +1921,8 @@ fn unwrap_construct(node: &Node, slot: Slot) -> (Row, usize) {
         Node::Accent { body, .. } => (body.clone(), 0),
         Node::Sup(row) | Node::Sub(row) => (row.clone(), 0),
         Node::Text(_) | Node::Sym(_) => (Vec::new(), 0),
+        // A `Raw` has no slots and no interior a cursor can enter: unwrapping it
+        // removes it, which is what deleting the construct means.
+        Node::Raw(_) => (Vec::new(), 0),
     }
 }

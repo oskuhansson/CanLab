@@ -688,6 +688,11 @@ impl Layout<'_> {
             Node::Sub(script) => self.script(script, size, 1.0),
             Node::Group { delim, body, ghost } => self.group(*delim, body, *ghost, size),
             Node::Accent { kind, body } => self.accent(*kind, body, size),
+            // A calculus statement is laid out as the text it is: the field
+            // holds it verbatim and the view draws it verbatim, because its
+            // notation (a differential, an approach) has no structural layout
+            // this crate could invent without a second grammar.
+            Node::Raw(text) => self.text(text, size),
         }
     }
 

@@ -8,6 +8,8 @@ description = "Structural (MathQuill-style) math input model: a tree with a curs
 [dependencies]
 canlab-core = { path = "../canlab-core" }
 canlab-tex = { path = "../canlab-tex" }
-
-[dev-dependencies]
+# A calculus statement — `\int_a^b f\,dx`, `\lim_{x\to a} f` — is notation the
+# field can hold but not read: the expression parser is what evaluates it, and
+# this dependency is the bridge. It is not a second LaTeX grammar in the field;
+# it is the one grammar, asked by the field.
 canlab-parse = { path = "../canlab-parse" }

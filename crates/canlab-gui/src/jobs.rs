@@ -138,8 +138,14 @@ pub enum JobOutcome {
     /// Every kind of solution of an equation (solve): none, all, values, a
     /// family, or an interval.
     Solutions(canlab_solver::Solutions),
-    /// One value per variable, from solving a system (solve).
-    Assignments(Vec<(SymbolId, Expr)>),
+    /// A system's whole answer: no point, every point, or these points.
+    ///
+    /// Separate from `Assignments` because the two are different answers: a
+    /// linear system has one point and a circle and a line have two, and a list
+    /// that holds only the first would be a right-looking answer to a different
+    /// question. `None` is "no point satisfies the system", which is not the
+    /// same as an empty list.
+    System(canlab_solver::nonlinear::SystemAnswer),
     /// The backend understood the request and declined, with a line saying what
     /// it can do instead. Not an error.
     Declined(String),
@@ -360,14 +366,16 @@ fn run(solver: &dyn Solver, backend: Backend, job: Job) -> JobResult {
             (JobKind::Solve, Some(var), outcome, fatal)
         }
         JobOp::SolveSystem(equations, vars) => {
-            let (outcome, fatal) = match solver.solve_system(&equations, &vars) {
-                Ok(assignments) => (JobOutcome::Assignments(assignments), false),
-                // SymPy has no system solver behind this trait, while the native
-                // matrix elimination solves exactly these. A system is the one
-                // case where trying the other backend beats declining.
+            // The whole answer, not one assignment: a circle and a line meet in
+            // two points, and `solve_nonlinear` is what can say so. The linear
+            // `solve_system` is still there and still right for a linear system
+            // — `solve_nonlinear` reduces to it — so the panel asks the wider
+            // question and gets the narrower answer when that is the truth.
+            let (outcome, fatal) = match solver.solve_nonlinear(&equations, &vars) {
+                Ok(answer) => (JobOutcome::System(answer), false),
                 Err(err) if err.is_declined() && backend != Backend::Native => {
-                    match NativeSolver.solve_system(&equations, &vars) {
-                        Ok(assignments) => (JobOutcome::Assignments(assignments), false),
+                    match NativeSolver.solve_nonlinear(&equations, &vars) {
+                        Ok(answer) => (JobOutcome::System(answer), false),
                         Err(native) => declined_or_failed(native, JobKind::Solve, Backend::Native),
                     }
                 }
@@ -517,11 +525,17 @@ mod tests {
     }
 
     /// Check a system answer against `x = 1, y = 2`, in any assignment order.
+    ///
+    /// The answer is a `SystemAnswer` now: a single point, held as
+    /// `Points([assignments])`. A linear system still has exactly one point, and
+    /// the check is that the wider answer type did not change that.
     fn assert_x_is_one_and_y_is_two(result: JobResult) {
         match result.outcome {
-            JobOutcome::Assignments(assignments) => {
+            JobOutcome::System(canlab_solver::nonlinear::SystemAnswer::Points(points)) => {
+                assert_eq!(points.len(), 1, "a linear system has one point: {points:?}");
+                let assignments = &points[0];
                 assert_eq!(assignments.len(), 2, "{assignments:?}");
-                for (variable, value) in &assignments {
+                for (variable, value) in assignments {
                     let expected = match variable.as_str().as_str() {
                         "x" => "1",
                         "y" => "2",
@@ -530,7 +544,7 @@ mod tests {
                     assert_eq!(value.to_string(), expected, "{variable:?}");
                 }
             }
-            other => panic!("expected assignments, got {}", describe(&other)),
+            other => panic!("expected one point, got {}", describe(&other)),
         }
     }
 
@@ -603,7 +617,7 @@ mod tests {
         match outcome {
             JobOutcome::Value(_) => "a value",
             JobOutcome::Solutions(_) => "solutions",
-            JobOutcome::Assignments(_) => "assignments",
+            JobOutcome::System(_) => "points",
             JobOutcome::Declined(_) => "declined",
             JobOutcome::Failed(_) => "a failure",
         }

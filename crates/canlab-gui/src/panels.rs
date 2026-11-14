@@ -860,6 +860,39 @@ fn variables_body(app: &mut CasApp, ui: &mut Ui) {
                     .color(crate::theme::weak()),
             );
         }
+        SolveState::Points(answer) => {
+            use canlab_solver::nonlinear::SystemAnswer;
+            match answer {
+                SystemAnswer::None => {
+                    ui.label(
+                        RichText::new("No solutions.")
+                            .small()
+                            .color(crate::theme::weak()),
+                    );
+                }
+                SystemAnswer::All => {
+                    ui.label(RichText::new("Every point.").monospace().size(15.0));
+                }
+                SystemAnswer::Points(points) => {
+                    // One line per point: two points are two answers, and a
+                    // single line would lose one of them.
+                    for point in points {
+                        let parts: Vec<String> = point
+                            .iter()
+                            .map(|(variable, value)| {
+                                let name = to_latex(&canlab_core::sym(&variable.as_str()));
+                                format!("{name} = {}", to_latex(value))
+                            })
+                            .collect();
+                        ui.label(
+                            RichText::new(format!("\\left({}\\right)", parts.join(",\\ ")))
+                                .monospace()
+                                .size(15.0),
+                        );
+                    }
+                }
+            }
+        }
         SolveState::System { assignments } => {
             if assignments.is_empty() {
                 ui.label(

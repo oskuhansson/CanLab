@@ -35,10 +35,19 @@ use egui::{self, Color32, CornerRadius, FontId, Margin, Stroke, TextStyle, Visua
 /// there the app still runs, with the same boxes it had before, and that is the
 /// only behaviour this function is allowed to promise.
 fn install_symbol_fallback(ctx: &egui::Context) {
-    const CANDIDATES: [(&str, &str); 3] = [
+    // Windows first, then the usual Linux paths. The Linux entries are not
+    // decoration: without them the fallback covers nothing off Windows, the
+    // headless build server renders every symbol as tofu, and the frames in
+    // `tests/snapshots/` cannot be compared on the machine that builds them.
+    // `tests` in `snapshot.rs` asks the font system whether each character the
+    // app prints has a glyph, which is how this list is known to be enough.
+    const CANDIDATES: [(&str, &str); 6] = [
         ("seguisym", r"C:\Windows\Fonts\seguisym.ttf"),
         ("segoeui", r"C:\Windows\Fonts\segoeui.ttf"),
         ("dejavu", r"C:\Windows\Fonts\DejaVuSans.ttf"),
+        ("linux-dejavu", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        ("linux-noto-symbols", "/usr/share/fonts/truetype/noto/NotoSansSymbols-Regular.ttf"),
+        ("linux-noto-symbols2", "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf"),
     ];
     let mut fonts = egui::FontDefinitions::default();
     let mut added = false;
