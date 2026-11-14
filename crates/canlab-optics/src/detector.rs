@@ -155,6 +155,22 @@ pub enum EventError {
     NoPhotons,
 }
 
+/// One photon's path, for the visualiser.
+///
+/// The event loop does not build these — a `Vec` per photon is an allocation
+/// per photon — so they exist only when [`simulate_recording`] asked for them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PhotonRecord {
+    /// The polyline from birth to the last face it met, millimetres.
+    pub path: Vec<Vec3>,
+    /// What happened to it.
+    pub fate: Fate,
+    /// The face it escaped through, if it did.
+    pub face: Option<Face>,
+    /// The flight time, picoseconds.
+    pub time_ps: f64,
+}
+
 /// Simulate one muon crossing the block and return what the four sensors see.
 ///
 /// The muon enters the block at `entry`, travels along `heading` (a unit
@@ -174,6 +190,50 @@ pub fn simulate(
     path_mm: f64,
     beta: f64,
     random: &mut dyn FnMut() -> f64,
+) -> Result<Event, EventError> {
+    simulate_inner(block, optical, sensors, entry, heading, path_mm, beta, random, None)
+}
+
+/// The same event as [`simulate`], plus every photon's path.
+///
+/// For the visualiser: a few hundred photons, each with its polyline, is what
+/// the 3D view draws. The physics is the same function, so a picture and a
+/// number cannot disagree.
+pub fn simulate_recording(
+    block: &Block,
+    optical: &Optical,
+    sensors: &[SiPM; 4],
+    entry: Vec3,
+    heading: Vec3,
+    path_mm: f64,
+    beta: f64,
+    random: &mut dyn FnMut() -> f64,
+) -> Result<(Event, Vec<PhotonRecord>), EventError> {
+    let mut records = Vec::new();
+    let event = simulate_inner(
+        block,
+        optical,
+        sensors,
+        entry,
+        heading,
+        path_mm,
+        beta,
+        random,
+        Some(&mut records),
+    )?;
+    Ok((event, records))
+}
+
+fn simulate_inner(
+    block: &Block,
+    optical: &Optical,
+    sensors: &[SiPM; 4],
+    entry: Vec3,
+    heading: Vec3,
+    path_mm: f64,
+    beta: f64,
+    random: &mut dyn FnMut() -> f64,
+    mut records: Option<&mut Vec<PhotonRecord>>,
 ) -> Result<Event, EventError> {
     let index = optical.index;
     let heading = heading.normalized().ok_or(EventError::BadOptics)?;
@@ -270,11 +330,24 @@ pub fn simulate(
             event.missed += 1;
             continue;
         };
-        let Some(traced) = transport.trace(birth, direction, Polarisation::S, random)
-        else {
+        let mut path = Vec::new();
+        let traced = if records.is_some() {
+            transport.trace_recording(birth, direction, Polarisation::S, random, &mut path)
+        } else {
+            transport.trace(birth, direction, Polarisation::S, random)
+        };
+        let Some(traced) = traced else {
             event.missed += 1;
             continue;
         };
+        if let Some(records) = records.as_deref_mut() {
+            records.push(PhotonRecord {
+                path: std::mem::take(&mut path),
+                fate: traced.fate,
+                face: traced.face,
+                time_ps: traced.time_ps,
+            });
+        }
         match traced.fate {
             Fate::Absorbed => {
                 event.absorbed += 1;

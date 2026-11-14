@@ -417,3 +417,25 @@ fn every_character_the_app_can_print_has_a_glyph() {
         missing.join(", ")
     );
 }
+
+/// The 3D detector view, rendered on its own at a size worth looking at.
+///
+/// The dock gives the panel a small leaf; this renders it at 1000 × 760 so the
+/// block, the photons and the sensors are visible in the reference. The scene is
+/// deterministic — a fixed seed and a fixed design — so the frame is stable.
+#[test]
+fn the_detector_panel_draws() {
+    let _frame = frame_lock();
+    let mut app = CasApp::new();
+    // The hexagon 28 / 30: the design the study recommends.
+    app.selected_design = 3;
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1000.0, 760.0))
+        .build_ui(|ui| crate::panels::designs(&mut app, ui));
+    crate::theme::install(&harness.ctx);
+    harness.ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    for _ in 0..6 {
+        harness.step();
+    }
+    harness.snapshot("detector");
+}

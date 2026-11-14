@@ -201,6 +201,35 @@ impl Transport {
         polarisation: Polarisation,
         random: &mut dyn FnMut() -> f64,
     ) -> Option<Traced> {
+        self.trace_inner(origin, direction, polarisation, random, None)
+    }
+
+    /// The same trace, recording the polyline the photon took.
+    ///
+    /// The visualiser needs the bounce points; the event loop does not, and a
+    /// `Vec` per photon there would be an allocation per photon. So the recorder
+    /// is a parameter the hot path passes as `None`.
+    pub fn trace_recording(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        polarisation: Polarisation,
+        random: &mut dyn FnMut() -> f64,
+        path: &mut Vec<Vec3>,
+    ) -> Option<Traced> {
+        path.clear();
+        path.push(origin);
+        self.trace_inner(origin, direction, polarisation, random, Some(path))
+    }
+
+    fn trace_inner(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        polarisation: Polarisation,
+        random: &mut dyn FnMut() -> f64,
+        mut record: Option<&mut Vec<Vec3>>,
+    ) -> Option<Traced> {
         if !self.block.strictly_contains(origin) {
             return None;
         }
@@ -232,6 +261,11 @@ impl Transport {
                 break;
             };
             path += next.distance;
+            // The face hit is a vertex of the polyline: for a reflection it is
+            // where the photon turned, and for an escape it is where it left.
+            if let Some(points) = record.as_deref_mut() {
+                points.push(next.point);
+            }
             // Lost on the way: the probability of surviving this step is
             // `exp(−d/ℓ)`, and a draw above it means the photon died here.
             //

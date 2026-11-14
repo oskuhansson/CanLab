@@ -3282,155 +3282,300 @@ mod sign_table_tests {
     }
 }
 
-/// The muon detector designs: the six the study compares, plus the hexagonal
-/// Cherenkov block, with a side sketch of each and its numbers.
+/// The muon detector in 3D: one simulated event, its photons, its sensors and
+/// the timestamps they recorded.
 ///
-/// The sketch is a **side view**: the can's inner envelope is 56 mm across and
-/// 110 mm tall, and the design is drawn inside it at the same scale. It is not a
-/// ray trace and it is not to be read as one — it answers "what shape is this and
-/// where does it sit in the can", which a table of numbers cannot.
+/// The picture is the same `simulate_recording` call the study runs, with the
+/// photons' polylines kept instead of thrown away. The clock is the muon's: it
+/// reaches the block at `t = 0`, a photon leaves it at `c/n`, and a sensor
+/// lights when the first photon that reached it gets there.
 pub fn designs(app: &mut CasApp, ui: &mut Ui) {
-    use canlab_muon::designs::{Approach, Design};
+    use canlab_muon::timing_study::{Shape, TimingDesign};
 
-    let designs = Design::all();
-    let hexagon = canlab_muon::timing_study::TimingDesign {
-        name: "hexagon timing",
-        scale_mm: 28.0,
-        thickness_mm: 30.0,
+    /// The Cherenkov blocks the view can show, and their scale and depth.
+    const DESIGNS: [(&str, f64, f64, Shape); 5] = [
+        ("tent 20 / 10", 20.0, 10.0, Shape::Tent),
+        ("tent 24 / 20", 24.0, 20.0, Shape::Tent),
+        ("hexagon 28 / 20", 28.0, 20.0, Shape::Hexagon),
+        ("hexagon 28 / 30", 28.0, 30.0, Shape::Hexagon),
+        ("hexagon 28 / 40", 28.0, 40.0, Shape::Hexagon),
+    ];
+
+    let selected = app.selected_design.min(DESIGNS.len() - 1);
+    let (name, scale, thickness, shape) = DESIGNS[selected];
+    let design = TimingDesign {
+        name: "view",
+        scale_mm: scale,
+        thickness_mm: thickness,
         index: 1.49,
         pde: 0.35,
-        shape: canlab_muon::timing_study::Shape::Hexagon,
+        shape,
     };
-    let count = designs.len() + 1;
-    let selected = app.selected_design.min(count - 1);
 
-    ui.heading("Muon detector designs");
-    ui.label("The six designs the study compares, plus the hexagonal Cherenkov block.");
-    ui.separator();
-
-    egui::ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
-        for (index, design) in designs.iter().enumerate() {
-            // Cached: `metrics()` is a quadrature and a bound, not a per-frame
-            // cost. See `crate::design_metrics`.
-            let metrics = crate::design_metrics()[index];
-            let label = format!(
-                "{} — {:.0} EUR, {:.0} g, {} sensors",
-                design.name, metrics.cost_eur, metrics.detector_g, metrics.channels
-            );
-            if ui.selectable_label(index == selected, label).clicked() {
-                app.selected_design = index;
-            }
+    // The header: the design, a new event, and the clock.
+    ui.horizontal_wrapped(|ui| {
+        egui::ComboBox::from_id_salt("detector-design")
+            .selected_text(name)
+            .show_ui(ui, |ui| {
+                for (index, (label, ..)) in DESIGNS.iter().enumerate() {
+                    if ui.selectable_label(index == selected, *label).clicked() {
+                        app.selected_design = index;
+                        app.detector = None;
+                    }
+                }
+            });
+        if ui.button("new event").clicked() {
+            app.detector_seed = app.detector_seed.wrapping_add(1);
+            app.detector = None;
         }
-        if ui
-            .selectable_label(selected == designs.len(), "hexagon timing — 218 EUR, 73 g, 4 sensors")
-            .clicked()
-        {
-            app.selected_design = designs.len();
+        if ui.button("restart").clicked() {
+            if let Some(scene) = app.detector.as_mut() {
+                scene.restart();
+            }
         }
     });
 
+    // The scene, built on first use.
+    if app.detector.is_none() {
+        app.detector = crate::detector::DetectorScene::new(design, app.detector_seed);
+    }
+    let Some(scene) = app.detector.as_mut() else {
+        ui.label("this design has no photon transport to draw");
+        return;
+    };
+
+    // The clock, and a repaint while it runs.
+    let dt = f64::from(ui.ctx().input(|input| input.stable_dt));
+    scene.advance(dt);
+    if scene.playing {
+        ui.ctx().request_repaint();
+    }
+
+    // The canvas: everything above the readout.
+    let height = (ui.available_height() - 270.0).max(140.0);
+    let rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), height));
+    crate::detector::draw(scene, ui, rect);
+
+    // The readout scrolls, so a small dock leaf still reaches the analysis.
+    egui::ScrollArea::vertical().show(ui, |ui| {
+    // The controls.
+    ui.horizontal_wrapped(|ui| {
+        if ui.button(if scene.playing { "pause" } else { "play" }).clicked() {
+            scene.playing = !scene.playing;
+        }
+        ui.add(
+            egui::Slider::new(&mut scene.speed_ps_per_s, 1.0..=200.0)
+                .logarithmic(true)
+                .text("ps/s"),
+        );
+        ui.checkbox(&mut scene.show_photons, "photons");
+        ui.checkbox(&mut scene.show_cone, "cone");
+        ui.label(format!("t = {:.0} ps", scene.time_ps));
+    });
+
+    // The timestamps.
     ui.separator();
-
-    // The numbers, then the sketch.
-    if selected < designs.len() {
-        let metrics = crate::design_metrics()[selected];
-        ui.horizontal_wrapped(|ui| {
-            ui.label(format!("{:.0} EUR", metrics.cost_eur));
-            ui.label(format!("{:.0} g", metrics.detector_g));
-            ui.label(format!("{} sensors", metrics.channels));
-            match metrics.angle_deg {
-                Some(angle) => ui.label(format!("{angle:.1}° ({})", metrics.angle_source.tag())),
-                None => ui.label("no direction"),
-            };
-            ui.label(format!("{:.1} muons/flight", metrics.muons_per_flight));
-        });
-    } else {
-        ui.horizontal_wrapped(|ui| {
-            ui.label("218 EUR");
-            ui.label("73 g");
-            ui.label("4 sensors");
-            ui.label("21.6° (network)");
-            ui.label("26 muons/flight");
-        });
-    }
-
-    let (response, painter) = ui.allocate_painter(
-        vec2(ui.available_width().max(120.0), ui.available_height().max(160.0)),
-        Sense::hover(),
-    );
-    let rect = response.rect;
-    let faint = Stroke::new(1.0, ui.visuals().weak_text_color());
-    let strong = Stroke::new(1.5, crate::theme::accent());
-    let fill = ui.visuals().faint_bg_color;
-    // Millimetres to pixels: the envelope is 56 across and 110 tall, with a
-    // margin so the sketch does not touch the panel's edge.
-    let scale = ((rect.width() - 16.0) / 56.0)
-        .min((rect.height() - 16.0) / 110.0)
-        .max(0.1);
-    let centre = rect.center();
-    let at = |x: f64, y: f64| pos2(centre.x + (x as f32) * scale, centre.y - (y as f32) * scale);
-
-    // The can's inner envelope.
-    let envelope = Rect::from_min_max(at(-28.0, 55.0), at(28.0, -55.0));
-    painter.rect_stroke(envelope, egui::CornerRadius::same(4), faint, egui::StrokeKind::Inside);
-
-    if selected < designs.len() {
-        let design = &designs[selected];
-        match design.approach {
-            Approach::Counter => {
-                // The disc seen edge-on: 56 mm across, 10 mm thick.
-                painter.rect_filled(
-                    Rect::from_min_max(at(-28.0, 5.0), at(28.0, -5.0)),
-                    egui::CornerRadius::same(2),
-                    fill,
-                );
+    egui::Grid::new("detector-timestamps")
+        .num_columns(5)
+        .striped(true)
+        .show(ui, |ui| {
+            ui.label("sensor");
+            ui.label("true ps");
+            ui.label("recorded ps");
+            ui.label("photons");
+            ui.label("fired");
+            ui.end_row();
+            for index in 0..4 {
+                ui.label(format!("{index}"));
+                ui.label(match scene.event.true_ps[index].first() {
+                    Some(time) => format!("{time:.1}"),
+                    None => "—".to_owned(),
+                });
+                ui.label(match scene.event.arrivals_ps[index].first() {
+                    Some(time) => format!("{time:.1}"),
+                    None => "—".to_owned(),
+                });
+                ui.label(format!("{}", scene.event.arrivals_ps[index].len()));
+                let lit = scene
+                    .first_arrival_ps(index)
+                    .is_some_and(|time| scene.time_ps >= time);
+                ui.label(if lit { "yes" } else { "no" });
+                ui.end_row();
             }
-            Approach::CherenkovTiming | Approach::RingImager => {
-                // The tent: 40 mm across, 90 mm tall, centred in the can.
-                let tent = canlab_optics::outline::CORNERS
-                    .iter()
-                    .map(|(x, y)| at(x * 20.0, y * 20.0 - 15.0))
-                    .collect::<Vec<_>>();
-                painter.add(egui::Shape::convex_polygon(tent, fill, strong));
-                // The four sensors, from the block the transport uses.
-                if let Ok(outline) = canlab_optics::Tropical::fits_in(20.0, 10.0) {
-                    let block = canlab_optics::Block::new(outline);
-                    for position in block.sensor_positions() {
-                        painter.circle_filled(at(position.x, position.y - 15.0), 3.0, crate::theme::accent());
-                    }
-                }
+        });
+
+    // The analysis: the truth, the analytic fit, and the network.
+    let truth = scene.truth;
+    let observations: Vec<canlab_muon::Observation> = scene
+        .sensors
+        .iter()
+        .enumerate()
+        .filter_map(|(index, sensor)| {
+            scene.event.arrivals_ps[index]
+                .first()
+                .map(|time| canlab_muon::Observation {
+                    position_mm: scene.block.face_centre(sensor.face),
+                    time_ps: *time,
+                })
+        })
+        .collect();
+    let fit = canlab_muon::reconstruct(&observations).ok();
+    let features = event_features(scene);
+    let heading = scene.heading;
+    ui.separator();
+    ui.horizontal_wrapped(|ui| {
+        ui.label(format!("truth {:.2}, {:.2}", truth[0], truth[1]));
+        match fit {
+            Some(fit) => {
+                let error = angle_deg(fit.heading, heading);
+                ui.label(format!(
+                    "fit {:.2}, {:.2} ({error:.1}°)",
+                    fit.heading.x, fit.heading.y
+                ));
             }
-            Approach::Tracker => {
-                // Two planes 40 mm across, 5 mm thick, separated by the gap.
-                let half = design.separation_mm / 2.0;
-                for y in [half, -half] {
-                    painter.rect_filled(
-                        Rect::from_min_max(at(-20.0, y + 2.5), at(20.0, y - 2.5)),
-                        egui::CornerRadius::same(2),
-                        fill,
-                    );
-                }
+            None => {
+                ui.label("fit: needs four timestamps");
             }
         }
-    } else {
-        // The hexagon: 56 mm across corners, 48.5 mm across flats.
-        let hex = canlab_optics::outline::HEXAGON
-            .iter()
-            .map(|(x, y)| at(x * 28.0, y * 28.0))
-            .collect::<Vec<_>>();
-        painter.add(egui::Shape::convex_polygon(hex, fill, strong));
-        // The four sensors: Top, Bottom, Side(0), Side(2).
-        if let Some(block) = hexagon.block() {
-            for position in block.sensor_positions() {
-                painter.circle_filled(at(position.x, position.y), 3.0, crate::theme::accent());
+    });
+
+    // The network is trained in the background, once per design.
+    if !cfg!(test) && app.network_design != Some(design) && app.network_rx.is_none() {
+        app.network = None;
+        app.network_design = Some(design);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        app.network_rx = Some(std::sync::Mutex::new(receiver));
+        std::thread::spawn(move || {
+            if let Some(network) = train_network(design, 1_200, 40) {
+                let _ = sender.send(network);
             }
+        });
+    }
+    if let Some(receiver) = &app.network_rx {
+        let received = receiver.lock().ok().and_then(|receiver| receiver.try_recv().ok());
+        if let Some(network) = received {
+            app.network = Some(network);
+            app.network_rx = None;
         }
     }
+    match &app.network {
+        Some(network) => {
+            let predicted = network.predict(&features);
+            let error = angle_deg(predicted_heading(predicted), heading);
+            ui.label(format!(
+                "network {:.2}, {:.2} ({error:.1}°)",
+                predicted[0], predicted[1]
+            ));
+        }
+        None => {
+            ui.label(if cfg!(test) {
+                "network: off in a test"
+            } else {
+                "network: training in the background…"
+            });
+            ui.ctx().request_repaint();
+        }
+    }
+    });
+}
+
+/// The features the network reads, from the event the view is showing.
+fn event_features(
+    scene: &crate::detector::DetectorScene,
+) -> [f64; canlab_muon::timing_study::FEATURES] {
+    let event = &scene.event;
+    let mut times = [None; 4];
+    let mut second_times = [None; 4];
+    let mut counts = [0; 4];
+    for index in 0..4 {
+        times[index] = event.arrivals_ps[index].first().copied();
+        second_times[index] = event.arrivals_ps[index].get(1).copied();
+        counts[index] = event.arrivals_ps[index].len();
+    }
+    let outcome = canlab_muon::TimingOutcome {
+        timed: times.iter().filter(|time| time.is_some()).count(),
+        error_deg: None,
+        error_exact_deg: None,
+        photons: event.photons_born,
+        times,
+        second_times,
+        counts,
+        direction: scene.truth,
+    };
+    canlab_muon::timing_study::features(&outcome)
+}
+
+/// Train the network the panel uses, on events from the same design.
+///
+/// The panel runs this on a background thread with the full counts; the test
+/// runs it with a fraction, because a suite that spends ten seconds training a
+/// demo network is a suite that gets skipped.
+fn train_network(
+    design: canlab_muon::TimingDesign,
+    samples: usize,
+    epochs: usize,
+) -> Option<canlab_muon::Network> {
+    use canlab_muon::timing_study::training_sample_realistic;
+    let readout = canlab_muon::Readout::nominal();
+    let mut rng = canlab_muon::Rng::new(7);
+    let mut training = Vec::new();
+    for _ in 0..samples {
+        if let Some(sample) = training_sample_realistic(&design, &readout, &mut rng) {
+            training.push(sample);
+        }
+    }
+    let inputs = training.first()?.features.len();
+    let mut rng = canlab_muon::Rng::new(3);
+    let mut network = canlab_muon::Network::new(inputs, 64, &mut rng);
+    network.train(&training, epochs, 64, 0.003, &mut rng);
+    Some(network)
+}
+
+/// The 3D heading a pair of horizontal components names.
+fn predicted_heading(predicted: [f64; 2]) -> canlab_optics::Vec3 {
+    let squared = predicted[0] * predicted[0] + predicted[1] * predicted[1];
+    let z = (1.0 - squared).max(0.0).sqrt();
+    canlab_optics::Vec3::new(predicted[0], predicted[1], -z)
+}
+
+/// The angle between two headings, degrees.
+fn angle_deg(a: canlab_optics::Vec3, b: canlab_optics::Vec3) -> f64 {
+    let dot = (a.x * b.x + a.y * b.y + a.z * b.z).clamp(-1.0, 1.0);
+    dot.acos().to_degrees()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_detector_network_trains_and_predicts() {
+        // The panel trains a network in the background for the design it is
+        // showing. This is that training, on the design the study recommends,
+        // and a prediction that has to be a direction: finite, and inside the
+        // unit disc.
+        use canlab_muon::timing_study::{Shape, TimingDesign};
+        let design = TimingDesign {
+            name: "hexagon",
+            scale_mm: 28.0,
+            thickness_mm: 30.0,
+            index: 1.49,
+            pde: 0.35,
+            shape: Shape::Hexagon,
+        };
+        let network = super::train_network(design, 300, 20).expect("a network");
+        let mut rng = canlab_muon::Rng::new(11);
+        let sample = canlab_muon::timing_study::training_sample_realistic(
+            &design,
+            &canlab_muon::Readout::nominal(),
+            &mut rng,
+        )
+        .expect("a sample");
+        let predicted = network.predict(&sample.features);
+        assert!(predicted[0].is_finite() && predicted[1].is_finite());
+        let squared = predicted[0] * predicted[0] + predicted[1] * predicted[1];
+        assert!(squared <= 1.0 + 1e-6, "{squared}");
+    }
 
     #[test]
     fn fitting_to_no_equation_curves_leaves_the_window_alone() {

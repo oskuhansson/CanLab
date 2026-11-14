@@ -17,6 +17,7 @@
 //! The app is intentionally a single binary: the modules are implementation
 //! details of the frame loop, not a library API.
 
+mod detector;
 mod jobs;
 mod layout;
 mod panels;
@@ -309,6 +310,18 @@ struct CasApp {
     theme_pending: bool,
     /// Which muon detector design the Designs panel is showing.
     selected_design: usize,
+    /// The 3D view's event, rebuilt when the design or the seed changes.
+    detector: Option<detector::DetectorScene>,
+    /// The seed the 3D view's event was drawn with.
+    detector_seed: u64,
+    /// The network the Detector panel uses, once its background training is
+    /// done. `None` until then, and `None` in a test, which must not spawn one.
+    network: Option<canlab_muon::Network>,
+    /// The channel the training sends the network on. A `Mutex` because a
+    /// `Receiver` is `Send` and not `Sync`, and a Bevy resource must be both.
+    network_rx: Option<std::sync::Mutex<std::sync::mpsc::Receiver<canlab_muon::Network>>>,
+    /// The design the network was trained for.
+    network_design: Option<canlab_muon::TimingDesign>,
 }
 
 impl CasApp {
@@ -356,6 +369,11 @@ impl CasApp {
             sessions: !cfg!(test),
             theme_pending: false,
             selected_design: 0,
+            detector: None,
+            detector_seed: 1,
+            network: None,
+            network_rx: None,
+            network_design: None,
         };
         app.restore_session();
         // `CANLAB_PALETTE=Nord` picks a scheme for this run, which is what a
