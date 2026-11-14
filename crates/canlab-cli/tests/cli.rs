@@ -260,6 +260,20 @@ fn solve_all_reports_a_decline_with_its_reason() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn prose_inside_a_formula_is_refused_as_prose() {
+    // W11.2: the refusal list names the reason. "Unknown command" would be wrong
+    // — `\text` is known and an exam pastes it — and reading `\text{cm}` as
+    // `c·m` would be a wrong answer that looks like one.
+    for source in [r"\text{hello}", r"\text{cm}", r"\textrm{abc}"] {
+        let (ok, stdout, stderr) = canlab(&["tex", source]);
+        assert!(!ok, "{source} was accepted");
+        assert!(stderr.contains("prose"), "{source}: {stderr}");
+        assert!(!stderr.contains("unknown command"), "{source}: {stderr}");
+        assert!(stdout.is_empty(), "{source} printed {stdout:?}");
+    }
+}
+
+#[test]
 fn a_matrix_round_trips_and_a_ragged_one_is_refused() {
     // W11.1: `\begin{pmatrix}` appears in every linear-algebra problem.
     for source in [

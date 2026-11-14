@@ -1011,6 +1011,16 @@ impl Parser {
                 format!("unexpected `\\{name}`; expected an expression"),
                 pos,
             )),
+            // `\text{…}` is prose inside a formula, and prose is not an
+            // expression. Saying "unknown command" would be wrong — the command
+            // is known and an exam pastes it — so the refusal names what it is.
+            "text" | "textrm" | "mbox" => Err(ParseError::new(
+                format!(
+                    "`\\{name}` inside a formula is prose, and prose is not an expression; \
+                     the words are not part of the algebra"
+                ),
+                pos,
+            )),
             // `\lvert x \rvert` is the same absolute value as `\left|x\right|`,
             // spelled without the `\left`/`\right` pair. It is how an exam
             // writes it in running text.

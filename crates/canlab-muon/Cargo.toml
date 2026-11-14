@@ -1,0 +1,8 @@
+[package]
+name = "canlab-muon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Muon direction from Cherenkov light: the detector simulation, kept apart from the CAS"
+
+[dependencies]
