@@ -35,7 +35,6 @@
 use canlab_muon::components::adhesive;
 use canlab_optics::detector::simulate;
 use canlab_optics::{Block, Optical, SiPM, Tropical, Vec3, SENSOR_FACES};
-use canlab_muon::Rng;
 
 /// The muons per configuration.
 const EVENTS: usize = 400;
