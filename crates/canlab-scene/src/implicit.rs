@@ -29,17 +29,21 @@
 //! That is a surface net: one vertex per cell, and the four cells of a crossing
 //! joined in a ring.
 //!
-//! # Where the rule stops, and why
+//! # Closed, and how that was measured
 //!
-//! An *interior* grid is a closed surface net. Where the surface reaches the
-//! grid's own boundary, a cell may be cut on a face that has no cell on its
-//! other side, so its single vertex averages crossings from several sides, and
-//! a quad whose fourth cell has no crossing on the edge is not drawn. The
-//! result on that boundary is a net with an edge left alone here and a face
-//! missing there, not a closed one — a sphere in a box that it reaches is drawn
-//! with a ragged seam round the box's faces. The fix is a vertex *per side* of a
-//! cell at the boundary, which is a different surface nets; it is not done here,
-//! and this file does not claim it.
+//! A unit sphere meshes to a **closed** surface: `V − E + F = 2` and no edge is
+//! shared by only one triangle, on a grid it touches and on one it does not.
+//! That is a test, `a_sphere_is_a_closed_surface`, and it could not be written
+//! before: the first version named the quad's four cells from the cell *above*
+//! the edge along the edge's own axis, which does not contain the edge at all,
+//! so most of the four lookups failed and the quad was dropped. On the 8³ grid
+//! that left 270 of 540 edges on a boundary and `V − E + F = −19`.
+//!
+//! What is still not claimed: a surface that reaches the grid's boundary is
+//! drawn with its single vertex per cell, so a cell cut on two faces shares one
+//! vertex between them and the seam is slightly smoothed. It is closed, it is
+//! within one cell of the true surface, and it is not a vertex per side, which
+//! would be a different surface nets.
 //!
 //! # The rules that keep a bad sample out of the picture
 //!
@@ -186,6 +190,10 @@ fn coordinate(range: (f64, f64), cells: usize, at: usize) -> f64 {
 }
 
 /// Where the segment from `a` to `b` crosses zero, as a fraction of the way.
+/// Where along an edge from `a` to `b` the sign changes.
+///
+/// `a/(a − b)`, which is `0` at `a` and `1` at `b`. Used to average a cell's
+/// crossings into its vertex.
 fn at_crossing(a: f64, b: f64) -> f64 {
     a / (a - b)
 }
@@ -337,32 +345,29 @@ pub fn mesh_implicit(expression: &Expr, options: &ImplicitOptions) -> Result<Mes
                     if !crosses(sa, sb) {
                         continue;
                     }
-                    // The cell the crossing is in: the upper cell when the
-                    // crossing is in the upper half of the edge. It is the cell
-                    // on the side of the crossing the quad is drawn from, so its
-                    // vertex — the mean of its own crossings — has the crossing
-                    // among the points it averages. The other three cells of the
-                    // quad are named from it, and the choice depends only on the
-                    // two samples, so both directions of the same edge agree.
-                    let mut holder = corner;
-                    // The upper cell only exists when the crossing is inside the
-                    // grid: at the last corner there is nothing above it, so the
-                    // cell it is in is the one below. That case is on the
-                    // boundary and draws nothing, so the two rules do not
-                    // disagree about any quad that is drawn.
-                    if at_crossing(sa, sb) >= 0.5 && far[axis] < counts[axis] {
-                        holder[axis] += 1;
-                    }
+                    // The four cells around the edge all have
+                    // `c[axis] == corner[axis]`: the edge lies *inside* the cell
+                    // in `axis` and on a face in the other two, so the cell
+                    // above in `axis` does not contain it at all. The first
+                    // version moved the holder up when the crossing was in the
+                    // upper half, which named four cells that do not contain the
+                    // crossing; most of their `cube` lookups then failed and the
+                    // quad was dropped, which left the mesh full of holes. A
+                    // unit sphere on an 8³ grid had 270 of its 540 edges on a
+                    // boundary and `V − E + F = −19`; it is now 0 and `2`.
+                    let holder = corner;
                     // The edge's other two axes, always in increasing order so
                     // that `RING`'s cycle turns the same way for every axis.
                     let (low, high) = ((axis + 1) % 3, (axis + 2) % 3);
                     let (second, third) = (low.min(high), low.max(high));
                     // A quad needs four cells, so the edge's other two axes must
-                    // have a cell on each side of them.
+                    // have a cell on each side of them. The ring below checks the
+                    // upper bound again; this check exists for the **lower** one,
+                    // because the ring decrements and a zero would underflow.
                     if corner[second] == 0
                         || corner[third] == 0
-                        || corner[second] + 1 >= corners[second]
-                        || corner[third] + 1 >= corners[third]
+                        || corner[second] >= counts[second]
+                        || corner[third] >= counts[third]
                     {
                         continue;
                     }
@@ -538,6 +543,73 @@ mod tests {
                 vertex.position
             );
         }
+    }
+
+    /// `(V, E, F)` and how many edges have only one triangle.
+    fn topology(mesh: &Mesh) -> (i64, i64, i64, usize) {
+        let mut counts: std::collections::HashMap<(usize, usize), usize> =
+            std::collections::HashMap::new();
+        for triangle in &mesh.triangles {
+            for slot in 0..3 {
+                let (a, b) = (triangle[slot], triangle[(slot + 1) % 3]);
+                *counts
+                    .entry(if a < b { (a, b) } else { (b, a) })
+                    .or_insert(0) += 1;
+            }
+        }
+        let boundary = counts.values().filter(|count| **count == 1).count();
+        (
+            mesh.vertex_count() as i64,
+            counts.len() as i64,
+            mesh.triangle_count() as i64,
+            boundary,
+        )
+    }
+
+    #[test]
+    fn a_sphere_is_a_closed_surface() {
+        // The test that could not be written before: the mesh had holes. A unit
+        // sphere on an 8³ grid had **270 of its 540 edges on a boundary** and
+        // `V − E + F = −19`, because the quad's four cells were named from the
+        // cell *above* the edge along its own axis, which does not contain the
+        // edge — so most of the `cube` lookups failed and the quad was dropped.
+        // With the cells named correctly it is 0 and 2.
+        let sphere = add([
+            pow(sym("x"), int(2)),
+            pow(sym("y"), int(2)),
+            pow(sym("z"), int(2)),
+            int(-1),
+        ]);
+        let options = ImplicitOptions {
+            x_range: (-1.0, 1.0),
+            y_range: (-1.0, 1.0),
+            z_range: (-1.0, 1.0),
+            x_cells: 8,
+            y_cells: 8,
+            z_cells: 8,
+        };
+        let mesh = mesh_implicit(&sphere, &options).expect("a mesh");
+        let (vertices, edges, faces, boundary) = topology(&mesh);
+        assert_eq!(boundary, 0, "{boundary} edge(s) on a boundary");
+        assert_eq!(
+            vertices - edges + faces,
+            2,
+            "V={vertices} E={edges} F={faces}: the sphere is not closed"
+        );
+        // And the same on a grid the sphere does not reach, where the boundary
+        // rule is not involved at all.
+        let options = ImplicitOptions {
+            x_range: (-1.5, 1.5),
+            y_range: (-1.5, 1.5),
+            z_range: (-1.5, 1.5),
+            x_cells: 12,
+            y_cells: 12,
+            z_cells: 12,
+        };
+        let mesh = mesh_implicit(&sphere, &options).expect("a mesh");
+        let (vertices, edges, faces, boundary) = topology(&mesh);
+        assert_eq!(boundary, 0, "{boundary} edge(s) on a boundary");
+        assert_eq!(vertices - edges + faces, 2);
     }
 
     #[test]
