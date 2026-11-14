@@ -595,3 +595,48 @@ example, `X`", the test suite should contain `X`.
 The reviewer found this by reading the doc comment against the code, not by
 running anything. That is the second time a doc-vs-code mismatch has been the
 thing that surfaced a wrong number.
+
+## A review finding is a claim, not a fact
+
+The reviewer filed four blockers. Two were wrong, and the way to find out was to
+compute the number by hand in five seconds.
+
+**B1, the volume.** "`\vol_0^1 e^{-x^2} dx` returns 1.879 where π·0.7468 = 2.346,
+so it is wrong." The volume of revolution of `y = f(x)` is `π∫f²`, and the code
+squares the curve — so the integrand is `(e^{-x²})² = e^{-2x²}`, the integral is
+`0.5981`, and `π·0.5981 = 1.8791`. The code was right; the review had forgotten
+to square the radius. Same for `(4 − x²)`: `π∫(4−x²)² = 53.6165`, which is what
+came out.
+
+**The area.** "`\area_0^3 x , 3` → 4.5, true 6." `∫_0^3 |x − 3| dx = 4.5`. The
+"true 6" was not any integral of that pair of curves.
+
+But the *same* review found three real bugs in the same modules, one of them a
+wrong number across a pole that I had introduced an hour earlier. So the lesson
+is not "distrust the reviewer" — it is that **a finding is a claim and every
+claim gets checked the same way, from the code and from arithmetic, whoever made
+it.** Accepting a finding on authority is the same error as accepting a doc
+comment on authority, which is the error that put `∫_1^2 x^{-2} dx` in a doc
+comment as the example a function existed for while the function was wrong about
+it four ways.
+
+The habit that works: reproduce the claimed input, compute the expected answer
+independently, and compare. For B1 that took one line of Python. It also took
+one line to confirm the pole bug was real, which is why the review was worth
+running at all.
+
+## A merge is a test run, not a diff
+
+Merging `origin/main` brought a parallel implementation of the nonlinear system
+solver. Reading it, it looked reasonable: elimination by pseudo-division,
+documented, five tests. Taking it and running its tests showed that **two of the
+five hang** — `circles_that_do_not_meet_report_none` and
+`two_circles_meet_twice_and_the_answer_is_irrational` each ran past sixty
+seconds without finishing, and two circles meeting twice is the case that
+module's own doc opens with.
+
+A diff cannot show a hang. The only thing that shows a hang is running it, and
+the only reason it was found is that the merge was followed by the suite rather
+than by a commit. The same applies to the opposite choice: the version that was
+kept answers its six tests in 0.01 s, which is evidence, where "this algorithm
+looks cleaner" is not.
