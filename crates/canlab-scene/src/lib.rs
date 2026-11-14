@@ -34,6 +34,7 @@
 //! front, and drawing that point is the classic 3D-view bug.
 
 pub mod implicit;
+pub mod pick;
 pub mod surface;
 pub mod svg;
 

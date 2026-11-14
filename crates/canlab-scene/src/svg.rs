@@ -161,10 +161,14 @@ fn ramp(shade: f64, low: [u8; 3], high: [u8; 3]) -> String {
 
 /// The camera that frames a mesh, from the angles the caller gives.
 ///
-/// `fit` puts the bounding sphere exactly inside the frustum, which for a surface
-/// with a large depth extent leaves the near rim very close and the perspective
-/// extreme; the distance is widened so the whole surface is in frame with a
-/// gentler projection.
+/// `fit` puts the bounding sphere exactly inside the frustum, which leaves the
+/// surface touching the frame's edge. A tenth of a margin is added so it does not
+/// sit on the edge.
+///
+/// The first version widened by 1.8, to soften the perspective on a deep funnel.
+/// That was solving a non-problem — the funnel's pinched look is its shape — and
+/// it shrank every surface to a fifth of the frame: a unit sphere covered only
+/// ±0.19 of the normalised coordinates, which is why a pick at ±0.2 missed it.
 pub fn framing_camera(mesh: &Mesh, azimuth: f64, elevation: f64, aspect: f64) -> Camera {
     let points: Vec<Vec3> = mesh.vertices.iter().map(|vertex| vertex.position).collect();
     let camera = Camera {
@@ -174,7 +178,7 @@ pub fn framing_camera(mesh: &Mesh, azimuth: f64, elevation: f64, aspect: f64) ->
         ..Camera::default()
     };
     let mut fitted = camera.fit(&points);
-    fitted.distance *= 1.8;
+    fitted.distance *= 1.1;
     fitted
 }
 
@@ -270,10 +274,10 @@ mod tests {
             - xs.iter().cloned().fold(f64::INFINITY, f64::min);
         let height = ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
             - ys.iter().cloned().fold(f64::INFINITY, f64::min);
-        // `framing_camera` widens `fit` by 1.8, so the plane covers about a fifth
-        // of the frame's width rather than all of it. The number is asserted so
-        // that a change to the framing shows up here.
-        assert!(width > 150.0, "the plane is only {width} px wide");
+        // `framing_camera` widens `fit` by a tenth, so the plane covers most of
+        // the frame's width. The number is asserted so that a change to the
+        // framing shows up here.
+        assert!(width > 300.0, "the plane is only {width} px wide");
         assert!(
             width > height,
             "a plane seen from 34° above is wider than tall: {width} x {height}"

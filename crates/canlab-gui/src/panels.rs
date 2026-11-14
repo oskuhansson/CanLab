@@ -1194,6 +1194,9 @@ fn surface(app: &mut CasApp, ui: &mut Ui, rect: Rect, response: &egui::Response)
         f64::from(rect.width() / rect.height().max(1.0)),
     );
     let painter = ui.painter_at(rect);
+    // The chrome first, so the surface covers the grid rather than the other way
+    // round: a grid line over a solid surface reads as a scratch on it.
+    draw_chrome(app, &painter, &camera, &mesh, rect);
     let low = [40u8, 70, 130];
     let high = [240u8, 200, 120];
     for triangle in canlab_scene::svg::visible_triangles(&mesh, &camera) {
@@ -1225,6 +1228,90 @@ fn surface(app: &mut CasApp, ui: &mut Ui, rect: Rect, response: &egui::Response)
         ));
     }
     true
+}
+
+/// The axes, the base grid and the tick labels.
+///
+/// A surface with no scale is a picture: a reader cannot tell a hill from a
+/// mountain. The grid is drawn on the base plane at the surface's own minimum
+/// `z`, and the ticks are the plot's window, so the numbers on screen are the
+/// numbers in the document.
+fn draw_chrome(
+    app: &CasApp,
+    painter: &egui::Painter,
+    camera: &canlab_scene::Camera,
+    mesh: &canlab_scene::surface::Mesh,
+    rect: Rect,
+) {
+    let to_screen = |point: canlab_scene::Vec3| -> Option<egui::Pos2> {
+        let projected = camera.project(point)?;
+        let (x, y) = canlab_scene::Camera::to_pixels(
+            projected,
+            f64::from(rect.width()),
+            f64::from(rect.height()),
+        );
+        Some(rect.min + egui::vec2(x as f32, y as f32))
+    };
+    let base = mesh
+        .vertices
+        .iter()
+        .map(|vertex| vertex.position.z)
+        .fold(f64::INFINITY, f64::min);
+    let base = if base.is_finite() { base } else { 0.0 };
+    let weak = crate::theme::weak();
+    let grid = egui::Stroke::new(0.6, weak.gamma_multiply(0.5));
+    let axis = egui::Stroke::new(1.2, weak);
+
+    // Five divisions each way, at the window's own coordinates.
+    let steps = 4;
+    for index in 0..=steps {
+        let t = f64::from(index) / f64::from(steps);
+        let x = app.x_min + (app.x_max - app.x_min) * t;
+        let y = app.x_min + (app.x_max - app.x_min) * t;
+        // A line along `y` at this `x`, and one along `x` at this `y`.
+        if let (Some(a), Some(b)) = (
+            to_screen(canlab_scene::Vec3::new(x, app.x_min, base)),
+            to_screen(canlab_scene::Vec3::new(x, app.x_max, base)),
+        ) {
+            painter.line_segment([a, b], grid);
+        }
+        if let (Some(a), Some(b)) = (
+            to_screen(canlab_scene::Vec3::new(app.x_min, y, base)),
+            to_screen(canlab_scene::Vec3::new(app.x_max, y, base)),
+        ) {
+            painter.line_segment([a, b], grid);
+        }
+        // The tick label, at the axis end.
+        if let Some(at) = to_screen(canlab_scene::Vec3::new(x, app.x_min, base)) {
+            painter.text(
+                at + egui::vec2(0.0, 10.0),
+                egui::Align2::CENTER_TOP,
+                format!("{x:.1}"),
+                egui::FontId::proportional(9.0),
+                weak,
+            );
+        }
+    }
+
+    // The three axes, from the base plane's corner.
+    let origin = canlab_scene::Vec3::new(app.x_min, app.x_min, base);
+    let span = app.x_max - app.x_min;
+    for (end, label) in [
+        (canlab_scene::Vec3::new(app.x_max, app.x_min, base), "x"),
+        (canlab_scene::Vec3::new(app.x_min, app.x_max, base), "y"),
+        (canlab_scene::Vec3::new(app.x_min, app.x_min, base + span), "z"),
+    ] {
+        if let (Some(a), Some(b)) = (to_screen(origin), to_screen(end)) {
+            painter.line_segment([a, b], axis);
+            painter.text(
+                b + egui::vec2(6.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                label,
+                egui::FontId::proportional(11.0),
+                weak,
+            );
+        }
+    }
 }
 
 pub fn plot(app: &mut CasApp, ui: &mut Ui) {
@@ -2484,6 +2571,46 @@ mod surface_tests {
         assert!(
             solid > flat + 50,
             "the 3D mode painted {solid} shapes and the 2D mode {flat}"
+        );
+    }
+
+    /// Every text run the frame painted.
+    fn painted_text(app: &mut CasApp) -> Vec<String> {
+        let ctx = egui::Context::default();
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(400.0, 400.0),
+        ));
+        let mut output = ctx.run_ui(raw, |ui| plot(app, ui));
+        output.textures_delta.clear();
+        output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_3d_mode_labels_its_axes_and_ticks() {
+        // A surface with no scale is a picture: the reader cannot tell a hill
+        // from a mountain. The chrome is the difference, so it is asserted.
+        let mut app = app_with("0.2*(x^2 + y^2)");
+        app.view_3d = true;
+        let text = painted_text(&mut app);
+        for axis in ["x", "y", "z"] {
+            assert!(
+                text.iter().any(|run| run == axis),
+                "the `{axis}` axis is not labelled: {text:?}"
+            );
+        }
+        // And the ticks are the window's own numbers.
+        assert!(
+            text.iter().any(|run| run.starts_with("-2.0") || run.starts_with("2.0")),
+            "no tick label matches the window: {text:?}"
         );
     }
 
