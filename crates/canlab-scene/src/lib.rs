@@ -35,6 +35,7 @@
 
 pub mod implicit;
 pub mod surface;
+pub mod svg;
 
 use std::f64::consts::PI;
 

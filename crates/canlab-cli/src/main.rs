@@ -87,6 +87,7 @@ fn main() -> ExitCode {
         "tex" => tex_command(&args[1..]),
         "plot" => plot_command(&args[1..]),
         "sign" => sign_command(&args[1..]),
+        "surface" => surface_command(&args[1..]),
         "int" | "integrate" => integrate_command(&args[1..]),
         "solve-all" => solve_all_command(&args[1..]),
         "compile" => compile_command(&args[1..]),
@@ -216,6 +217,100 @@ fn plot_command(args: &[String]) -> Result<(), String> {
 /// `decreasing on (0, 2)`, …) and the same pieces are shaded in the SVG, so the
 /// artefact and the picture cannot disagree: both come from one call to
 /// [`canlab_parse::calculus::sign_table`].
+/// `canlab surface <f(x,y)> [-o out.svg] [--xmin a --xmax b] [--cells n]
+/// [--azimuth a --elevation e]`
+///
+/// Writes the surface as an SVG. This is not W8.4's viewport — that is planned on
+/// Bevy, which does not fit on this machine — it is the smallest thing that makes
+/// a mesh visible, using the same camera, projection and depth sort the viewport
+/// will.
+fn surface_command(args: &[String]) -> Result<(), String> {
+    let source = args.first().ok_or("surface needs a LaTeX expression in x and y")?;
+    let expr = parse_or_err(source)?;
+    let mut out = PathBuf::from("surface.svg");
+    let mut x_min = -2.0_f64;
+    let mut x_max = 2.0_f64;
+    let mut cells = 24usize;
+    let mut azimuth = 0.6_f64;
+    let mut elevation = 0.5_f64;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-o" | "--out" => {
+                i += 1;
+                out = PathBuf::from(args.get(i).ok_or("--out needs a path")?);
+            }
+            "--xmin" => {
+                i += 1;
+                x_min = parse_float(args.get(i), "--xmin")?;
+            }
+            "--xmax" => {
+                i += 1;
+                x_max = parse_float(args.get(i), "--xmax")?;
+            }
+            "--cells" => {
+                i += 1;
+                cells = args
+                    .get(i)
+                    .ok_or("--cells needs a number")?
+                    .parse()
+                    .map_err(|_| String::from("--cells needs a whole number"))?;
+            }
+            "--azimuth" => {
+                i += 1;
+                azimuth = parse_float(args.get(i), "--azimuth")?;
+            }
+            "--elevation" => {
+                i += 1;
+                elevation = parse_float(args.get(i), "--elevation")?;
+            }
+            other => return Err(format!("unknown surface option `{other}`")),
+        }
+        i += 1;
+    }
+    if !(x_min < x_max) {
+        return Err("--xmin must be less than --xmax".into());
+    }
+    if cells == 0 || cells > 400 {
+        return Err("--cells must be between 1 and 400".into());
+    }
+    let x = canlab_core::SymbolId::intern("x");
+    let y = canlab_core::SymbolId::intern("y");
+    let mut vars = Vec::new();
+    free_symbols(&expr, &mut vars);
+    for var in &vars {
+        if *var != x && *var != y {
+            return Err(format!(
+                "`{}` is not a variable of a surface; it is `z = f(x, y)`",
+                var.as_str()
+            ));
+        }
+    }
+    let options = canlab_scene::surface::SurfaceOptions {
+        x_range: (x_min, x_max),
+        y_range: (x_min, x_max),
+        x_cells: cells,
+        y_cells: cells,
+        pixel_error: 0.0,
+        max_split: 0,
+    };
+    let mesh = canlab_scene::surface::mesh_surface(&expr, &options, &canlab_scene::Camera::default())
+        .map_err(|error| error.message())?;
+    if mesh.triangle_count() == 0 {
+        return Err("the surface has no triangles: every corner was not a number".into());
+    }
+    let camera = canlab_scene::svg::framing_camera(&mesh, azimuth, elevation, 4.0 / 3.0);
+    let svg = canlab_scene::svg::mesh_svg(&mesh, &camera, &canlab_scene::svg::SvgOptions::default());
+    std::fs::write(&out, svg).map_err(|error| format!("could not write {}: {error}", out.display()))?;
+    println!(
+        "wrote {} ({} triangle(s), {} vertices)",
+        out.display(),
+        mesh.triangle_count(),
+        mesh.vertex_count()
+    );
+    Ok(())
+}
+
 fn sign_command(args: &[String]) -> Result<(), String> {
     let source = args.first().ok_or("sign needs a LaTeX expression")?;
     let expr = parse_or_err(source)?;

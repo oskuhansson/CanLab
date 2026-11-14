@@ -2245,6 +2245,7 @@ dependencies = [
  "canlab-corpus",
  "canlab-parse",
  "canlab-plot",
+ "canlab-scene",
  "canlab-solver",
  "canlab-tex",
 ]

@@ -14,5 +14,6 @@ canlab-core = { path = "../canlab-core" }
 canlab-parse = { path = "../canlab-parse" }
 canlab-tex = { path = "../canlab-tex" }
 canlab-plot = { path = "../canlab-plot" }
+canlab-scene = { path = "../canlab-scene" }
 canlab-solver = { path = "../canlab-solver" }
 canlab-corpus = { path = "../canlab-corpus" }
