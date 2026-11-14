@@ -1,0 +1,19 @@
+[package]
+name = "canlab-ode"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Initial-value problems: Euler, RK4, Dormand-Prince 5(4), symplectic integrators, and events"
+
+[dependencies]
+canlab-core = { path = "../canlab-core" }
+# The front end reads `y' = -k*y` and `y(0) = 1` from the same LaTeX grammar the
+# rest of the workspace uses, and prints a refusal in the same notation.
+canlab-parse = { path = "../canlab-parse" }
+canlab-tex = { path = "../canlab-tex" }
+# `free_symbols` is how the front end checks that a right-hand side mentions
+# only the system's own unknowns.
+canlab-poly = { path = "../canlab-poly" }
+# A trajectory is drawn by the plot crate: `Curve` is its type, and a second
+# polyline type here would be a second renderer.
+canlab-plot = { path = "../canlab-plot" }

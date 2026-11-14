@@ -1,0 +1,12 @@
+[package]
+name = "canlab-scene"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "A pure camera, projection and mesh crate for the 3D view: no GPU, no windowing"
+
+[dependencies]
+# The surface sampler differentiates `f(x, y)` for its normals, and the
+# differentiator is the CAS's own: a second one here would be a second answer to
+# "what is the slope", which is the drift this workspace keeps out.
+canlab-core = { path = "../canlab-core" }
