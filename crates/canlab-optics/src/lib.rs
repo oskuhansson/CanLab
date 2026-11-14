@@ -44,7 +44,7 @@ pub mod timebase;
 pub mod transport;
 pub mod vec3;
 
-pub use block::{Block, Exit, Face};
+pub use block::{Block, Exit, Face, SENSOR_FACES};
 pub use cherenkov::{Cherenkov, medium_index};
 pub use detector::{Event, EventError, SiPM, four_sensors, simulate};
 pub use timebase::{Histogram, TimeBase, TimeBaseError, Waveforms};

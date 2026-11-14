@@ -207,6 +207,33 @@ impl Tropical {
         (twice / 2.0).abs()
     }
 
+    /// The cross-section's centroid in its own plane, millimetres.
+    ///
+    /// The shoelace centroid, `C = (1/(6A)) Σ (pᵢ + pᵢ₊₁)(xᵢ yᵢ₊₁ − xᵢ₊₁ yᵢ)`,
+    /// with the winding's sign carried through rather than taken absolutely:
+    /// the numerator and the area share the sign, so the division removes it.
+    /// A degenerate outline (zero area) has no centroid and answers the origin,
+    /// which is where a caller that asked about a shape with no area deserves to
+    /// be sent.
+    pub fn centroid_mm(&self) -> Point2 {
+        let corners = self.corners_mm();
+        let mut twice_area = 0.0;
+        let mut x_sum = 0.0;
+        let mut y_sum = 0.0;
+        for index in 0..corners.len() {
+            let (x1, y1) = corners[index];
+            let (x2, y2) = corners[(index + 1) % corners.len()];
+            let cross = x1 * y2 - x2 * y1;
+            twice_area += cross;
+            x_sum += (x1 + x2) * cross;
+            y_sum += (y1 + y2) * cross;
+        }
+        if twice_area == 0.0 {
+            return (0.0, 0.0);
+        }
+        (x_sum / (3.0 * twice_area), y_sum / (3.0 * twice_area))
+    }
+
     /// The prism's volume, mm³.
     pub fn volume_mm3(&self) -> f64 {
         self.area_mm2() * self.thickness_mm

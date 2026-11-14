@@ -1,159 +1,171 @@
-# Muon direction from Cherenkov light — overview and first iteration
+# The muon-direction detector
 
-*Status: first iteration proposed, nothing simulated yet. Written 2026-11-14.*
+*Status: the design study is built and its first answer is negative. The timing
+observable cannot give a direction; the position observable can. The numbers
+below are from `cargo run --release -p canlab-muon --bin direction_study`.*
 
-## 1. What is being measured, and why it is hard
+---
 
-A muon crosses an acrylic slab. It emits Cherenkov light along its track at a fixed
-angle to that track. Photons reach SiPMs; the **differences between their arrival
-times** encode the track's direction, because light from a track that leans towards
-one SiPM reaches it earlier.
+## What the detector is
 
-The binding constraint is not timing. It is **photon count**.
+A **tent prism** of high-index plastic, not a slab. The outline is the six-corner
+tent of `canlab_optics::outline` — a wide low peak on two straight walls — extruded
+through a thickness, with four SiPMs on four of its faces.
 
-Numbers, so the design is argued from them and not from intuition:
+The tent is not arbitrary: it is what you can cut and still keep a
+total-internal-reflection cavity with a flat face for the sensor. With a CNC
+available (`mission::Manufacturing`) the outline is any closed 2.5D shape within
+the tool's reach, so the tent is a *choice* the study should sweep rather than a
+manufacturing limit.
 
-| Quantity | Value | Source |
+| Quantity | Value | Where |
 |---|---|---|
-| Muon flux, sea level | ~1 cm⁻² min⁻¹ (~0.017 cm⁻² s⁻¹) | can-sat `MUONDETEKTOR.md` |
-| Acrylic refractive index | 1.49 | standard |
-| Cherenkov angle in acrylic | `acos(1/1.49)` = **47.8°** | derived |
-| Muon threshold energy in acrylic | ~157 MeV (`γ > 1.35`) | derived |
-| Cherenkov yield | ~490·`sin²θc` ≈ **270 photons/cm** in 400–700 nm | derived |
-| SiPM | onsemi **MICROFC-10035**, **1 mm²** | `stumped-potential/komponenter` |
-| Readout | OPA858 TIA → MAX40026 comparator → pulse timer, **4 channels, ~10 ps** | same |
-| Can | **115 × 66 mm** | can-sat `KOPPLING.md` |
+| Can | 115 mm tall, Ø66 mm | `CANSAT-GRUND.md` §3 |
+| Can cross-section | 3421 mm², 34.2 cm² | `π·33²` |
+| Usable after 1 mm of allowance | 3217 mm², 32.2 cm² | `Mission::can` |
+| Design block | 20 mm scale, 10 mm deep | `Candidate::design` |
+| Its silhouette | 40 mm × 90 mm × 10 mm | `tent_extent_mm` |
+| Its volume and mass | 30 cm³, 35.7 g of PMMA | `tent_mass_g` |
+| Largest tent that fits at 10 mm deep | 25.33 mm of scale | `Can::largest_scale_mm` |
 
-A 20 mm track makes ~540 photons. A 1 mm² SiPM at 25 mm from the track sees a solid
-angle of `1/(4π·25²)` ≈ `1.3·10⁻⁴` sr, so it collects **~0.07 photons per muon**.
+**The geometry sweep's best row does not fit.** `muon_study` varies the scale from
+15 to 30 mm and reports that 30 mm gives the most light; a 30 mm tent is
+`4.5 × 30 = 135 mm` tall in a 115 mm can. `Can::admits` refuses it by name, and
+`Mission::audit` reports it as a violation.
 
-That is the whole problem in one line: **an unguided 1 mm² SiPM is expected to see
-nothing.** Every design decision below follows from it.
+---
 
-## 2. The three ways to get photons, and their costs
+## The timing answer: no
 
-1. **Guide the light.** Total internal reflection in the acrylic keeps photons inside
-   until they reach a face; a SiPM on that face collects from a much larger solid
-   angle. This is nearly free (it is the material doing it) and it is the first thing
-   to get right.
-2. **More SiPM area.** Cost and jitter both grow with area, and the brief says jitter
-   is the thing to keep small. Four 1 mm² SiPMs is 4 mm², which is still 0.16 % of a
-   50 × 50 mm face.
-3. **More path length.** A thicker slab makes more photons per muon, at the cost of
-   mass and of blurring the arrival times (a longer track has a longer emission
-   window). The can allows ~20 mm of acrylic without difficulty.
+The premise is that a photon's arrival time at sensor `i` is
 
-The first iteration below uses all three, modestly, and the simulation is what will
-say which one to spend on.
-
-## 3. Direction from four timestamps — this is better than it looks
-
-The brief says two directional axes are hard with four channels. They are not, and
-this is worth stating before the design is fixed, because it changes what to
-optimise.
-
-A track's direction `d` (unit) and a reference time `t₀` predict each SiPM's arrival
-time as
-
-```
-t_i = t₀ + (r_i · d) / v_light
+```text
+t_i = t₀ + (r_i · d) / v
 ```
 
-where `r_i` is the SiPM's position relative to the track's closest approach. That is
-**three unknowns** (`t₀`, and `d` with `|d| = 1`), and four SiPMs give **four
-equations**. The system is over-determined by one, so a least-squares fit returns a
-full 3D direction — both axes — *provided the four SiPMs are not coplanar*. Four
-SiPMs in one plane determine the direction only up to a mirror reflection.
+Three unknowns against four timestamps, so a least-squares fit recovers the
+heading. That arithmetic is correct, and `canlab_muon::timing::reconstruct`
+implements it and returns the exact heading from exact timestamps.
 
-So the geometry requirement is not "more channels", it is **non-coplanar SiPM
-placement**. Two on the top face and two on the bottom, or four on the side faces at
-two different depths, is enough.
+**The scale is what fails.** Light moves 0.2 mm/ps in PMMA, so the *whole
+detector's* spread of `(r_i · d)/v` is **0.22 ps**. The readout's jitter is
+**47.4 ps**. The signal is 212 times smaller than the noise.
 
-What four channels cannot do is reject a bad fit. With one spare equation the
-residual is a weak check; a fifth SiPM would make it a real one. That is a trade to
-measure, not to assume.
+| | ps |
+|---|---|
+| Timing signal across the whole detector | **0.22** |
+| SiPM SPTR (100 ps FWHM → σ) | 42.5 |
+| MAX35101 timer accuracy | 20.0 |
+| OPA858 noise over the edge | 6.0 |
+| MAX40026 jitter | 2.0 |
+| **Total, quadrature** | **47.4** |
 
-## 4. First iteration — the thing to simulate
+The Cramér–Rao bound on the heading is `σ·v/L`, and it comes out at **81 000°**.
+An uncertainty larger than the sphere is a refusal, not a resolution. Making the
+electronics perfect would not help: at a 1 ps jitter the bound is still hopeless,
+because the missing quantity is the **lever arm**, not the clock.
 
-**Geometry.** A rectangular acrylic slab, `50 × 50 × 20 mm`, with the muon entering
-the top face. Photons are collected at four SiPMs placed for non-coplanarity:
+To reach 10° you would need 6 femtoseconds of total jitter. That is not a
+component anyone sells.
 
-| SiPM | Face | Position | Why |
-|---|---|---|---|
-| S0 | top | (+20, 0) mm | early for a track leaning +x |
-| S1 | top | (−20, 0) mm | the opposite lean |
-| S2 | bottom | (0, +20) mm | early for a track leaning +y |
-| S3 | bottom | (0, −20) mm | the opposite lean |
+---
 
-Two on top and two on the bottom is what makes the four positions non-coplanar, and
-it is the minimum that can resolve a 3D direction.
+## The position answer: yes
 
-**Materials.** Acrylic `n = 1.49`, attenuation length 1–3 m (a parameter to vary —
-the datasheet value is optimistic), surface polish perfect for the first iteration
-and roughened later, because a real cut face scatters.
+A sensor that reports **where** a photon crossed its face — a pixel, a fibre, a
+strip — gives a direction from two crossings. The uncertainty is `√2·σ_h/L`:
 
-**SiPM.** 1 mm², photon detection efficiency 25–40 % over 400–700 nm (a parameter to
-vary: the MICROFC-10035 curve peaks around 420 nm at ~40 %), dark count rate
-~100 kHz/mm² at room temperature, and **single-photon time resolution ~100–300 ps**
-— this is the number the brief calls jitter, and it is the one that limits angular
-resolution, not the 10 ps TDC.
+| Pixel | Separation | Bound |
+|---|---|---|
+| 0.1 mm | 54.1 mm | 0.15° |
+| 1.0 mm | 54.1 mm | **1.5°** |
+| 2.0 mm | 54.1 mm | 3.0° |
 
-**Readout.** Four channels, each `t_i` timestamped at 10 ps. The simulation should
-model the timestamp as `t_true + jitter + TDC quantisation`, with jitter drawn from a
-Gaussian whose width is a varied parameter.
+No timing, no picoseconds, no TDC. The block is still needed — it is what makes
+the light — but the observable is the hit position.
 
-**What the simulation must produce per muon:** how many photons reached each SiPM,
-and each SiPM's first-photon arrival time (or "none", which is the common case and
-must be modelled as such — a channel with no photon is not a channel with a late
-photon).
+---
 
-## 5. The NN, and the concern about simulated-to-real
+## The parts, and the details that decide whether any of it works
 
-The brief's concern is right and it is the main risk. A network trained on one
-geometry with one set of material properties learns *that* detector, not the
-physics, and a real slab will differ in index, attenuation, polish, SiPM gain and
-jitter.
+From `can-sat`'s `komponenter` list, with datasheet numbers in
+`canlab_muon::components`:
 
-**My recommendation is the brief's own first instinct: vary the parameters per
-sample (domain randomisation), and do it more aggressively than feels comfortable.**
-The reasoning, and why the alternatives are weaker here:
+| Part | Number | Consequence |
+|---|---|---|
+| onsemi MICROFC-10035 | PDE 31 % at Vbr+2.5 V, 41 % at +5 V; 30 kHz dark count; 7 % crosstalk; **SPTR not specified** | the dominant jitter term is an assumption |
+| TI OPA858 | 5.5 GHz, 2.5 nV/√Hz | 6 ps; but its bandwidth collapses with the anode's 100 pF |
+| ADI MAX40026 | 280 ps delay, **2 ps jitter**, 25 ps overdrive dispersion | negligible random, non-negligible walk |
+| ADI MAX35101 | **20 ps accuracy**, 3.8 ps resolution, 2 channels | see below |
 
-- **Dropout** regularises the *network*, but the distribution shift here is in the
-  *input*, not in the weights. A network that has never seen `n = 1.47` will not
-  handle it because some units were dropped during training.
-- **A smaller model** reduces overfitting to the training distribution but does not
-  widen it. It helps, and it is cheap, so do both — but it is not the remedy.
-- **Domain randomisation** is the only one of the three that changes the data the
-  network sees, which is the thing that is wrong.
+**The MAX35101 is the wrong part for four independent SiPMs.** Its START is
+generated internally by its own pulse launcher — there is no external START pin —
+so it measures *launch-to-echo*, which is an ultrasonic time-of-flight, not
+"when did this SiPM fire". Its two STOP inputs are *analog* (10–700 mVpp) into a
+comparator specified for 1 MHz transducers. And its 20 ps is a **differential**
+accuracy: the datasheet says absolute measurements "include circuit delays and
+cannot be considered accurate".
 
-The honest caveat: randomisation cannot cover a parameter that was never varied in
-the simulation, and it cannot cover a *structural* difference (a real SiPM's
-afterpulsing, a scratched face). So the simulation should randomise the parameters we
-know we cannot control, and the first iteration should be built to be *calibratable*
-— the material properties should be measurable on the real slab with a LED and a
-single SiPM, so the simulation's priors can be narrowed before the flight.
+**The fast output must be used, not the anode.** The MICROFC-10035's
+anode–cathode capacitance is 100 pF and its fast-terminal capacitance is 1 pF. An
+OPA858 TIA behind 100 pF at 10 kΩ has a 30 MHz bandwidth — a 33 ns rise time,
+which would destroy any timing measurement before the comparator saw it. The fast
+output (1 pF, 0.3 ns rise, 0.6 ns FWHM) is the timing path; the anode is the
+energy path.
 
-## 6. What is deliberately not decided yet
+**Five things the transport does not model**, each of which moves a number:
 
-- Whether the readout is 4 SiPMs on 4 channels, or 8 SiPMs paired onto 4 channels.
-  Pairing halves the channel count and destroys the per-SiPM timing, so it is only
-  worth it if photon count is the binding constraint — which the simulation will say.
-- Whether the slab is one piece or a stack of thin layers. A stack gives depth
-  information and costs optical interfaces.
-- Whether the Cherenkov medium is acrylic at all, versus a higher-index glass with a
-  larger `sin²θc` and a shorter attenuation length.
+1. PDE is a curve, and the model uses one mid-band 35 %.
+2. SPTR is not specified by the vendor; the model's 100 ps is a placeholder.
+3. Crosstalk is 7 %, so one photon can produce two timestamps.
+4. Dark count is 30–96 kHz, so a 100 ns window is not always empty.
+5. Vbr drifts 21.5 mV/°C and gain −0.8 %/°C, so a can descending through 10 °C
+   changes its PDE and its SPTR *during the flight*.
 
-## 7. Questions
+The fifth is the one a mission has to answer: a bias-tracking loop, or a
+temperature model, or an acceptance that the count drifts.
 
-1. **Is the 10 ps TDC a fixed part?** If it is the analog pulse timer in
-   `komponenter`, its jitter may dominate the SiPM's, and the whole timing budget
-   changes. A part number would let the simulation model it instead of guessing.
-2. **How many muons per flight are acceptable?** The flux above gives ~0.8 muons/s
-   through a 50 cm² face, so a 120 s descent is ~100 muons *crossing* — but with
-   photon starvation the number that actually trigger four SiPMs will be far smaller,
-   and that number is the one that decides whether the mission is worth flying.
-3. **Is the detector's orientation fixed relative to the can?** If the can tumbles,
-   the direction is in the can's frame, not the sky's, and the NN's target must be
-   defined accordingly.
-4. **Is a 5th SiPM affordable?** It would turn the fit's residual from a weak check
-   into a real one, and the brief's 200–300 € has room if the TDC is 50 €.
+**And one the CNC adds**: a machined acrylic face has ~1 µm of roughness, and a
+photon trapped by total internal reflection meets that face at every bounce.
+Fresnel reflection assumes a mirror. Until a scattering model exists, a machined
+block's light yield is an **upper** bound — which is why
+`Manufacturing::polish_available` is a parameter and not a footnote.
+
+---
+
+## What the crate does
+
+`canlab-muon`, separate from the CAS, which is used only to draw results.
+
+| Module | Question |
+|---|---|
+| `can` | does the block fit a Ø66 × 115 mm can? |
+| `mission` | the parameters and requirements of every simulation, and an audit |
+| `components` | the four parts' datasheet numbers and the jitter budget |
+| `timing` | least-squares heading from timestamps; the timing signal |
+| `bound` | Cramér–Rao bound on the heading; the position-based alternative |
+| `solve` | a 3×3 solve with a unit-free singularity test |
+
+The physics is `canlab-optics` and is not repeated: the tent, the Cherenkov
+source, Fresnel, the photon transport and one event's four timestamps.
+
+**No network is trained.** A network is a way to approach a bound; the bound for
+timing is 81 000°, so a network trained on four timestamps would learn to output
+the mean direction and its loss curve would be the loss curve of that mean. The
+network belongs on the observable whose bound is small.
+
+---
+
+## Open questions
+
+1. **Is the direction mission worth flying with a position-sensitive detector?**
+   A pixelated or fibre readout is a different build, and the answer decides
+   whether the detector is a direction measurement or a counter.
+2. **What is the MICROFC-10035's SPTR?** It is the largest term in the budget and
+   the only one with no datasheet figure. It needs a measurement, not a citation.
+3. **Is the MAX35101 fixed, or can the timer change?** As specified it cannot
+   timestamp four independent pulses.
+4. **What is the block's material?** PMMA (n = 1.49) collects more light than a
+   high-index plastic (n = 1.84) in this geometry — 9.7 against 5.9 detected
+   photons — because a higher index traps more of what it makes. The sweep
+   contradicts the intuition that more Cherenkov light is better.

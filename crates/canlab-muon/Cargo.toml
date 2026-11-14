@@ -3,6 +3,11 @@ name = "canlab-muon"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Muon direction from Cherenkov light: the detector simulation, kept apart from the CAS"
+description = "Muon direction from Cherenkov light: the detector study, kept apart from the CAS"
 
 [dependencies]
+# The physics — the block, the Cherenkov source, the photon transport, one
+# event — lives in `canlab-optics` and is not repeated here. This crate asks the
+# design questions of it: what fits in the can, what four timestamps can
+# determine, and what a different observable would determine instead.
+canlab-optics = { path = "../canlab-optics" }

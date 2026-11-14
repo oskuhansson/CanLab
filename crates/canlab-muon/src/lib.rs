@@ -1,10 +1,50 @@
-//! The muon-direction detector simulation.
+//! The muon-direction detector study, kept apart from the CAS.
 //!
-//! A separate crate on purpose: this is a physics simulation with its own
-//! parameters and its own accuracy budget, and the CAS is used only to draw its
-//! results. See `DESIGN.md` for the overview and the first iteration.
+//! The physics is [`canlab_optics`]: the tent prism, the Cherenkov source, the
+//! photon transport and one event's four timestamps. This crate asks the *design*
+//! questions of it, and it is separate because those questions have their own
+//! parameters and their own answers, none of which the CAS needs.
 //!
-//! Nothing is implemented yet. The design document is the deliverable of the
-//! first round, and the simulation follows once the questions in it are answered
-//! — the first of which is whether the timing budget is the TDC's or the SiPM's,
-//! because that decides what the simulation has to be accurate about.
+//! # The three questions, in the order they have to be answered
+//!
+//! 1. **Does it fit?** [`can`] — the tent is `4.5·scale` tall and the can is
+//!    115 mm, so the geometry sweep's best row is 135 mm of block in a 115 mm
+//!    can. The envelope is a refusal, and it is the first question because a
+//!    detector that does not fit has no resolution to compute.
+//! 2. **Can four timestamps determine a direction?** [`timing`] and [`bound`] —
+//!    the fit exists and is correct, and the bound says the *scale* is wrong:
+//!    light crosses the whole block in 0.27 ps while the SiPM jitters by 100 ps.
+//!    The answer is not a poor resolution, it is no resolution.
+//! 3. **What observable would?** [`bound::position_bound`] — a sensor that
+//!    reports *where* a photon hit, rather than when, gives 1.5° for a millimetre
+//!    of pixel. That is the design the numbers point at, and it is a different
+//!    detector, not a better simulation of this one.
+//!
+//! # What this crate deliberately does not do
+//!
+//! It does not train a network. A network is a way to approach a bound, and the
+//! bound for the timing observable is tens of thousands of degrees: a network
+//! trained on four timestamps would learn to output the mean direction, and its
+//! loss curve would be the loss curve of that mean. Training it would be a
+//! demonstration that the bound is right, at the cost of the training. The
+//! network is worth building for the observable whose bound is small, and that
+//! observable is the position, not the time.
+
+#![warn(missing_docs)]
+
+pub mod bound;
+pub mod can;
+pub mod components;
+pub mod mission;
+pub mod timing;
+
+mod solve;
+
+pub use bound::{position_bound, timing_bound, Bound};
+pub use components::{budget, dominant, total_jitter_ps, Contribution, COMPARATOR_WALK_PS, UNMODELLED};
+pub use mission::{Candidate, Manufacturing, Mission, Violation};
+pub use can::{tent_extent_mm, tent_mass_g, tent_volume_mm3, Can, CanError};
+pub use timing::{
+    reconstruct, speed_mm_per_ps, tangent_basis, timing_signal_ps, FitError, Observation,
+    Reconstruction, C_MM_PER_PS,
+};

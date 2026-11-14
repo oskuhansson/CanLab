@@ -51,7 +51,7 @@
 //! model does not have. The documentation says so rather than letting a result
 //! imply more than it shows.
 
-use crate::block::Face;
+use crate::block::{Face, SENSOR_FACES};
 use crate::source::{self, Photon};
 use crate::fresnel::Polarisation;
 use crate::transport::{Fate, Optical, Transport};
@@ -88,16 +88,16 @@ impl SiPM {
     }
 }
 
-/// The four sensors of a block: one on each large face.
+/// The four sensors of a block: one on each face in [`SENSOR_FACES`].
+///
+/// The face list is the block's, not this module's, so the sensors the transport
+/// detects on are the sensors [`Block::sensor_positions`] draws. The first
+/// version kept its own list here and the block kept another; the two disagreed
+/// about two of the four faces, and the disagreement was invisible because no
+/// test compared them.
 pub fn four_sensors(block: &Block) -> [SiPM; 4] {
-    let faces = [Face::Top, Face::Bottom, Face::Side(0), Face::Side(2)];
     let _ = block;
-    [
-        SiPM::typical(faces[0]),
-        SiPM::typical(faces[1]),
-        SiPM::typical(faces[2]),
-        SiPM::typical(faces[3]),
-    ]
+    SENSOR_FACES.map(SiPM::typical)
 }
 
 /// One muon's event, as the sensors saw it.
@@ -443,6 +443,12 @@ mod tests {
         assert_eq!(faces.iter().filter(|face| **face == Face::Bottom).count(), 1);
         assert_eq!(faces.iter().filter(|face| matches!(face, Face::Side(_))).count(), 2);
         assert_eq!(block.sensor_positions().len(), 4);
+        // The detector's faces and the block's drawn positions are one list.
+        // They were two, and they named different faces for two of the four.
+        assert_eq!(faces, SENSOR_FACES.to_vec());
+        for (sensor, position) in sensors.iter().zip(block.sensor_positions()) {
+            assert_eq!(position, block.face_centre(sensor.face));
+        }
     }
 
     #[test]

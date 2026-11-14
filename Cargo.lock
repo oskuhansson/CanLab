@@ -2314,6 +2314,9 @@ dependencies = [
 [[package]]
 name = "canlab-muon"
 version = "0.1.0"
+dependencies = [
+ "canlab-optics",
+]
 
 [[package]]
 name = "canlab-num"

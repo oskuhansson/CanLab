@@ -50,6 +50,25 @@ pub struct Block {
     pub outline: Tropical,
 }
 
+/// The four faces the SiPMs sit on: the two `±z` ends and two side walls.
+///
+/// One list, because two lists is one more than a detector has. The detector
+/// model reads this to decide which face a photon is detected on, and
+/// [`Block::sensor_positions`] reads it to say where the sensors are drawn, so a
+/// change here moves both and they cannot drift apart.
+///
+/// The four are **not coplanar**, and that is the whole point: a timestamp is
+/// `t_i = t₀ + (r_i · d)/v`, so four sensors whose positions span a plane leave
+/// the heading's component normal to that plane unconstrained. Two on the ends
+/// and two on the walls span three dimensions; four on the ends do not.
+///
+/// `Side(0)` is a roof slope and `Side(2)` a wall — an asymmetric pair, because
+/// the tent is not symmetric about the axis either. The symmetric alternatives
+/// are the two walls (`Side(2)`, `Side(4)`) or the two roof slopes (`Side(0)`,
+/// `Side(1)`); which is better is a question for the direction study, not a
+/// constant to guess here.
+pub const SENSOR_FACES: [Face; 4] = [Face::Top, Face::Bottom, Face::Side(0), Face::Side(2)];
+
 /// Where a ray leaves the block.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Exit {
@@ -274,23 +293,51 @@ impl Block {
         self.side_planes().get(index).map(|(normal, _)| *normal)
     }
 
-    /// The SiPM positions: the centres of the two large faces.
+    /// The centre of a face, in the block's own frame.
     ///
-    /// The four detectors are on the block's two `±z` faces, one near each
-    /// end of the tent so that a photon's arrival is not the same for all four.
+    /// For the two `±z` ends it is the outline's centroid; for a side face it is
+    /// the midpoint of the edge that face is the extrusion of, taken at `z = 0`.
+    /// Both are derived from [`crate::outline::CORNERS`] rather than written as
+    /// numbers, so moving a corner moves the sensor with it.
+    pub fn face_centre(&self, face: Face) -> Vec3 {
+        let half = self.outline.thickness_mm / 2.0;
+        match face {
+            Face::Top => {
+                let (x, y) = self.outline.centroid_mm();
+                Vec3::new(x, y, half)
+            }
+            Face::Bottom => {
+                let (x, y) = self.outline.centroid_mm();
+                Vec3::new(x, y, -half)
+            }
+            Face::Side(index) => {
+                let corners = self.outline.corners_mm();
+                let (ax, ay) = corners[index % corners.len()];
+                let (bx, by) = corners[(index + 1) % corners.len()];
+                Vec3::new(0.5 * (ax + bx), 0.5 * (ay + by), 0.0)
+            }
+        }
+    }
+
+    /// The SiPM positions: the centres of the four faces in [`SENSOR_FACES`].
+    ///
     /// These are positions for the *visualisation and the counting*, not
     /// geometry the ray tracer needs: a photon reaching a face is an event
     /// whether or not a sensor covers that square millimetre, and the efficiency
     /// of the coverage is a property of the sensor model.
+    ///
+    /// # Why this is the face list and not four points on the ends
+    ///
+    /// The first version put all four sensors on the two `±z` ends, at
+    /// `y = −0.9·scale` on both. All four then had the *same* `y`, so all four
+    /// were coplanar — and four coplanar timestamps cannot determine a
+    /// direction: the component of the muon's heading normal to that plane
+    /// cancels out of every `r_i · d`. The layout looked like a detector and was
+    /// a plane. The positions are now the centres of the faces [`SENSOR_FACES`]
+    /// names, which is the same list the simulation detects on, so the picture
+    /// and the counting cannot describe two different detectors.
     pub fn sensor_positions(&self) -> [Vec3; 4] {
-        let half = self.outline.thickness_mm / 2.0;
-        let reach = self.outline.scale_mm;
-        [
-            Vec3::new(-reach * 0.35, -reach * 0.9, half),
-            Vec3::new(reach * 0.35, -reach * 0.9, -half),
-            Vec3::new(-reach * 0.35, -reach * 0.9, -half),
-            Vec3::new(reach * 0.35, -reach * 0.9, half),
-        ]
+        SENSOR_FACES.map(|face| self.face_centre(face))
     }
 }
 
@@ -408,15 +455,52 @@ mod tests {
     }
 
     #[test]
-    fn the_four_sensors_are_on_the_two_large_faces() {
-        let sensors = block().sensor_positions();
+    fn the_four_sensors_are_the_centres_of_the_four_faces_they_read() {
+        let block = block();
+        let sensors = block.sensor_positions();
         assert_eq!(sensors.len(), 4);
-        assert_eq!(sensors.iter().filter(|s| s.z > 0.0).count(), 2);
-        assert_eq!(sensors.iter().filter(|s| s.z < 0.0).count(), 2);
-        // All inside the outline's footprint, so the visualisation and the
-        // counting agree about which face a photon reaching them crossed.
-        for sensor in sensors {
-            assert!(block().outline.signed_distance_2d(sensor.x, sensor.y) < 0.0, "{sensor:?}");
+        // Each position is its own face's centre, in the same order as the
+        // faces the detector model reads. This is the assertion that the
+        // picture and the counting describe one detector.
+        for (sensor, face) in sensors.iter().zip(SENSOR_FACES) {
+            assert_eq!(*sensor, block.face_centre(face), "{face:?}");
         }
+        // Two on the ends and two on the walls, so the four are not coplanar.
+        assert_eq!(SENSOR_FACES.iter().filter(|f| **f == Face::Top).count(), 1);
+        assert_eq!(SENSOR_FACES.iter().filter(|f| **f == Face::Bottom).count(), 1);
+        assert_eq!(SENSOR_FACES.iter().filter(|f| matches!(f, Face::Side(_))).count(), 2);
+        // The coplanarity test, by the volume of the tetrahedron the four span:
+        // zero volume is four sensors on a plane, and four timestamps on a plane
+        // cannot give a direction. The old layout had all four at one `y`.
+        let [a, b, c, d] = sensors;
+        let volume = (b - a).dot((c - a).cross(d - a)).abs() / 6.0;
+        assert!(volume > 1.0, "the four sensors span {volume} mm³, so they are coplanar");
+        // And every one of them is on the surface it claims to be on.
+        for (sensor, face) in sensors.iter().zip(SENSOR_FACES) {
+            assert_eq!(block.face_of(*sensor, 1e-9), Some(face), "{face:?} {sensor:?}");
+        }
+    }
+
+    #[test]
+    fn the_face_centre_of_a_side_is_the_midpoint_of_its_edge() {
+        // A side face is the extrusion of one edge, so its centre is that edge's
+        // midpoint at z = 0. Pinned against the corner list rather than against
+        // the implementation's own arithmetic.
+        let block = block();
+        let corners = block.outline.corners_mm();
+        for index in 0..6 {
+            let (ax, ay) = corners[index];
+            let (bx, by) = corners[(index + 1) % corners.len()];
+            let centre = block.face_centre(Face::Side(index));
+            assert!((centre.x - 0.5 * (ax + bx)).abs() < 1e-12);
+            assert!((centre.y - 0.5 * (ay + by)).abs() < 1e-12);
+            assert_eq!(centre.z, 0.0);
+        }
+        // The `±z` ends are the outline's centroid, not the origin: the tent's
+        // mass is above the axis, so a centroid at (0, 0) would be a bug.
+        let (cx, cy) = block.outline.centroid_mm();
+        assert!(cy > 0.0, "the tent's centroid is above the axis: {cy}");
+        assert_eq!(block.face_centre(Face::Top), Vec3::new(cx, cy, 5.0));
+        assert_eq!(block.face_centre(Face::Bottom), Vec3::new(cx, cy, -5.0));
     }
 }
