@@ -51,8 +51,23 @@ impl Default for SvgOptions {
     }
 }
 
-/// A mesh as an SVG document.
-pub fn mesh_svg(mesh: &Mesh, camera: &Camera, options: &SvgOptions) -> String {
+/// One triangle ready to draw: its screen corners and its shade.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Drawn {
+    /// The three corners in normalised device coordinates.
+    pub corners: [crate::ScreenPoint; 3],
+    /// The mean shade of its vertices, in `[0, 1]`.
+    pub shade: f64,
+    /// The mean depth, for the painter's algorithm.
+    pub depth: f64,
+}
+
+/// The triangles a picture shows, culled and sorted back to front.
+///
+/// The one place the culling rule lives, so that the SVG writer and the GUI
+/// cannot disagree about which triangles are visible — the same reason the
+/// sampler and the renderer share a `Curve`.
+pub fn visible_triangles(mesh: &Mesh, camera: &Camera) -> Vec<Drawn> {
     let mut triangles = Vec::new();
     for triangle in &mesh.triangles {
         let corners = [
@@ -82,10 +97,19 @@ pub fn mesh_svg(mesh: &Mesh, camera: &Camera, options: &SvgOptions) -> String {
             + mesh.vertices[triangle[1]].shade
             + mesh.vertices[triangle[2]].shade)
             / 3.0;
-        triangles.push((projected, shade));
+        triangles.push(Drawn {
+            corners: projected.corners,
+            shade,
+            depth: projected.depth,
+        });
     }
-    let mut order: Vec<usize> = (0..triangles.len()).collect();
-    order.sort_by(|a, b| triangles[*b].0.depth.total_cmp(&triangles[*a].0.depth));
+    triangles.sort_by(|a, b| b.depth.total_cmp(&a.depth));
+    triangles
+}
+
+/// A mesh as an SVG document.
+pub fn mesh_svg(mesh: &Mesh, camera: &Camera, options: &SvgOptions) -> String {
+    let triangles = visible_triangles(mesh, camera);
 
     let mut svg = String::new();
     svg.push_str(&format!(
@@ -96,9 +120,8 @@ pub fn mesh_svg(mesh: &Mesh, camera: &Camera, options: &SvgOptions) -> String {
         "<rect width=\"{}\" height=\"{}\" fill=\"#ffffff\"/>\n",
         options.width, options.height
     ));
-    for index in order {
-        let (projected, shade) = &triangles[index];
-        let points: Vec<String> = projected
+    for triangle in &triangles {
+        let points: Vec<String> = triangle
             .corners
             .iter()
             .map(|corner| {
@@ -114,7 +137,7 @@ pub fn mesh_svg(mesh: &Mesh, camera: &Camera, options: &SvgOptions) -> String {
         svg.push_str(&format!(
             "<polygon points=\"{}\" fill=\"{}\"{stroke}/>\n",
             points.join(" "),
-            ramp(*shade, options.low, options.high)
+            ramp(triangle.shade, options.low, options.high)
         ));
     }
     svg.push_str("</svg>\n");
@@ -288,6 +311,33 @@ mod tests {
         let svg = mesh_svg(&mesh, &camera, &SvgOptions::default());
         assert_eq!(svg.matches("<polygon").count(), 0);
         assert!(svg.trim_end().ends_with("</svg>"));
+    }
+
+    #[test]
+    fn the_visible_list_is_culled_and_sorted() {
+        // The one function the SVG writer and the GUI share. Sorted back to
+        // front, so a caller that paints in order gets the painter's algorithm
+        // for free.
+        let mesh = paraboloid();
+        let camera = framing_camera(&mesh, 0.6, 0.5, 4.0 / 3.0);
+        let visible = visible_triangles(&mesh, &camera);
+        assert!(!visible.is_empty(), "nothing is visible");
+        assert!(
+            visible.len() < mesh.triangle_count(),
+            "nothing was culled"
+        );
+        for pair in visible.windows(2) {
+            assert!(pair[0].depth >= pair[1].depth, "not sorted back to front");
+        }
+        for triangle in &visible {
+            assert!((0.0..=1.0).contains(&triangle.shade), "{}", triangle.shade);
+            for corner in &triangle.corners {
+                assert!(corner.x.is_finite() && corner.y.is_finite());
+            }
+        }
+        // And the SVG draws exactly that list.
+        let svg = mesh_svg(&mesh, &camera, &SvgOptions::default());
+        assert_eq!(svg.matches("<polygon").count(), visible.len());
     }
 
     #[test]

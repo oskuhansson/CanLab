@@ -1146,6 +1146,87 @@ impl View {
     }
 }
 
+/// The surface the 3D mode draws, or `None` when the document is not `z = f(x, y)`.
+///
+/// The same mesh the `canlab surface` command writes, from the same sampler, so
+/// the panel and the file cannot disagree about the surface.
+pub fn build_surface(app: &CasApp) -> Option<canlab_scene::surface::Mesh> {
+    let expression = app.expr.as_ref()?;
+    // Exactly two variables: a surface is `z = f(x, y)`.
+    if app.free_vars.len() != 2 {
+        return None;
+    }
+    let options = canlab_scene::surface::SurfaceOptions {
+        x_range: (app.x_min, app.x_max),
+        y_range: (app.x_min, app.x_max),
+        x_cells: 32,
+        y_cells: 32,
+        pixel_error: 0.0,
+        max_split: 0,
+    };
+    canlab_scene::surface::mesh_surface(expression, &options, &canlab_scene::Camera::default()).ok()
+}
+
+/// Draw the surface, and turn it when the reader drags.
+///
+/// Returns `false` when there is nothing to draw, so that the caller can fall
+/// back to the 2D plot rather than showing an empty canvas.
+fn surface(app: &mut CasApp, ui: &mut Ui, rect: Rect, response: &egui::Response) -> bool {
+    let Some(mesh) = build_surface(app) else {
+        return false;
+    };
+    if mesh.triangle_count() == 0 {
+        return false;
+    }
+    // Drag to orbit: the surface follows the pointer, so the camera moves the
+    // other way. The scales are chosen so that a drag across the panel is a
+    // little more than a half turn, which is what a reader expects.
+    let delta = response.drag_delta();
+    if response.dragged() && delta != egui::Vec2::ZERO {
+        app.surface_angles.0 -= f64::from(delta.x) * 0.01;
+        app.surface_angles.1 =
+            (app.surface_angles.1 + f64::from(delta.y) * 0.01).clamp(-1.5, 1.5);
+    }
+    let camera = canlab_scene::svg::framing_camera(
+        &mesh,
+        app.surface_angles.0,
+        app.surface_angles.1,
+        f64::from(rect.width() / rect.height().max(1.0)),
+    );
+    let painter = ui.painter_at(rect);
+    let low = [40u8, 70, 130];
+    let high = [240u8, 200, 120];
+    for triangle in canlab_scene::svg::visible_triangles(&mesh, &camera) {
+        let points: Vec<egui::Pos2> = triangle
+            .corners
+            .iter()
+            .map(|corner| {
+                let (x, y) = canlab_scene::Camera::to_pixels(
+                    *corner,
+                    f64::from(rect.width()),
+                    f64::from(rect.height()),
+                );
+                rect.min + egui::vec2(x as f32, y as f32)
+            })
+            .collect();
+        let t = triangle.shade.clamp(0.0, 1.0);
+        let mix = |a: u8, b: u8| -> u8 {
+            (f64::from(a) + (f64::from(b) - f64::from(a)) * t).round() as u8
+        };
+        let fill = egui::Color32::from_rgb(
+            mix(low[0], high[0]),
+            mix(low[1], high[1]),
+            mix(low[2], high[2]),
+        );
+        painter.add(egui::Shape::convex_polygon(
+            points,
+            fill,
+            egui::Stroke::new(0.4, egui::Color32::from_rgb(27, 27, 27)),
+        ));
+    }
+    true
+}
+
 pub fn plot(app: &mut CasApp, ui: &mut Ui) {
     // The canvas is the whole panel, and the controls float over its top edge.
     // A row the controls claim for themselves is graph nobody sees, and the
@@ -1166,6 +1247,13 @@ pub fn plot(app: &mut CasApp, ui: &mut Ui) {
         if app.can_plot() && !app.is_typing() {
             build_curve_fitting(app, false);
         }
+    }
+
+    // The 3D mode draws the surface in the same canvas. It falls back to the 2D
+    // plot when the document is not `z = f(x, y)`, rather than showing nothing.
+    view_toggle(app, ui, rect);
+    if app.view_3d && surface(app, ui, rect, &response) {
+        return;
     }
 
     let view = app.plot_view();
@@ -1283,6 +1371,31 @@ fn plot_overlay(app: &mut CasApp, ui: &mut Ui, rect: Rect) {
             }
             plot_note_row(app, ui);
         });
+}
+
+/// The 3D toggle, drawn over the canvas's top-left corner.
+///
+/// A mode of the plot panel: the same canvas, the same drag, a different picture.
+/// It is offered only when the document has two variables, because a surface is
+/// `z = f(x, y)` and a button that did nothing would be a lie.
+fn view_toggle(app: &mut CasApp, ui: &mut Ui, rect: Rect) {
+    if app.free_vars.len() != 2 {
+        // A document that is not a surface leaves the mode, so that turning the
+        // toggle on and then typing a one-variable document does not leave the
+        // panel in a mode it cannot draw.
+        app.view_3d = false;
+        return;
+    }
+    let position = rect.left_top() + egui::vec2(8.0, 8.0);
+    let label = if app.view_3d { "2D" } else { "3D" };
+    let button = egui::Rect::from_min_size(position, egui::vec2(34.0, 20.0));
+    if ui
+        .put(button, egui::Button::new(RichText::new(label).size(11.0)))
+        .on_hover_text("show the surface in 3D")
+        .clicked()
+    {
+        app.view_3d = !app.view_3d;
+    }
 }
 
 /// The plot's caption: what is drawn, on which axes, at which parameter values.
@@ -2283,6 +2396,122 @@ fn vertical_extent(curve: &Curve) -> Option<(f64, f64)> {
         span * 0.10
     };
     Some((min - pad, max + pad))
+}
+
+#[cfg(test)]
+mod surface_tests {
+    use super::*;
+
+    fn app_with(document: &str) -> CasApp {
+        let mut app = CasApp::new();
+        app.field = canlab_input::MathField::from_latex(document).expect("a document");
+        app.x_min = -2.0;
+        app.x_max = 2.0;
+        app.recompute();
+        app
+    }
+
+    #[test]
+    fn a_two_variable_document_builds_a_surface() {
+        // The mesh the panel draws is the one `canlab surface` writes: same
+        // sampler, same options, so the panel and the file cannot disagree.
+        let app = app_with("x^2 + y^2");
+        let mesh = build_surface(&app).expect("a surface");
+        assert!(mesh.triangle_count() > 0);
+        // Every vertex is on the surface, which is the check that the sampler
+        // did what the document said.
+        for vertex in &mesh.vertices {
+            let expected = vertex.position.x * vertex.position.x
+                + vertex.position.y * vertex.position.y;
+            assert!((vertex.position.z - expected).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn a_one_variable_document_has_no_surface() {
+        // A curve is not a surface, and the 3D mode must not invent one.
+        let app = app_with("x^2");
+        assert!(build_surface(&app).is_none());
+        // Nor does an equation.
+        let app = app_with("x^2 + y^2 = 1");
+        assert!(build_surface(&app).is_none());
+    }
+
+    #[test]
+    fn the_surface_uses_the_plot_window() {
+        // The mesh's `x` range is the plot's, so the picture and the window
+        // describe the same piece of the surface.
+        let mut app = app_with("x^2 + y^2");
+        app.x_min = -1.0;
+        app.x_max = 1.0;
+        let mesh = build_surface(&app).expect("a surface");
+        for vertex in &mesh.vertices {
+            assert!(
+                (-1.0..=1.0).contains(&vertex.position.x),
+                "{}",
+                vertex.position.x
+            );
+        }
+    }
+
+    /// How many convex polygons the frame painted.
+    fn painted_polygons(app: &mut CasApp) -> usize {
+        let ctx = egui::Context::default();
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(400.0, 400.0),
+        ));
+        let mut output = ctx.run_ui(raw, |ui| plot(app, ui));
+        output.textures_delta.clear();
+        output
+            .shapes
+            .iter()
+            .filter(|clipped| matches!(clipped.shape, egui::Shape::Path(_)))
+            .count()
+    }
+
+    #[test]
+    fn the_3d_mode_paints_the_surface_and_the_2d_mode_does_not() {
+        // The end-to-end check: the panel's own draw, with the mode on, emits
+        // polygons. A test that only built the mesh would pass on a panel that
+        // never painted it.
+        let mut app = app_with("0.2*(x^2 + y^2)");
+        app.view_3d = false;
+        let flat = painted_polygons(&mut app);
+        app.view_3d = true;
+        let solid = painted_polygons(&mut app);
+        assert!(
+            solid > flat + 50,
+            "the 3D mode painted {solid} shapes and the 2D mode {flat}"
+        );
+    }
+
+    #[test]
+    fn the_3d_mode_is_only_offered_for_two_variables() {
+        // The toggle clears the mode for a document it cannot draw, so the panel
+        // cannot be left in a mode that shows nothing.
+        let mut app = app_with("x^2 + y^2");
+        app.view_3d = true;
+        let ctx = egui::Context::default();
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(200.0, 200.0),
+        ));
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 200.0));
+        // `run_ui` hands back a `FullOutput` whose texture deltas must be cleared
+        // before it is dropped, or epaint panics. The snapshot test does the same.
+        let mut output = ctx.run_ui(raw.clone(), |ui| view_toggle(&mut app, ui, rect));
+        output.textures_delta.clear();
+        assert!(app.view_3d, "the mode was cleared for a surface");
+        // A one-variable document clears it.
+        app.field = canlab_input::MathField::from_latex("x^2").expect("a document");
+        app.recompute();
+        let mut output = ctx.run_ui(raw, |ui| view_toggle(&mut app, ui, rect));
+        output.textures_delta.clear();
+        assert!(!app.view_3d, "the mode survived a one-variable document");
+    }
 }
 
 #[cfg(test)]

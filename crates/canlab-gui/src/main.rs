@@ -254,6 +254,15 @@ struct CasApp {
     /// on every frame, and a sign table searches for critical points. Empty when
     /// the document is not a one-variable expression.
     sign_table: Vec<canlab_parse::calculus::Piece>,
+    /// Whether the plot panel shows the surface in 3D instead of the curve in 2D.
+    ///
+    /// A mode of the plot panel and not a panel of its own: the panel already
+    /// owns a canvas and a drag, and a second canvas would have to duplicate the
+    /// framing, the zoom and the persistence.
+    view_3d: bool,
+    /// The surface camera's azimuth and elevation, in radians. Kept across
+    /// documents so that turning the surface is not undone by typing.
+    surface_angles: (f64, f64),
     /// Undo history for the document.
     undo: undo::Undo,
     /// When the document last changed, so a save can wait for a pause.
@@ -299,6 +308,8 @@ impl CasApp {
             third_coordinates: Vec::new(),
             intersections: Vec::new(),
             sign_table: Vec::new(),
+            view_3d: false,
+            surface_angles: (0.6, 0.5),
             undo: undo::Undo::new(),
             dirty_since: None,
             // A test that restored the last session would depend on whichever

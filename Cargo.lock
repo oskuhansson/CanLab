@@ -2285,6 +2285,7 @@ dependencies = [
  "canlab-mathview",
  "canlab-parse",
  "canlab-plot",
+ "canlab-scene",
  "canlab-solver",
  "canlab-tex",
  "egui",
