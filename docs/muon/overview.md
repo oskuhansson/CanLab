@@ -183,7 +183,7 @@ wavelength, so it has to be cured from the bond line's edge with a 395–405 nm 
 The simulation is `canlab-muon`, separate from the CAS, which is used only to draw
 results.
 
-**Modelled:** the Cherenkov yield and its dispersion, total internal reflection,
+**Modelled:** the Cherenkov yield, total internal reflection,
 Fresnel reflection, absorption, the sensors' coverage and PDE, Poisson statistics,
 the readout jitter, the coincidence, and the network's training.
 

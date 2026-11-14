@@ -91,6 +91,19 @@ pub fn index_at(wavelength_nm: f64) -> Option<f64> {
 /// where the honest spread comes from.
 pub fn cone_angle(beta: f64, wavelength_nm: f64) -> Option<f64> {
     let index = index_at(wavelength_nm)?;
+    cone_angle_at(beta, index)
+}
+
+/// The Cherenkov cone angle for a medium of a given index, radians.
+///
+/// This is the angle the **simulation** uses, and the index is the block's own.
+/// The wavelength version above is the dispersion curve of the high-index
+/// plastic; using it for a PMMA block put every photon 9.3° wide of the cone,
+/// because 1.84's cone is 57.1° and 1.49's is 47.8°.
+pub fn cone_angle_at(beta: f64, index: f64) -> Option<f64> {
+    if !(beta > 0.0 && beta.is_finite()) || !(index >= 1.0 && index.is_finite()) {
+        return None;
+    }
     if beta * index <= 1.0 {
         return None;
     }
@@ -113,9 +126,9 @@ impl Photon {
     ///
     /// `azimuth` is uniform in `[0, 2π)` and `wavelength_draw` uniform in
     /// `[0, 1)`; the caller owns the generator and the seed.
-    pub fn sample(beta: f64, azimuth: f64, wavelength_draw: f64) -> Option<Photon> {
+    pub fn sample(beta: f64, azimuth: f64, wavelength_draw: f64, index: f64) -> Option<Photon> {
         let wavelength_nm = wavelength_nm(wavelength_draw);
-        let theta_rad = cone_angle(beta, wavelength_nm)?;
+        let theta_rad = cone_angle_at(beta, index)?;
         Some(Photon {
             wavelength_nm,
             theta_rad,

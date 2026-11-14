@@ -64,9 +64,11 @@ cos θ_c = 1 / (β n)
 
 The cone is not one angle: `n` depends on wavelength, and a plastic with
 `dn/dλ ≈ −0.016/µm` spreads the cone by about **0.3°** over 400–600 nm. Over 100 mm
-of path that is ~5 ps of arrival spread — the same order as the timing goal, so the
-transport draws the wavelength per photon and gets the dispersion from the
-material rather than assuming a single cone.
+of path that is ~5 ps of arrival spread. The simulation draws the wavelength per
+photon but computes the cone from the **block's own index**, so the dispersion is
+not modelled — and until that was fixed it computed the cone from the high-index
+plastic's curve whatever the block was, which put every PMMA photon **9.3°** wide
+of its cone.
 
 ### 2.3 The yield
 

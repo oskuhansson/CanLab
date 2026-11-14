@@ -144,13 +144,14 @@ the scintillation yield as a separate model, and no event simulation uses it yet
 ### 3. Each photon is born on the cone
 
 The wavelength is drawn from the `1/λ²` spectrum by inverting its CDF — one
-divide, no rejection. The cone angle comes from `cos θ = 1/(βn(λ))` at *that*
-wavelength, so the cone's width is the material's dispersion rather than a
-constant. The azimuth is uniform.
+divide, no rejection. The cone angle comes from `cos θ = 1/(βn)` at the **block's
+index**, so the cone is one angle and the dispersion over the band (~0.3°) is not
+modelled. The azimuth is uniform.
 
-*Why the wavelength is not uniform:* `n(λ)` falls from blue to red, so a uniform
-draw would put too many red photons in and get the dispersion — and therefore the
-timing — slightly wrong.
+*The bug this replaced:* the cone was computed from the high-index plastic's
+dispersion curve whatever the block was, so a PMMA block emitted at 57.1° instead
+of 47.8° — 9.3° wide, which is a different detector. `Photon::sample` now takes
+the index, and `cone_angle_at` is the function the simulation uses.
 
 ### 4. The photon is traced
 

@@ -532,6 +532,21 @@ mod tests {
     }
 
     #[test]
+    fn the_photons_leave_at_the_cherenkov_angle() {
+        // The cone's axis is the muon's heading, and every photon leaves at
+        // `acos(1/n)` from it — forward, because the muon outruns its own light.
+        let scene = DetectorScene::new(hexagon(), 1).expect("a scene");
+        let cone = (1.0 / scene.design.index).acos();
+        let mut worst = 0.0f64;
+        for photon in &scene.photons {
+            let direction = photon.path[1].sub(photon.path[0]).normalized().expect("a step");
+            let angle = direction.dot(scene.heading).clamp(-1.0, 1.0).acos();
+            worst = worst.max((angle - cone).abs());
+        }
+        assert!(worst < 0.05, "a photon left {worst} rad off the cone");
+    }
+
+    #[test]
     fn the_visible_photons_are_a_random_subset() {
         // The bug this prevents: a stride shows every *n*-th photon, and the
         // photons are born in order along the track, so every *n*-th is every

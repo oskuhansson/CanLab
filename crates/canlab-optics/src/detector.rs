@@ -315,7 +315,7 @@ fn simulate_inner(
             0.5
         };
         let birth = birth_start + heading.scale(along * birth_span);
-        let Some(photon) = Photon::sample(beta, random() * std::f64::consts::TAU, random())
+        let Some(photon) = Photon::sample(beta, random() * std::f64::consts::TAU, random(), index)
             .filter(|photon| photon.theta_rad > 0.0)
         else {
             event.missed += 1;
