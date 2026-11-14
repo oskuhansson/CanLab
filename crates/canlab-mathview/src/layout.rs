@@ -1115,10 +1115,10 @@ fn layout_document(layout: &Layout<'_>, field: &MathField, style: &Style) -> Dis
     let total: f32 = heights.iter().sum::<f32>() + system_gap * systems.len().saturating_sub(1) as f32;
 
     let mut items = Vec::new();
-    let mut carets = Vec::new();
     let mut bands = Vec::new();
     let mut refs = Vec::new();
     let mut per_line_carets = Vec::new();
+    let mut carets: Vec<Rect> = Vec::new();
     let mut baseline = 0.0;
     let mut y = 0.0;
 
@@ -1173,6 +1173,10 @@ fn layout_document(layout: &Layout<'_>, field: &MathField, style: &Style) -> Dis
         y += height + system_gap;
     }
 
+    // `carets` is the **current line's**, because `MathField::positions` returns
+    // the current line's positions and a painter indexes this list with one of
+    // them. Measured: a two-line document has 2 positions, not one per line, so a
+    // whole-document list here would be six carets for two positions.
     DisplayList {
         size: Vec2::new(x0 + width, total),
         items,
