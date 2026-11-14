@@ -22,6 +22,7 @@ carry the same claims in more detail.
 | W3.3 tangents and extrema | `crates/canlab-parse/src/calculus.rs`, `canlab sign` | `tangent`, `normal`, `extrema` including endpoints, `sign_table` with a touching zero of `f'` found, and the table shaded in the SVG. |
 | W3.4 volumes and areas | `crates/canlab-parse/src/figure.rs` | `\vol` (discs and shells) and `\area` split at crossings: a sphere gives `32π/3`, a cone `2π/3`, swapping the curves does not change the area. |
 | W7.5 the GPU probe | `crates/canlab-gpu` | The only crate that depends on a graphics stack. The probe reports `Vulkan llvmpipe (Cpu)` with `SHADER_F64`, and a shader's `f64` matches the CPU to `0e0`. `run` executes a compiled kernel per input row, which makes W7.2's differential test real: 512 points, worst relative `4.87·10⁻⁶`. |
+| W7.2 at the roadmap's size | `crates/canlab-gpu/tests/sweep.rs` | 193 generated programs at 10³ points each — 193 000 points, 0 disagreements, 5.1 s. The tolerance is `1e-5` relative **or** absolute; the roadmap's `1e-6` relative is not reachable on cancellation-heavy programs and the measured bound is stated. |
 | W7.4 on the adapter | `crates/canlab-gpu` | The photon kernel runs on Vulkan llvmpipe from the same source the interpreter runs: 15 photons, worst relative difference `0e0`, random stream included. The generator is a `u32` xorshift because WGSL has no `u64`. |
 | W7.4 light kernel | `crates/canlab-optics/src/kernel.rs` | The photon kernel in the Lua subset: Fresnel, total internal reflection, a per-photon random stream, path length out. `compile` emits WGSL from the same text `interpret` runs, so one source has two executions. `f32` vs `f64` agree to `1e-6`; the kernel and a Rust reference agree to `1e-12`. **Nothing executes WGSL**, and the throughput figure is unmeasured. |
 | W8.3 surface nets | `crates/canlab-scene/src/implicit.rs` | `mesh_implicit` for `f(x,y,z) = 0`, with analytic normals from the gradient. A sphere's vertices are within one cell of the surface; an empty region is an empty mesh, not an error. **Not closed where the surface meets the grid boundary** — stated, not hidden. |
@@ -79,7 +80,7 @@ carry the same claims in more detail.
 
 ## Test counts, last run
 
-`cargo test --offline -j 2` on the tree this note describes: **1241 passed, 0
+`cargo test --offline -j 2` on the tree this note describes: **1242 passed, 0
 failed, 5 ignored.** The five ignored are the snapshot frames, and they are
 ignored because this machine is not the one they were rendered on (see below).
 
@@ -100,7 +101,7 @@ ignored because this machine is not the one they were rendered on (see below).
 | `canlab-tex` | 43 |
 | `canlab-num` | 45 |
 | `canlab-corpus` | 79 |
-| `canlab-gpu` | 5 |
+| `canlab-gpu` | 6 |
 | Doc-tests | 9 (input 1, parse 3, plot 2, mathview 3) |
 | Corpus | 15 of 15 rows |
 
