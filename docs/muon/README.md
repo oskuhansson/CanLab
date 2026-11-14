@@ -156,7 +156,8 @@ flowchart TB
 | [overview.md](overview.md) | **The current design on one page**: the signal chain, the numbers, the network, and what is uncertain |
 | [physics.md](physics.md) | The physics in detail: every equation, every constant, and the worked budgets |
 | [simulation.md](simulation.md) | The simulation in detail: every module, every draw, and what is not modelled |
-| [designs.md](designs.md) | The five designs, their numbers, and the trade each one makes |
+| [cherenkov.md](cherenkov.md) | **The Cherenkov timing design in full**: the physics, the block, the sensors, the readout, the timing, the reconstruction, the cost, and what is open |
+| [designs.md](designs.md) | The six designs, their numbers, and the trade each one makes |
 | [components.md](components.md) | The four parts, their datasheet numbers, availability, and the jitter budget |
 | [constraints.md](constraints.md) | The mission's parameters and requirements, and the audit that enforces them |
 
