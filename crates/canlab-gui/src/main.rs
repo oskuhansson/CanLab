@@ -1,6 +1,10 @@
 //! `canlab-gui` — the math editor is the centre of the app; the other panels are
 //! a rearrangeable dock around it.
 //!
+// A window, not a console: on Windows the default subsystem is CUI, which opens a
+// console alongside the app. The app is a GUI and has nothing to say to one.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 //! The shell keeps the Abitti palette and replaces the first version's text
 //! box with the structural math field, and adds three things:
 //!
