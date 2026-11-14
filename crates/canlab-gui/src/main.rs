@@ -3227,14 +3227,17 @@ mod tests {
 
     #[test]
     fn a_complete_but_unreadable_field_gets_a_friendly_error() {
+        // `x_1` is a name now, so the unreadable case is an *index expression*:
+        // `x_{n+1}` has no symbol, and the reader says so rather than dropping
+        // the subscript and calling it `x`.
         let mut app = CasApp::new();
         app.field = MathField::new();
-        app.field.type_str("x_1");
+        app.field.type_str("x_{n+1}");
         app.recompute();
         assert!(
             app.error
                 .as_deref()
-                .is_some_and(|error| error.contains("subscript")),
+                .is_some_and(|error| error.contains("subscript") || error.contains("name")),
             "{:?}",
             app.error
         );

@@ -288,7 +288,23 @@ fn product(row: &Row, definitions: &crate::define::Definitions) -> Result<Expr, 
                     e = pow(e, build_with(sub, definitions)?);
                     i += 1;
                 }
-                Node::Sub(_) => return Err(ToExprError::Subscript),
+                // `v_1` is **one name**, not `v` with a decoration: the
+                // subscript is part of the symbol, which is what keeps `v_1` and
+                // `v_2` two variables. The parser interns the same name, so the
+                // two readers agree — a test compares them.
+                Node::Sub(sub) => {
+                    let Some(base) = single_symbol(&e) else {
+                        return Err(ToExprError::Subscript);
+                    };
+                    let Some(subscript) = single_name(sub, definitions) else {
+                        return Err(ToExprError::Subscript);
+                    };
+                    e = ExprNode::sym(SymbolId::intern(&format!(
+                        "{}_{subscript}",
+                        base.as_str()
+                    )));
+                    i += 1;
+                }
                 _ => break,
             }
         }
@@ -395,6 +411,8 @@ fn atom(node: &Node, definitions: &crate::define::Definitions) -> Result<Expr, T
         Node::Raw(text) => Err(ToExprError::UnsupportedCommand(text.clone())),
         Node::Binom { .. } => Err(ToExprError::UnsupportedConstruct("\\binom")),
         Node::Sup(_) => Err(ToExprError::DanglingSuperscript),
+        // A subscript is part of a name, and `build_with` above handles that;
+        // reaching here means it was not a simple one.
         Node::Sub(_) => Err(ToExprError::Subscript),
     }
 }
@@ -488,4 +506,35 @@ fn function_of(name: &str) -> Option<&'static str> {
     ];
     let bare = name.strip_prefix('\\')?;
     FUNCTIONS.iter().find(|f| **f == bare).copied()
+}
+
+/// The symbol an expression is, if it is one.
+fn single_symbol(expression: &Expr) -> Option<SymbolId> {
+    match &**expression {
+        ExprNode::Sym(symbol) => Some(*symbol),
+        _ => None,
+    }
+}
+
+/// The name a subscript row spells, if it is a simple one.
+///
+/// A number or a single identifier: `v_1` and `v_max` are names, and `x_{n+1}`
+/// is an index expression with no symbol.
+fn single_name(row: &[Node], definitions: &crate::define::Definitions) -> Option<String> {
+    let _ = definitions;
+    let [node] = row else {
+        return None;
+    };
+    match node {
+        Node::Text(text) => {
+            let text = text.trim();
+            if !text.is_empty() && text.chars().all(|c| c.is_alphanumeric()) {
+                Some(text.to_string())
+            } else {
+                None
+            }
+        }
+        Node::Sym(symbol) => Some(symbol.as_str().to_string()),
+        _ => None,
+    }
 }

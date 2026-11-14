@@ -887,28 +887,46 @@ fn to_expr_refuses_a_half_typed_denominator_before_it_is_emptied() {
 }
 
 #[test]
-fn to_expr_refuses_a_subscript() {
-    assert_eq!(typed("x_1").build_expr(), Err(ToExprError::Subscript));
-    // `x_1^2` is `x_{1^2}`, so it is a subscript too.
+fn to_expr_reads_a_simple_subscript_and_refuses_an_expression() {
+    // `x_1` is one name. The rule changed from "a subscript is refused" to "a
+    // simple subscript is part of the name", because refusing it made `v_1` and
+    // `v_2` unusable and dropping it made them the same variable.
+    let one = typed("x_1").build_expr().expect("a name");
+    assert_eq!(canlab_tex::to_latex(&one), "x_1");
+    // `x_1^2` is `x_{1^2}`, so the subscript is an expression and has no symbol.
     assert_eq!(typed("x_1^2").build_expr(), Err(ToExprError::Subscript));
+    // And a braced index expression is refused for the same reason.
+    assert_eq!(typed("x_{n+1}").build_expr(), Err(ToExprError::Subscript));
 }
 
 #[test]
-fn the_field_and_the_parser_refuse_a_subscript_with_the_same_reason() {
-    // Two readers of the same document: the math field and `canlab-parse`.
-    // They must not disagree about what `x_1` means, and "no expression form"
-    // has to be said in the same words or the two paths will drift again.
+fn the_field_and_the_parser_read_a_subscript_as_the_same_name() {
+    // Two readers of the same document: the math field and `canlab-parse`. They
+    // must not disagree about what `x_1` means. The rule is now that a simple
+    // subscript is part of the name, so both must produce `x_1` — and both must
+    // refuse an index expression with the same reason, or the two paths drift.
     let field = typed("x_1")
         .build_expr()
-        .expect_err("the field refuses a subscript");
-    let parser = canlab_parse::parse_latex("x_1").expect_err("the parser refuses a subscript");
-
-    assert_eq!(field.to_string(), "subscripts are not expressions");
+        .expect("the field reads `x_1` as a name");
+    let parser = canlab_parse::parse_latex("x_1").expect("the parser reads `x_1` as a name");
     assert_eq!(
-        parser.message,
-        field.to_string(),
-        "the field and the parser give different reasons"
+        canlab_tex::to_latex(&field),
+        canlab_tex::to_latex(&parser),
+        "the field and the parser read `x_1` differently"
     );
+    // `v_1` and `v_2` are two names, which is the whole point.
+    let one = typed("v_1").build_expr().expect("a name");
+    let two = typed("v_2").build_expr().expect("a name");
+    assert_ne!(
+        canlab_tex::to_latex(&one),
+        canlab_tex::to_latex(&two),
+        "`v_1` and `v_2` are the same symbol"
+    );
+    // An index expression is refused by both, and the parser's reason names the
+    // shape that is supported.
+    assert!(typed("x_{n+1}").build_expr().is_err(), "the field accepted an index");
+    let parser = canlab_parse::parse_latex("x_{n+1}").expect_err("the parser refuses an index");
+    assert!(parser.message.contains("part of a name"), "{}", parser.message);
 }
 
 #[test]

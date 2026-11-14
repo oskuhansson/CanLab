@@ -406,11 +406,38 @@ impl Parser {
                 Ok(pow(lhs, rhs))
             }
             Infix::Subscript => {
-                // A subscript has no expression form: `Expr` has no indexed
-                // symbol, and dropping it made `v_1` and `v_2` both mean `v`.
-                // The base of a logarithm is the one subscript that carries a
-                // value, and `parse_function` reads it before this loop runs.
-                Err(ParseError::new(SUBSCRIPT_REFUSAL, op_pos))
+                // `v_1` is **one name**, not `v` with a decoration: `v_1` and
+                // `v_2` are two variables, and a reader that dropped the
+                // subscript made them the same one. The symbol is interned with
+                // the underscore in its name, which is also what LaTeX prints,
+                // so the round trip needs nothing special.
+                //
+                // Only a symbol with a simple subscript can be a name. `x_{n+1}`
+                // is an index expression, and there is no symbol for one — that
+                // is refused, and the refusal says which shape is supported.
+                let base = match &*lhs {
+                    ExprNode::Sym(symbol) => Some(*symbol),
+                    _ => None,
+                };
+                let subscript = match &self.peek().kind {
+                    TokenKind::Number(text) => Some(text.clone()),
+                    TokenKind::Ident(text) => Some(text.clone()),
+                    _ => None,
+                };
+                match (base, subscript) {
+                    (Some(symbol), Some(subscript)) => {
+                        self.advance();
+                        Ok(ExprNode::sym(SymbolId::intern(&format!(
+                            "{}_{subscript}",
+                            symbol.as_str()
+                        ))))
+                    }
+                    _ => Err(ParseError::new(
+                        "a subscript is part of a name only when it is a number or a letter; \
+                         an index expression has no symbol",
+                        op_pos,
+                    )),
+                }
             }
             Infix::Factorial => {
                 Err(ParseError::new("factorial `!` is not supported", op_pos))
@@ -1436,13 +1463,16 @@ mod tests {
     }
 
     #[test]
-    fn a_subscript_is_refused_before_it_can_swallow_a_power() {
+    fn a_subscript_is_part_of_the_name_and_never_swallows_a_power() {
         // `x_1^2` used to parse as `x^2`: the subscript was consumed and thrown
-        // away, so the power silently attached to a different expression than
-        // the one written. It is refused at the `_` now.
-        let err = parse("x_1^2").expect_err("a subscript has no expression form");
-        assert_eq!(err.position, 1);
-        assert_eq!(err.message, SUBSCRIPT_REFUSAL);
+        // away. The rule now is that `x_1` is one name, so `x_1^2` is that name
+        // squared — the power attaches to the name that was written.
+        assert_eq!(parse_ok("x_1").to_string(), "x_1");
+        assert_eq!(parse_ok("x_1^2").to_string(), "x_1^2");
+        // An index *expression* is still refused, and the reason names the shape
+        // that is supported.
+        let err = parse("x_{n+1}").expect_err("an index expression has no symbol");
+        assert!(err.message.contains("part of a name"), "{}", err.message);
         // A plain power still parses, which is the other half of the old test.
         assert_eq!(parse_ok("x^2").to_string(), "x^2");
     }

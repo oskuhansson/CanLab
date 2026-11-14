@@ -133,7 +133,10 @@ fn cases() -> Vec<Case> {
         // --------------------------------------------------------- not algebra
         case("x=1", "an equation is not an expression", Expect::Refused),
         case("x<y", "neither is a relation", Expect::Refused),
-        case("x_1", "a subscript on a variable", Expect::Refused),
+        // `x_1` is one name, not `x` with a decoration: the subscript is part of
+        // the symbol, which is what keeps `v_1` and `v_2` two variables. An index
+        // *expression* is still refused, and the parser says which shape it reads.
+        case("x_1", "a subscript is part of the name", Expect::Reads),
         case("\\bar{x}", "an accent is a decoration", Expect::Refused),
         case("\\vec{v}", "so is a vector arrow", Expect::Refused),
         case("f'", "a derivative needs definitions (roadmap P0)", Expect::Refused),

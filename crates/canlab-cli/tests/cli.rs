@@ -86,16 +86,19 @@ fn parse_error_is_reported_not_panicked() {
 }
 
 #[test]
-fn eval_refuses_a_subscript_on_a_variable() {
+fn eval_accepts_a_subscript_as_part_of_the_name() {
     // `x_1` used to print `x` and exit 0: the subscript was parsed and thrown
-    // away, so `v_1` and `v_2` in a document both meant `v`. The field has
-    // always refused it; `eval` must give the field's reason, not an answer.
+    // away, so `v_1` and `v_2` in a document both meant `v`. The rule is now
+    // that a simple subscript is part of the name, so `x_1` is a symbol called
+    // `x_1` — and it prints as itself, which is what makes the two distinct.
     let (ok, stdout, stderr) = canlab(&["eval", "x_1"]);
-    assert!(!ok, "eval accepted `x_1` and printed {stdout:?}");
-    assert!(
-        stderr.contains("subscripts are not expressions"),
-        "the field's reason is missing: {stderr}"
-    );
+    assert!(ok, "eval refused `x_1`: {stderr}");
+    assert!(stdout.contains("x_1"), "{stdout}");
+    // An index *expression* is still refused, and the reason names the shape
+    // that is supported.
+    let (ok, stdout, stderr) = canlab(&["eval", "x_{n+1}"]);
+    assert!(!ok, "eval accepted an index expression and printed {stdout:?}");
+    assert!(stderr.contains("part of a name"), "{stderr}");
     assert!(
         stdout.is_empty(),
         "a refused expression must print nothing, got {stdout:?}"
@@ -103,14 +106,14 @@ fn eval_refuses_a_subscript_on_a_variable() {
 }
 
 #[test]
-fn tex_and_plot_refuse_the_same_subscript() {
+fn tex_and_plot_refuse_the_same_index_expression() {
     // `tex` and `plot` read LaTeX through the same parser, so a refusal that
     // held in `eval` but not here would be a second silent reader.
-    for args in [["tex", "x_1"], ["plot", "x_1"]] {
+    for args in [["tex", "x_{n+1}"], ["plot", "x_{n+1}"]] {
         let (ok, stdout, stderr) = canlab(&args);
-        assert!(!ok, "`{}` accepted `x_1`", args[0]);
+        assert!(!ok, "`{}` accepted `x_{{n+1}}`", args[0]);
         assert!(
-            stderr.contains("subscripts are not expressions"),
+            stderr.contains("part of a name"),
             "`{}` gave the wrong reason: {stderr}",
             args[0]
         );
@@ -255,6 +258,26 @@ fn solve_all_reports_a_decline_with_its_reason() {
 // printer's Lua reaches the compiler, and that every refusal is a message on
 // stderr and a non-zero exit rather than a plausible-looking kernel.
 // ---------------------------------------------------------------------------
+
+#[test]
+fn a_subscript_is_part_of_the_name_and_two_names_stay_two() {
+    // W11.3: `v_1` and `v_2` are two variables, not `v` twice. Dropping the
+    // subscript made them the same symbol, which is a quiet wrong answer.
+    let (ok, stdout, stderr) = canlab(&["tex", "v_1 + v_2"]);
+    assert!(ok, "stderr: {stderr}");
+    assert_eq!(stdout.trim(), "v_1 + v_2", "the subscripts did not round-trip");
+    // And they are distinct: the two names are not the same symbol.
+    let (ok, one, _) = canlab(&["tex", "v_1"]);
+    assert!(ok);
+    let (ok, two, _) = canlab(&["tex", "v_2"]);
+    assert!(ok);
+    assert_ne!(one.trim(), two.trim(), "v_1 and v_2 printed the same");
+    // A subscript that is an expression is not a name, and the refusal says
+    // which shape is supported.
+    let (ok, _stdout, stderr) = canlab(&["tex", "x_{n+1}"]);
+    assert!(!ok, "an index expression was accepted as a name");
+    assert!(stderr.contains("part of a name"), "{stderr}");
+}
 
 #[test]
 fn absolute_value_parses_and_prints_back_as_delimiters() {

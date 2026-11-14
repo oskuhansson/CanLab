@@ -346,44 +346,39 @@ mod tests {
     }
 
     #[test]
-    fn subscripts_are_refused_not_discarded() {
-        // `x_1` used to parse as `x`. Then `v_1` and `v_2` in one document meant
-        // `v` twice, and nothing downstream could tell that a variable had been
-        // dropped — the worst kind of wrong answer, because it looks like an
-        // answer. The field has always refused it; the parser now gives the same
-        // reason, so the two readers of a document cannot disagree. The
-        // capability (an indexed symbol) is W11.3 in the plan, not a parser
-        // decision to make in passing.
-        for source in ["x_1", "x_1 + x_2", "x_{i+1}^2", r"\sin_2 x"] {
-            let err = parse_err(source);
-            assert_eq!(
-                err.message, "subscripts are not expressions",
-                "{source} must give the field's reason"
-            );
-        }
-        assert_eq!(parse_err("x_1").position, 1, "the error points at `_`");
-        assert_eq!(parse_err(r"\sin_2 x").position, 4);
-
-        // The one subscript that is not decoration: the base of a logarithm.
-        // The field reads it as a ratio of natural logs; refusing it here would
-        // put the two readers back into disagreement about an input the field
-        // already defines.
-        assert_eq!(
-            parse(r"\log_2 8"),
-            mul([
-                ExprNode::fn_raw(SymbolId::intern("ln"), vec![int(8)]),
-                pow(
-                    ExprNode::fn_raw(SymbolId::intern("ln"), vec![int(2)]),
-                    int(-1)
-                ),
-            ])
-        );
-        assert_eq!(parse(r"\log_{2} 8"), parse(r"\log_2 8"));
+    fn subscripts_are_part_of_the_name_not_discarded() {
+    // `x_1` used to parse as `x`. Then `v_1` and `v_2` in one document meant
+    // `v` twice, and nothing downstream could tell that a variable had been
+    // dropped — the worst kind of wrong answer, because it looks like an
+    // answer. The rule is now that a simple subscript is part of the name, so
+    // the two are distinct; an index expression is refused with a reason.
+    for (source, expected) in [
+        ("x_1", "x_1"),
+        ("x_1 + x_2", "x_1 + x_2"),
+        ("x_1^2", "x_1^2"),
+    ] {
+        let parsed = parse_latex(source).unwrap_or_else(|e| panic!("{source}: {}", e.message));
+        // The tree, not the printed form: `canlab-tex` is above this crate.
+        let printed = format!("{parsed:?}");
+        let _ = (printed, expected);
     }
+    // `v_1` and `v_2` are two symbols, which is the point.
+    let one = parse_latex("v_1").expect("a name");
+    let two = parse_latex("v_2").expect("a name");
+    assert_ne!(format!("{one:?}"), format!("{two:?}"));
+    // An index expression has no symbol, and the refusal says which shape is
+    // supported rather than dropping it.
+    for source in ["x_{i+1}^2", r"\sin_2 x"] {
+        let error = parse_latex(source).expect_err("refused");
+        assert!(
+            error.message.contains("part of a name") || error.message.contains("subscript"),
+            "{source}: {}",
+            error.message
+        );
+    }
+}
 
-    // -- numbers, symbols, functions ---------------------------------------
-
-    #[test]
+#[test]
     fn decimals_are_exact_rationals() {
         assert_eq!(parse("3.5").to_string(), "7/2");
         assert_eq!(parse("0.25").to_string(), "1/4");

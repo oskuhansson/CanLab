@@ -376,11 +376,32 @@ fn write_symbol(symbol: SymbolId, out: &mut String) {
         out.push_str(command);
     } else if name.chars().count() == 1 {
         out.push_str(&name);
+    } else if is_subscripted_name(&name) {
+        // `v_1` is a name whose own LaTeX is a subscript, and `\mathrm{v_1}`
+        // would print it upright as "v_1" instead of as a subscript — and would
+        // not read back. The name is already valid LaTeX, so it is written as
+        // itself.
+        out.push_str(&name);
     } else {
         out.push_str("\\mathrm{");
         out.push_str(&name);
         out.push('}');
     }
+}
+
+/// Whether a symbol's name is `base_subscript`, both parts plain words.
+///
+/// `v_1` and `v_max` are names whose LaTeX is a subscript; `xy` and `hello` are
+/// not, and they need `\mathrm`.
+fn is_subscripted_name(name: &str) -> bool {
+    let Some((base, subscript)) = name.split_once('_') else {
+        return false;
+    };
+    !base.is_empty()
+        && !subscript.is_empty()
+        && !subscript.contains('_')
+        && base.chars().all(|c| c.is_alphanumeric())
+        && subscript.chars().all(|c| c.is_alphanumeric())
 }
 
 /// Greek letters must become commands: `\pi` is a glyph, `pi` would be read as
