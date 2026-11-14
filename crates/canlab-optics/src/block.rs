@@ -111,11 +111,43 @@ impl Block {
     /// that it never crosses one within the block. The half-thickness of the
     /// extrusion is `thickness/2`, so the `z` faces are at `±thickness/2`.
     pub fn exit(&self, origin: Vec3, direction: Vec3) -> Option<Exit> {
+        self.exit_where(origin, direction, |_| true)
+    }
+
+    /// The first exit through a face `allow` accepts.
+    ///
+    /// The transport reflects a photon off the face it met and then asks for the
+    /// next exit; without the filter that next exit is the same face again, at
+    /// the distance of the nudge, because the nudge is the only thing between the
+    /// photon and the surface it just left. A photon that reflects at normal
+    /// incidence would then bounce on one square nanometre of the top face until
+    /// its bounce budget ran out, and a photon at a shallow angle would bounce
+    /// between the face and a point a hundredth of a millimetre inside it. Both
+    /// were measured before this argument existed: the first as every photon
+    /// "trapped", the second as one in twelve "absorbed" by a ten-metre
+    /// absorption length.
+    ///
+    /// The filter is a face, not a distance: a photon may leave through the face
+    /// it reflected off, later, after crossing the block — it just may not leave
+    /// through it *without having gone anywhere*.
+    pub fn exit_where(
+        &self,
+        origin: Vec3,
+        direction: Vec3,
+        allow: impl Fn(Face) -> bool,
+    ) -> Option<Exit> {
         // A ray that has left the block does not leave it again. Without this
         // guard, a photon nudged past a face by its own reflection found the
         // *next* face's plane by travelling hundreds of millimetres through
         // free space, and reported an exit a metre from the detector — which
         // the fixture test caught by checking the exit's signed distance.
+        //
+        // The test is `contains` and not `strictly_contains`: a photon that has
+        // just reflected sits a hundredth of a millimetre inside a face, which
+        // is inside the block by any measure, and a guard that asked for
+        // *strictly* inside would refuse it and report the photon as lost at
+        // the surface it was standing in. A point that is merely outside within
+        // the surface tolerance is on the block, and a ray from it has an exit.
         if !self.contains(origin) {
             return None;
         }
@@ -123,7 +155,7 @@ impl Block {
         let mut best: Option<Exit> = None;
         if let Some(direction) = direction.normalized() {
             for (index, (normal, offset)) in planes.iter().enumerate() {
-                if normal.length() == 0.0 {
+                if normal.length() == 0.0 || !allow(Face::Side(index)) {
                     continue;
                 }
                 let denominator = direction.dot(*normal);
@@ -142,10 +174,20 @@ impl Block {
                 }
             }
             let half = self.outline.thickness_mm / 2.0;
+            // The `+z` end is at `+half` and the `−z` end at `−half`, and each
+            // plane's offset is `normal · point` on it: `+half` for the outward
+            // normal `+z`, and `−half` for `−z` (because `(−1)·(−half) = half`).
+            // Writing `−half` for the bottom plane's offset put that face at
+            // `z = +half` and left the block with no bottom at all, so a photon
+            // heading down found no exit and was reported as absorbed — which
+            // is how this was found, by a test that asked a photon to go down.
             for (normal, offset, face) in [
                 (Vec3::new(0.0, 0.0, 1.0), half, Face::Top),
-                (Vec3::new(0.0, 0.0, -1.0), -half, Face::Bottom),
+                (Vec3::new(0.0, 0.0, -1.0), half, Face::Bottom),
             ] {
+                if !allow(face) {
+                    continue;
+                }
                 let denominator = direction.dot(normal);
                 if denominator <= 1e-15 {
                     continue;
@@ -164,9 +206,35 @@ impl Block {
         best
     }
 
-    /// Whether a point is inside the block.
+    /// How far outside the block a point may be and still count as on it, in
+    /// millimetres.
+    ///
+    /// A point on a face is not inside the block: the signed distance there is
+    /// exactly zero, and `Tropical::contains` asks for a negative distance. That
+    /// is right for "is this photon in the material" and wrong for "did the
+    /// block's surface stop this path", and the difference is not academic. A
+    /// muon entering the block at `z = −thickness` and leaving at `+thickness`
+    /// has its whole path *on* the two end faces, and a test that rejected the
+    /// surface rejected every point of it: the event reported zero photons and
+    /// `muon_study` reported that a vertical muon makes no light.
+    ///
+    /// The tolerance is a millionth of a millimetre, far below the block's own
+    /// dimensions and far above the rounding of a coordinate at 20 mm (`f64`
+    /// resolves 3·10⁻¹⁵ mm there).
+    pub const SURFACE_MM: f64 = 1e-6;
+
+    /// Whether a point is inside the block or on its surface.
     pub fn contains(&self, point: Vec3) -> bool {
-        self.outline.contains(point.x, point.y, point.z)
+        self.outline.signed_distance(point.x, point.y, point.z) <= Block::SURFACE_MM
+    }
+
+    /// Whether a point is strictly inside the block, not on its surface.
+    ///
+    /// The transport uses this rather than [`Block::contains`]: a photon that
+    /// reflects off a face is nudged back inside, and a photon that is exactly
+    /// on the surface has already left.
+    pub fn strictly_contains(&self, point: Vec3) -> bool {
+        self.outline.signed_distance(point.x, point.y, point.z) < 0.0
     }
 
     /// The detection face a point is on, if it is on one.
@@ -308,6 +376,25 @@ mod tests {
             .expect("pointing at the roof");
         // On the roof, `y + |x| = 3·scale`; from (0,0) along +y that is y = 60.
         assert!((exit.point.y - 60.0).abs() < 1e-9, "{exit:?}");
+    }
+
+    #[test]
+    fn the_surface_is_part_of_the_block_and_its_inside_is_not() {
+        // Two questions, two answers, and the difference is the bug the
+        // vertical muon found: a point on a face has a signed distance of zero,
+        // so `contains` says yes (the surface stopped the path here) and
+        // `strictly_contains` says no (the material starts behind it).
+        let block = block();
+        let on_the_top = Vec3::new(0.0, 0.0, 5.0);
+        assert!(block.contains(on_the_top));
+        assert!(!block.strictly_contains(on_the_top));
+        assert!(block.strictly_contains(Vec3::ZERO));
+        // Outside by more than the surface tolerance is outside both.
+        let outside = Vec3::new(0.0, 0.0, 5.0 + 1e-3);
+        assert!(!block.contains(outside));
+        assert!(!block.strictly_contains(outside));
+        // And the tolerance is not a licence: a millimetre out is out.
+        assert!(!block.contains(Vec3::new(0.0, 0.0, 6.0)));
     }
 
     #[test]

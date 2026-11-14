@@ -34,15 +34,19 @@
 
 pub mod block;
 pub mod cherenkov;
+pub mod detector;
 pub mod fresnel;
 pub mod interval;
 pub mod outline;
 pub mod source;
+pub mod timebase;
 pub mod transport;
 pub mod vec3;
 
 pub use block::{Block, Exit, Face};
 pub use cherenkov::{Cherenkov, medium_index};
+pub use detector::{Event, EventError, SiPM, four_sensors, simulate};
+pub use timebase::{Histogram, TimeBase, TimeBaseError, Waveforms};
 pub use fresnel::{Interface, Polarisation, critical_angle, interface, reflectance};
 pub use interval::Interval;
 pub use outline::{OutlineError, Tropical, tropical_polynomial, tropical_polynomial_interval};

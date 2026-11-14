@@ -45,6 +45,28 @@ use crate::vec3::Vec3;
 /// The speed of light, m/s, exact by definition.
 pub const SPEED_OF_LIGHT_M_PER_S: f64 = 299_792_458.0;
 
+/// How far inside the block a photon is put after reflecting off a face, in
+/// millimetres.
+///
+/// A hundredth of a millimetre: four orders of magnitude above the block's own
+/// surface tolerance, and a five-hundredth of the thinnest block the study
+/// considers, so the step that follows is a real distance through the material
+/// rather than the same interface again.
+pub const REFLECTION_NUDGE_MM: f64 = 1e-2;
+
+/// The draw that always transmits and never reflects.
+///
+/// `draw_reflect` reflects when `random() < reflectance`, so a draw of 1.0 is
+/// above every reflectance below one and a photon never reflects. It is *the*
+/// draw for "follow the straight path", and it is also the one that used to
+/// absorb the photon: the absorption test compared `draw > survival` and a
+/// survival that rounds to 1.0 made a flawless draw a loss.
+///
+/// The draw is a parameter of a trace and not a property of the physics, so it
+/// has a name here rather than the number 1.0 repeated in a dozen tests that
+/// each had to rediscover why 0.0 was the wrong one.
+pub const NO_REFLECTION: f64 = 1.0;
+
 /// A photon's endings.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Fate {
@@ -68,6 +90,13 @@ pub struct Optical {
     pub absorption_mm: f64,
     /// How many bounces one photon may make before it is called trapped.
     pub max_bounces: usize,
+    /// What fraction of a face a sensor actually covers.
+    ///
+    /// A 6 × 6 mm sensor on a 236 mm² face sees 15 % of it. Without this factor
+    /// the study said tens of photons per muon per sensor where the geometry
+    /// says single digits, and the difference decides whether the detector can
+    /// be timed at all — so it is a parameter here, not a footnote.
+    pub sensor_coverage: f64,
 }
 
 impl Optical {
@@ -79,6 +108,7 @@ impl Optical {
             index_outside: 1.0,
             absorption_mm,
             max_bounces: 64,
+            sensor_coverage: 0.15,
         }
     }
 }
@@ -138,7 +168,7 @@ impl Transport {
         polarisation: Polarisation,
         random: &mut dyn FnMut() -> f64,
     ) -> Option<Traced> {
-        if !self.block.contains(origin) {
+        if !self.block.strictly_contains(origin) {
             return None;
         }
         let direction = direction.normalized()?;
@@ -146,11 +176,23 @@ impl Transport {
         let mut position = origin;
         let mut path = 0.0;
         let mut bounces = 0;
-        let mut fate;
+        let fate;
         let mut face = None;
         let mut exit = None;
+        // The face the photon last reflected off, if it has not crossed the
+        // block since. It may not leave through that face: the only thing
+        // between it and the surface is the nudge that got it back inside, and
+        // a step of a hundredth of a millimetre back to the face it just left is
+        // not an exit, it is the same interface again. Without this the photon
+        // bounces on one square nanometre of the top face until its budget runs
+        // out, which is what "every photon of a normal-incidence beam is
+        // trapped" was.
+        let mut reflected_off: Option<Face> = None;
         loop {
-            let Some(next) = self.block.exit(position, heading) else {
+            let Some(next) = self
+                .block
+                .exit_where(position, heading, |face| Some(face) != reflected_off)
+            else {
                 // A ray inside the block always meets a face, so this is a ray
                 // that has already left; the caller's next step is its problem.
                 fate = Fate::Absorbed;
@@ -159,6 +201,14 @@ impl Transport {
             path += next.distance;
             // Lost on the way: the probability of surviving this step is
             // `exp(−d/ℓ)`, and a draw above it means the photon died here.
+            //
+            // `>` and not `>=`: a generator's range is `[0, 1)`, so a draw of
+            // exactly 1.0 cannot come from a real stream, and the only way to
+            // produce one is a test that passes a constant. With `>=` such a
+            // constant *is* absorbed, because no survival probability is above
+            // 1.0 — and then the natural "never reflect" draw, a constant 1.0,
+            // absorbs every photon at the first face. `NO_REFLECTION` is 1.0 and
+            // works only with this comparison; the two are one decision.
             let survival = (-next.distance / self.optical.absorption_mm).exp();
             // One draw per step, whether or not absorption is modelled, so the
             // random stream advances identically for two traces that differ
@@ -182,13 +232,22 @@ impl Transport {
                     break;
                 }
                 heading = heading.reflect(next.normal).normalized()?;
-                position = next.point + heading.scale(1e-6);
+                // The photon is back inside the block, a hundredth of a
+                // millimetre in from the face it reflected off. The nudge is
+                // along the *face's normal* and not along the new heading: a
+                // reflection at normal incidence sends the heading straight
+                // back out, so a nudge along it lands outside the block, and a
+                // nudge of a nanometre is inside the block's own surface
+                // tolerance and is still "on the face". Both mistakes made the
+                // next step zero-length.
+                position = next.point - next.normal.scale(REFLECTION_NUDGE_MM);
                 // A reflected photon stays inside, or the block's own convexity
                 // is wrong; the guard keeps the loop from wandering if it is.
-                if !self.block.contains(position) {
+                if !self.block.strictly_contains(position) {
                     fate = Fate::Trapped;
                     break;
                 }
+                reflected_off = Some(next.face);
                 continue;
             }
             fate = Fate::Escaped;
@@ -314,8 +373,13 @@ mod tests {
         let traced = transport
             .trace(Vec3::ZERO, Vec3::new(0.5, 0.0, 1.0), Polarisation::S, &mut unit)
             .unwrap();
-        assert!(matches!(traced.fate, Fate::Trapped | Fate::Absorbed), "{:?}", traced.fate);
-        assert!(traced.bounces <= 3);
+        // Exactly the limit and not "at most the limit": the loop counts the
+        // bounce that crossed it and stops there. The earlier `<=` assertion
+        // passed for the wrong reason for a while — the trace ended early
+        // because the photon could not leave through a face it had just left,
+        // and never reached the limit at all.
+        assert_eq!(traced.fate, Fate::Trapped, "{:?}", traced.fate);
+        assert_eq!(traced.bounces, 4, "{:?}", traced.bounces);
     }
 
     #[test]
@@ -344,3 +408,4 @@ mod tests {
         assert!(escaped > 0, "no photon ever escaped at n = 1.5");
     }
 }
+

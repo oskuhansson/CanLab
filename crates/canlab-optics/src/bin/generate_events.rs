@@ -53,7 +53,6 @@ fn main() -> std::io::Result<()> {
     let theta = medium.angle_at_unit_beta();
 
     let mut events: Vec<String> = Vec::new();
-    let mut written = 0;
     // Twelve muons, each one a photon launched around the cone. A single muon
     // sprays many photons in reality; the fixture needs directions, not counts.
     for muon in 0..12 {
@@ -148,6 +147,7 @@ fn main() -> std::io::Result<()> {
     // Joined with a comma and a newline each: the first version appended a
     // trailing newline into one `String`, which produced an array with no
     // commas between its objects and a fixture no JSON reader could open.
+    let events_count = events.len();
     let events = events.join(",\n");
     let document = format!(
         "{{\n  \"schema\": \"cansat-muon-events/1\",\n  \"parameters\": {{\"radius_mm\": {radius}, \"thickness_mm\": {thickness}, \"index\": {index}, \"index_outside\": {outside}, \"theta_deg\": {theta_deg}}},\n  \"events\": [\n{events}\n  ]\n}}\n",
@@ -155,7 +155,11 @@ fn main() -> std::io::Result<()> {
     );
     let mut file = std::fs::File::create(&out_path)?;
     file.write_all(document.as_bytes())?;
-    println!("wrote {out_path}: {written} events, cone at {:.2} degrees", theta.to_degrees());
+    println!(
+        "wrote {out_path}: {} events, cone at {:.2} degrees",
+        events_count,
+        theta.to_degrees()
+    );
     Ok(())
 }
 

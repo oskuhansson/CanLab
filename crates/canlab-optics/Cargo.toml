@@ -10,6 +10,9 @@ canlab-core = { path = "../canlab-core" }
 canlab-parse = { path = "../canlab-parse" }
 canlab-tex = { path = "../canlab-tex" }
 canlab-solver = { path = "../canlab-solver" }
+# The waveform a timing study is read from is a curve, and a curve is the plot
+# crate's type: the histogram produces one and does not re-implement drawing.
+canlab-plot = { path = "../canlab-plot" }
 
 [dev-dependencies]
 # `free_symbols` is how the validation test reads a parsed expression's

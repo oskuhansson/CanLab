@@ -13,7 +13,7 @@
 //! `n = 1.33` gives 41.2° at unit β, fused silica at `n = 1.46` gives 46.8°, and
 //! a block at `n = 1.84` gives 57.1°.
 
-use canlab_core::{Program, SymbolId};
+use canlab_core::Program;
 use canlab_optics::cherenkov::{
     BLUE_NM, RED_NM, Cherenkov, default_plastic, mean_wavelength_nm, medium_index,
     photons_per_mm,

@@ -60,6 +60,14 @@ pub struct SvgOptions {
     pub stroke: String,
     /// Draw the zero axes and their ticks when they fall inside the view.
     pub show_axes: bool,
+    /// Vertical bands behind the curve, as `(from, to, colour)` in data `x`.
+    ///
+    /// This is how a sign table is *rendered*: the pieces between critical
+    /// points are shaded by the direction the function is going, and the
+    /// picture says what the table says. A band is drawn before the curve so
+    /// that the curve stays on top of it, and a band outside the view is
+    /// clipped to it rather than drawn off the page.
+    pub bands: Vec<(f64, f64, String)>,
 }
 
 impl Default for SvgOptions {
@@ -71,6 +79,7 @@ impl Default for SvgOptions {
             y_range: (-10.0, 10.0),
             stroke: "#1e88e5".to_string(),
             show_axes: true,
+            bands: Vec::new(),
         }
     }
 }
@@ -103,6 +112,39 @@ pub fn to_svg(curve: &Curve, opts: &SvgOptions) -> String {
 
     if opts.show_axes {
         write_axes(&mut out, opts);
+    }
+
+    // The bands go under the curve and over the axes: a shaded piece is a
+    // background to the function, not a second curve.
+    for (from, to, colour) in &opts.bands {
+        let (x0, x1) = opts.x_range;
+        let (from, to) = (from.max(x0), to.min(x1));
+        // `!(from < to)` and not `from >= to`: a `NaN` band end compares false
+        // to everything, and this form rejects it. The file uses the same idiom
+        // for the view's spans, and clippy's suggestion would let a `NaN`
+        // through.
+        if !(from < to) {
+            continue;
+        }
+        let Some(left) = map_to_pixels([from, opts.y_range.0], opts) else {
+            continue;
+        };
+        let Some(right) = map_to_pixels([to, opts.y_range.1], opts) else {
+            continue;
+        };
+        let width = right[0] - left[0];
+        let height = left[1] - right[1];
+        if !(width > 0.0) || !(height > 0.0) {
+            continue;
+        }
+        out.push_str(&format!(
+            "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{}\"/>",
+            fmt_coord(left[0]),
+            fmt_coord(right[1]),
+            fmt_coord(width),
+            fmt_coord(height),
+            escape_xml(colour)
+        ));
     }
 
     let stroke = escape_xml(&opts.stroke);
@@ -405,6 +447,7 @@ mod tests {
             y_range: (-5.0, 5.0),
             stroke: "#1e88e5".to_string(),
             show_axes: true,
+            bands: Vec::new(),
         }
     }
 
@@ -492,6 +535,7 @@ mod tests {
             y_range: (0.0, 7.0),
             stroke: "#000000".to_string(),
             show_axes: false,
+            bands: Vec::new(),
         };
         let p = map_to_pixels([1.0, 2.0], &o).expect("finite point maps");
         assert!((p[0] - 800.0 / 3.0).abs() < 1e-6, "px = {}", p[0]);
@@ -584,6 +628,7 @@ mod tests {
             y_range: (f64::NAN, 1.0),
             stroke: "#000000".to_string(),
             show_axes: true,
+            bands: Vec::new(),
         };
         let svg = to_svg(&curve_of(vec![vec![[1.0, 1.0], [2.0, 2.0]]]), &o);
         assert!(svg.starts_with("<svg"));
@@ -608,4 +653,37 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn a_band_is_drawn_under_the_curve_and_clipped_to_the_view() {
+        // The sign table's rendering. A band is a rectangle behind the curve;
+        // one that starts outside the view is clipped to it rather than drawn
+        // off the page, and one that is entirely outside is not drawn at all.
+        let curve = Curve {
+            segments: vec![vec![[0.0, 0.0], [1.0, 1.0]]],
+        };
+        let svg = to_svg(
+            &curve,
+            &SvgOptions {
+                x_range: (0.0, 2.0),
+                y_range: (-1.0, 1.0),
+                bands: vec![
+                    (-5.0, 0.5, "#c8e6c9".to_string()),
+                    (0.5, 9.0, "#ffcdd2".to_string()),
+                    (10.0, 20.0, "#000000".to_string()),
+                ],
+                ..SvgOptions::default()
+            },
+        );
+        // Two of the three bands are inside the view; the third is not drawn.
+        assert_eq!(svg.matches("fill=\"#c8e6c9\"").count(), 1);
+        assert_eq!(svg.matches("fill=\"#ffcdd2\"").count(), 1);
+        assert_eq!(svg.matches("fill=\"#000000\"").count(), 0);
+        // The bands come before the curve, so the curve is on top.
+        let band = svg.find("fill=\"#c8e6c9\"").expect("a band");
+        let line = svg.find("<polyline").expect("the curve");
+        assert!(band < line, "the band must be drawn under the curve");
+        // And no coordinate is non-finite, which is the document's promise.
+        assert!(!svg.contains("NaN") && !svg.contains("inf"));
+    }
+
 }
