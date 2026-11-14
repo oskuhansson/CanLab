@@ -248,6 +248,12 @@ struct CasApp {
     third_coordinates: Vec<SymbolId>,
     /// Points where two curves of a system cross, refined to a coordinate.
     intersections: Vec<Intersection>,
+    /// The sign table of the document's expression on the plot's `x` window.
+    ///
+    /// Computed where the curves are built and not in the panel: a panel draws
+    /// on every frame, and a sign table searches for critical points. Empty when
+    /// the document is not a one-variable expression.
+    sign_table: Vec<canlab_parse::calculus::Piece>,
     /// Undo history for the document.
     undo: undo::Undo,
     /// When the document last changed, so a save can wait for a pause.
@@ -292,6 +298,7 @@ impl CasApp {
             parameters: Vec::new(),
             third_coordinates: Vec::new(),
             intersections: Vec::new(),
+            sign_table: Vec::new(),
             undo: undo::Undo::new(),
             dirty_since: None,
             // A test that restored the last session would depend on whichever
@@ -362,9 +369,11 @@ impl CasApp {
             self.curves.clear();
             self.curve_paints.clear();
             self.plot_note.clear();
+            self.sign_table.clear();
             return;
         }
         panels::build_curve(self);
+        self.sign_table = panels::build_sign_table(self);
     }
 
     /// Rebuild the expression and everything derived from it.

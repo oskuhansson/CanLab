@@ -606,6 +606,56 @@ fn result_card(app: &CasApp, ui: &mut Ui) {
                     .color(crate::theme::weak()),
             );
         }
+        // The sign table is the answer to "where is this increasing", which the
+        // plot shows as a shape and cannot say in words.
+        if !app.sign_table.is_empty() {
+            sign_table_body(app, ui);
+        }
+    }
+}
+
+/// The sign table of the document's expression, or an empty one.
+///
+/// Only a one-variable document has one: a sign table is "where is this
+/// increasing", and a surface has no single answer. The interval is the plot's
+/// own `x` window, so the table and the picture describe the same piece of the
+/// curve — the same rule `canlab sign` follows.
+pub fn build_sign_table(app: &CasApp) -> Vec<canlab_parse::calculus::Piece> {
+    let (Some(expression), Some(var)) = (&app.expr, app.x_axis) else {
+        return Vec::new();
+    };
+    // A sign table that failed is not an error to show: the expression may be
+    // outside what the search can certify, and the result panel already says
+    // what the answer is.
+    canlab_parse::calculus::sign_table(expression, var, app.x_min, app.x_max).unwrap_or_default()
+}
+
+/// The sign table, as the words `canlab sign` prints.
+///
+/// The same three-line answer the CLI gives, in the same words, so a reader who
+/// has seen one recognises the other.
+fn sign_table_body(app: &CasApp, ui: &mut Ui) {
+    ui.add_space(6.0);
+    ui.label(
+        RichText::new("sign table")
+            .small()
+            .color(crate::theme::weak()),
+    );
+    let weak = crate::theme::weak();
+    for piece in &app.sign_table {
+        let (word, colour) = match piece.direction {
+            1 => ("increasing", crate::theme::accent()),
+            -1 => ("decreasing", weak),
+            _ => ("constant", weak),
+        };
+        ui.label(
+            RichText::new(format!(
+                "{word} on ({:.4}, {:.4})",
+                piece.from, piece.to
+            ))
+            .size(12.0)
+            .color(colour),
+        );
     }
 }
 
@@ -2233,6 +2283,67 @@ fn vertical_extent(curve: &Curve) -> Option<(f64, f64)> {
         span * 0.10
     };
     Some((min - pad, max + pad))
+}
+
+#[cfg(test)]
+mod sign_table_tests {
+    use super::*;
+
+    fn app_with(document: &str) -> CasApp {
+        let mut app = CasApp::new();
+        app.field = canlab_input::MathField::from_latex(document).expect("a document");
+        app.x_min = -1.0;
+        app.x_max = 3.0;
+        app.recompute();
+        app
+    }
+
+    #[test]
+    fn a_cubic_gets_the_table_the_cli_prints() {
+        // `x³ − 3x² + 1` on `[−1, 3]`: increasing, decreasing, increasing, with
+        // the critical points at 0 and 2. The same three pieces `canlab sign`
+        // prints, so the panel and the CLI cannot disagree about the curve.
+        let app = app_with("x^3 - 3*x^2 + 1");
+        let directions: Vec<i8> = app.sign_table.iter().map(|piece| piece.direction).collect();
+        assert_eq!(directions, vec![1, -1, 1], "{:?}", app.sign_table);
+        assert!((app.sign_table[0].from - (-1.0)).abs() < 1e-9);
+        assert!((app.sign_table[0].to - 0.0).abs() < 1e-6);
+        assert!((app.sign_table[1].to - 2.0).abs() < 1e-6);
+        assert!((app.sign_table[2].to - 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_document_that_has_no_sign_table_gets_an_empty_one() {
+        // An equation is not a function of one variable, so it has no sign
+        // table — and the panel must not invent one.
+        let app = app_with("x^2 + y^2 = 1");
+        assert!(app.sign_table.is_empty(), "{:?}", app.sign_table);
+        // A constant is one piece, and it is constant.
+        let app = app_with("5");
+        assert!(
+            app.sign_table.iter().all(|piece| piece.direction == 0),
+            "{:?}",
+            app.sign_table
+        );
+    }
+
+    #[test]
+    fn the_table_follows_the_plot_window() {
+        // The interval is the plot's own window, so a narrower window gives a
+        // narrower table: the same rule `canlab sign --xmin --xmax` follows.
+        let mut app = app_with("x^3 - 3*x^2 + 1");
+        let wide = app.sign_table.len();
+        app.x_min = 0.5;
+        app.x_max = 1.5;
+        app.recompute();
+        assert!(
+            app.sign_table.len() < wide,
+            "narrowing the window did not narrow the table: {:?}",
+            app.sign_table
+        );
+        assert!((app.sign_table[0].from - 0.5).abs() < 1e-9);
+        assert!((app.sign_table.last().expect("a piece").to - 1.5).abs() < 1e-9);
+    }
 }
 
 #[cfg(test)]
