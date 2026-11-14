@@ -648,3 +648,31 @@ the only reason it was found is that the merge was followed by the suite rather
 than by a commit. The same applies to the opposite choice: the version that was
 kept answers its six tests in 0.01 s, which is evidence, where "this algorithm
 looks cleaner" is not.
+
+## A picture is a claim, and I could not verify this one
+
+An SVG writer for the surface mesh looked straightforward: project the vertices
+with `canlab-scene`, sort back to front, fill each triangle by its shade. The
+structural tests passed — one polygon per visible triangle, three points each, no
+`NaN` in any attribute, the depth order monotone.
+
+Then I looked at the picture. `z = x² + y²` came out as a pinched sail with two
+spikes, not a bowl.
+
+The checks that had passed were all about *shape of the document* and none about
+*shape of the surface*. A horizontal plane rendered exactly right (412 × 299 px,
+the correct foreshortening for `[−2, 2]²` at 34°), so the projection and the pixel
+mapping are sound; pulling the camera back changed the size and nothing else, so
+it is not perspective. The shading said the far rim was low-`z` when a bowl's far
+rim must be high-`z`, which means the picture is showing the surface inside-out.
+
+I did not find the cause. So the code was reverted rather than committed, and the
+tree is exactly as it was.
+
+The rule this is an instance of: **a rendering is an answer, and an answer that
+has not been looked at is not verified.** Every other module in this project can
+be checked by asserting a number; a picture can only be checked by looking at it,
+and "the SVG has 288 polygons" is not a check of whether the surface is in them.
+The next attempt should start from a case whose picture is unambiguous — a
+horizontal plane from above, a sphere — and compare against the known silhouette
+before adding shading or a camera.
