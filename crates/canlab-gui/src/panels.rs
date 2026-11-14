@@ -1436,6 +1436,25 @@ fn draw_chrome(
     ] {
         if let (Some(a), Some(b)) = (to_screen(origin), to_screen(end)) {
             painter.line_segment([a, b], axis);
+            // An arrowhead, because an axis *is* a vector: a bare line says
+            // "this direction" and a head says "this vector", which is the
+            // difference the roadmap's "arrows for vectors" is about. Two short
+            // segments back from the tip, at 25°, in screen space — so the head
+            // keeps its shape whatever the orbit.
+            let along = b - a;
+            if along.length() > 1.0 {
+                let direction = along.normalized();
+                let back = direction * -10.0;
+                let turn = |angle: f32| {
+                    egui::vec2(
+                        back.x * angle.cos() - back.y * angle.sin(),
+                        back.x * angle.sin() + back.y * angle.cos(),
+                    )
+                };
+                for angle in [0.44_f32, -0.44] {
+                    painter.line_segment([b, b + turn(angle)], axis);
+                }
+            }
             painter.text(
                 b + egui::vec2(6.0, 0.0),
                 egui::Align2::LEFT_CENTER,
@@ -3136,6 +3155,41 @@ mod surface_tests {
         app.field = canlab_input::MathField::from_latex("x^2 + 1").expect("an expression");
         app.recompute();
         assert!(build_trajectory(&app).is_none());
+    }
+
+    #[test]
+    fn the_axes_are_drawn_as_arrows() {
+        // An axis is a vector, and a bare line says "this direction" where a head
+        // says "this vector". Three axes, each with a line and two head segments,
+        // is nine axis segments; without the heads it is three.
+        let mut app = app_with("0.2*(x^2 + y^2)");
+        app.view_3d = true;
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(400.0, 400.0),
+            )),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(raw, |ui| plot(&mut app, ui));
+        output.textures_delta.clear();
+        // A `Shape::LineSegment` is one segment; the grid contributes many, so
+        // count only the ones as thick as an axis.
+        let thick = output
+            .shapes
+            .iter()
+            .filter(|clipped| {
+                matches!(
+                    &clipped.shape,
+                    egui::Shape::LineSegment { stroke, .. } if stroke.width > 1.0
+                )
+            })
+            .count();
+        assert!(
+            thick >= 9,
+            "only {thick} thick segments: the axes have no arrowheads"
+        );
     }
 
     #[test]
