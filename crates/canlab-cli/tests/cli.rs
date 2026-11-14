@@ -264,7 +264,10 @@ fn compile_prints_the_lua_and_the_wgsl() {
     assert!(stdout.contains("local kernel_expression = "), "{stdout}");
     assert!(stdout.contains("math.sin(x)"), "{stdout}");
     assert!(stdout.contains("-- WGSL"), "{stdout}");
-    assert!(stdout.contains("fn kernel() -> f32 {"), "{stdout}");
+    // The signature names the kernel's parameters. `x` is read and never
+    // assigned, so it is a parameter — the compiler used to discover parameters
+    // only from assignments, which left `fn kernel()` calling an undeclared `x`.
+    assert!(stdout.contains("fn kernel(x: f32) -> f32 {"), "{stdout}");
     assert!(stdout.contains("pow(x, 2.0)"), "{stdout}");
     assert!(stdout.contains("sin(x)"), "{stdout}");
 }
@@ -280,7 +283,7 @@ fn compile_prints_only_the_lua_or_only_the_wgsl_when_asked() {
     let (ok, stdout, stderr) = canlab(&["compile", "x^2", "--wgsl-only"]);
     assert!(ok, "failed: {stderr}");
     assert!(!stdout.contains("-- Lua"), "{stdout}");
-    assert!(stdout.contains("fn kernel() -> f32 {"), "{stdout}");
+    assert!(stdout.contains("fn kernel(x: f32) -> f32 {"), "{stdout}");
 }
 
 #[test]

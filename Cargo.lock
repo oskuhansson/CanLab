@@ -2264,6 +2264,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "canlab-gpu"
+version = "0.1.0"
+dependencies = [
+ "canlab-core",
+ "pollster",
+ "wgpu",
+]
+
+[[package]]
 name = "canlab-gui"
 version = "0.1.0"
 dependencies = [

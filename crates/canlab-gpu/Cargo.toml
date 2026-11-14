@@ -1,0 +1,15 @@
+[package]
+name = "canlab-gpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Probe the adapter and run a compiled kernel on it; the GPU half of W7"
+
+[dependencies]
+# The only crate in the workspace that depends on a graphics stack. Everything
+# else is pure, and this one is the boundary: it exists so that the rest can be
+# tested without a driver.
+wgpu = { version = "30.0.1", default-features = false, features = ["vulkan", "wgsl", "std"] }
+canlab-core = { path = "../canlab-core" }
+# `enumerate_adapters` is async in wgpu 30, and a probe binary has no runtime.
+pollster = "1.0.1"

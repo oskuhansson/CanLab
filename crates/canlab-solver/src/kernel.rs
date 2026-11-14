@@ -864,7 +864,14 @@ mod tests {
         let expression = pow(sym("x"), int(2));
         let artefact = compile_expression(&expression, "f", &[x()]).expect("a kernel");
         assert_eq!(artefact.lua, "local f = (x ^ 2)\nreturn f\n");
-        assert!(artefact.wgsl.starts_with("fn kernel()"), "{}", artefact.wgsl);
+        // The signature names `x`: it is read and never assigned, so it is a
+        // parameter. The compiler used to discover parameters only from
+        // assignments, which left the emitted function calling an undeclared `x`.
+        assert!(
+            artefact.wgsl.starts_with("fn kernel(x: f32)"),
+            "{}",
+            artefact.wgsl
+        );
         assert!(artefact.wgsl.contains("pow(x, 2.0)"), "{}", artefact.wgsl);
         // `f` is a local of the program, not a free name: the compiler reads
         // its value and there is no `f` in the signature.

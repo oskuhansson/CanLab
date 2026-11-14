@@ -899,7 +899,16 @@ impl Compiler {
     fn expr(&mut self, expression: &Expr) -> Result<String, Diagnostic> {
         match expression {
             Expr::Number(value) => Ok(format_float(*value)),
-            Expr::Name(name) => Ok(name.clone()),
+            Expr::Name(name) => {
+                // A name that is read and never assigned is a **parameter**: the
+                // kernel takes it from the caller. The first version only
+                // discovered parameters from assignments, so `return x * 2` had
+                // no parameters at all and could not be run with an input.
+                if !self.locals.contains(name) && !self.parameters.contains(name) {
+                    self.parameters.push(name.clone());
+                }
+                Ok(name.clone())
+            }
             Expr::Unary(operator, operand) => {
                 let inner = self.expr(operand)?;
                 Ok(match *operator {
