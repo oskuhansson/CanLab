@@ -100,6 +100,13 @@ fn draw_root(app: &mut CasApp, ctx: &egui::Context) -> egui::Rect {
 
 fn main() {
     App::new()
+        // A GUI, not a game: the default is `WinitSettings::game()`, which
+        // updates *continuously* while the window has focus — a busy loop that
+        // renders an empty scene as fast as the machine allows and turns a
+        // laptop into a slideshow. `desktop_app` updates on events instead,
+        // which is what egui asks for: it requests a repaint when something
+        // actually changed.
+        .insert_resource(bevy::winit::WinitSettings::desktop_app())
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: String::from("CanLab — LaTeX algebra"),
@@ -120,6 +127,23 @@ fn main() {
         .add_systems(Startup, setup_camera)
         .add_systems(EguiPrimaryContextPass, draw_frame)
         .run();
+}
+
+/// The six designs' numbers, computed once per process.
+///
+/// `Design::metrics` runs a 200 × 200 quadrature for each tracker and a
+/// Cramér–Rao bound for the Cherenkov block — tens of milliseconds. Calling it
+/// from the Designs panel's list loop, which runs every frame, is what turned a
+/// laptop into a slideshow. The designs are constants, so their numbers are too.
+pub fn design_metrics() -> &'static [canlab_muon::designs::Metrics] {
+    static METRICS: std::sync::OnceLock<Vec<canlab_muon::designs::Metrics>> =
+        std::sync::OnceLock::new();
+    METRICS.get_or_init(|| {
+        canlab_muon::designs::Design::all()
+            .iter()
+            .map(canlab_muon::designs::Design::metrics)
+            .collect()
+    })
 }
 
 /// The latest Solve outcome, kept separate from the editor's displayed LaTeX
@@ -2042,6 +2066,22 @@ fn friendly_error(error: &ToExprError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_design_metrics_are_computed_once() {
+        // The panel's list loop runs every frame, and `Design::metrics` is a
+        // 200 × 200 quadrature plus a Cramér–Rao bound. The cache is what keeps
+        // that off the frame; this is the assertion that it is a cache and not a
+        // call that happens to be cheap.
+        let first = design_metrics();
+        let second = design_metrics();
+        assert_eq!(first.len(), canlab_muon::designs::Design::all().len());
+        assert!(std::ptr::eq(first, second), "the metrics were recomputed");
+        // And the numbers are the ones the tables quote.
+        let tracker = &first[2];
+        assert!((tracker.cost_eur - 277.7).abs() < 0.1, "{}", tracker.cost_eur);
+        assert_eq!(tracker.channels, 8);
+    }
 
     /// Paint one complete frame headlessly.
     ///

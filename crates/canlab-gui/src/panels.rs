@@ -3310,7 +3310,9 @@ pub fn designs(app: &mut CasApp, ui: &mut Ui) {
 
     egui::ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
         for (index, design) in designs.iter().enumerate() {
-            let metrics = design.metrics();
+            // Cached: `metrics()` is a quadrature and a bound, not a per-frame
+            // cost. See `crate::design_metrics`.
+            let metrics = crate::design_metrics()[index];
             let label = format!(
                 "{} — {:.0} EUR, {:.0} g, {} sensors",
                 design.name, metrics.cost_eur, metrics.detector_g, metrics.channels
@@ -3331,7 +3333,7 @@ pub fn designs(app: &mut CasApp, ui: &mut Ui) {
 
     // The numbers, then the sketch.
     if selected < designs.len() {
-        let metrics = designs[selected].metrics();
+        let metrics = crate::design_metrics()[selected];
         ui.horizontal_wrapped(|ui| {
             ui.label(format!("{:.0} EUR", metrics.cost_eur));
             ui.label(format!("{:.0} g", metrics.detector_g));
