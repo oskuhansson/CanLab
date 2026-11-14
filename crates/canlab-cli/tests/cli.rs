@@ -27,6 +27,32 @@ fn temp_svg(name: &str) -> PathBuf {
 }
 
 #[test]
+fn eval_marks_an_approximate_integral_with_its_bound() {
+    // `\int_0^1 e^{-x^2} dx` has no elementary closed form, so the answer is
+    // numeric and carries a one-sided bound. Printing the value alone — which
+    // is what `parse_latex` forced, because an `Expr` has nowhere to put a
+    // bound — is the "approximate and unmarked" outcome the integral module's
+    // own header says the CAS is built against.
+    let (ok, stdout, stderr) = canlab(&["eval", r"\int_0^1 e^{-x^2} dx"]);
+    assert!(ok, "stderr: {stderr}");
+    assert!(
+        stdout.contains("approximate: within"),
+        "the bound is not printed: {stdout}"
+    );
+    // The value is the one the integral gives, and the bound is small.
+    assert!(stdout.contains("0.74682"), "{stdout}");
+    // An *exact* integral prints no marker: a bound of zero is not a bound.
+    let (ok, stdout, stderr) = canlab(&["eval", r"\int_1^2 \frac{1}{x^2} dx"]);
+    assert!(ok, "stderr: {stderr}");
+    assert!(!stdout.contains("approximate"), "{stdout}");
+    assert!(stdout.contains("1/2"), "{stdout}");
+    // And a plain expression has no bound either.
+    let (ok, stdout, _) = canlab(&["eval", "2x + 1"]);
+    assert!(ok);
+    assert!(!stdout.contains("approximate"), "{stdout}");
+}
+
+#[test]
 fn eval_normalizes_and_prints_latex() {
     let (ok, stdout, stderr) = canlab(&["eval", "2x + 3x"]);
     assert!(ok, "failed: {stderr}");

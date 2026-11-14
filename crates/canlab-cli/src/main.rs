@@ -110,9 +110,21 @@ fn main() -> ExitCode {
 
 fn eval_command(args: &[String]) -> Result<(), String> {
     let source = args.first().ok_or("eval needs a LaTeX expression")?;
-    let expr = parse_or_err(source)?;
+    // `parse_statement` and not `parse_latex`: a definite integral that is
+    // numeric carries a one-sided error bound, and `parse_latex` collapses it to
+    // a bare float because an `Expr` has nowhere to put it. `canlab eval
+    // '\int_0^1 e^{-x^2} dx'` printed `0.746824132812427` with no marker, which
+    // is exactly the "approximate and unmarked" outcome the integral module's
+    // own header says the CAS is built against.
+    let statement = canlab_parse::parse_statement(source).map_err(|e| e.to_string())?;
+    let expr = statement.to_expr();
     println!("{}", node(&expr));
     println!("{}", to_latex(&expr));
+    if let Some(error) = statement.error() {
+        // The bound is one-sided and in the value's own units: the true value is
+        // within `error` of the answer above.
+        println!("approximate: within {error:e} of the true value");
+    }
     Ok(())
 }
 

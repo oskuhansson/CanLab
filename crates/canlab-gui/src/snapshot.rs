@@ -289,56 +289,81 @@ fn the_rendered_frame_has_no_missing_glyph() {
     let _frame = frame_lock();
     let ctx = egui::Context::default();
     crate::theme::install(&ctx);
-    let mut raw = egui::RawInput::default();
-    raw.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(64.0, 64.0)));
-    let mut output = ctx.run_ui(raw, |ui| {
-        // The app's own panels, in a placeholder-free run: the document that
-        // exercises every result shape the panels print.
-        let mut app = CasApp::new();
-        app.field = MathField::from_latex("x^2 + y^2 = 1").expect("a circle");
-        app.recompute();
-        app.draw(ui);
-    });
-    output.textures_delta.clear();
-    let _ = output;
-    // The glyphs the app printed this frame are those `draw` asked to lay out;
-    // `has_glyphs` on the strings the app itself produced is the question.
-    let mut missing = Vec::new();
-    for text in app_texts() {
-        for character in text.chars().filter(|c| !c.is_ascii() && !c.is_control()) {
-            let font = egui::FontId::proportional(15.0);
-            if !ctx.fonts_mut(|fonts| fonts.has_glyph(&font, character))
-                && !missing.contains(&character)
-            {
-                missing.push(character);
-            }
-        }
-    }
-    assert!(missing.is_empty(), "the frame draws tofu for {missing:?}");
-}
-
-/// The strings the result panel prints for the document shapes it supports.
-fn app_texts() -> Vec<String> {
-    let mut texts = Vec::new();
+    // Every document shape the panels print, each rendered through the frame.
+    // One document would leave a panel's own vocabulary unchecked, and the four
+    // are what `app_texts` used to cover — this keeps that coverage and takes
+    // the characters from what is actually drawn.
+    let mut printed: Vec<(egui::FontId, String)> = Vec::new();
     for document in [
         "x^2 + y^2 = 1",
         "x^2 = 4",
         r"\sin x = \frac{1}{2}",
         "x^2 + 1 = 0",
     ] {
-        let mut app = CasApp::new();
-        if let Ok(field) = MathField::from_latex(document) {
-            app.field = field;
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect =
+            Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(64.0, 64.0)));
+        let mut output = ctx.run_ui(raw, |ui| {
+            let mut app = CasApp::new();
+            app.field = MathField::from_latex(document).expect("a document");
             app.recompute();
-            texts.push(app.plot_note.clone());
-            texts.push(app.result_latex.clone());
-            texts.push(app.result_plain.clone());
-            if let Some(error) = &app.error {
-                texts.push(error.clone());
+            app.draw(ui);
+        });
+        output.textures_delta.clear();
+        for clipped in &output.shapes {
+            collect_text(&clipped.shape, &mut printed);
+        }
+    }
+    // The characters are collected from **the frame's own shapes**, which is
+    // what the doc comment above always claimed and what the first version of
+    // this test did not do: it discarded `output` and walked `app_texts()`, four
+    // fixed documents, so it could pass while the frame drew tofu for a
+    // character none of those documents contained. `Shape::Text` carries the
+    // galley the layout actually produced, which is the text on screen.
+    assert!(
+        !printed.is_empty(),
+        "the frame laid out no text at all, so this test would pass vacuously"
+    );
+    let mut missing = Vec::new();
+    for (font, text) in &printed {
+        for character in text.chars().filter(|c| !c.is_ascii() && !c.is_control()) {
+            if !ctx.fonts_mut(|fonts| fonts.has_glyph(font, character))
+                && !missing.contains(&character)
+            {
+                missing.push(character);
             }
         }
     }
-    texts
+    assert!(
+        missing.is_empty(),
+        "the frame draws tofu for {missing:?} (in {} text run(s))",
+        printed.len()
+    );
+}
+
+/// Every text run in a shape, with the font it was laid out in.
+///
+/// A `Shape::Vec` nests, so this recurses; everything else is geometry that
+/// carries no characters.
+fn collect_text(shape: &egui::Shape, out: &mut Vec<(egui::FontId, String)>) {
+    match shape {
+        egui::Shape::Text(text) => {
+            let font = text
+                .galley
+                .job
+                .sections
+                .first()
+                .map(|section| section.format.font_id.clone())
+                .unwrap_or_else(|| egui::FontId::proportional(15.0));
+            out.push((font, text.galley.text().to_string()));
+        }
+        egui::Shape::Vec(shapes) => {
+            for inner in shapes {
+                collect_text(inner, out);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// No character the app can draw is a missing glyph in the font that draws it.
