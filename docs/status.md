@@ -26,6 +26,7 @@ carry the same claims in more detail.
 | W7.4 on the adapter | `crates/canlab-gpu` | The photon kernel runs on Vulkan llvmpipe from the same source the interpreter runs: 15 photons, worst relative difference `0e0`, random stream included. The generator is a `u32` xorshift because WGSL has no `u64`. |
 | W7.4 light kernel | `crates/canlab-optics/src/kernel.rs` | The photon kernel in the Lua subset: Fresnel, total internal reflection, a per-photon random stream, path length out. `compile` emits WGSL from the same text `interpret` runs, so one source has two executions. `f32` vs `f64` agree to `1e-6`; the kernel and a Rust reference agree to `1e-12`. **Nothing executes WGSL**, and the throughput figure is unmeasured. |
 | W3.3 sign table in the GUI | `crates/canlab-gui/src/panels.rs` | The table now appears under the result, in the CLI's own words, computed where the curves are built and over the plot's own window. Three tests. |
+| W8.5 picking and chrome | `crates/canlab-scene/src/pick.rs`, `panels.rs` | Ray picking by Möller–Trumbore on the CPU, and axes, grid and tick labels in the 3D mode. A sphere pick is on the surface and within one pixel. **No hover wiring, no zoom/pan in 3D, no vector arrows, no ODE path.** |
 | W8.4 the 3D viewport | `crates/canlab-gui/src/panels.rs` | The plot panel's 3D mode: the surface in the same canvas, orbited by dragging, in `egui` because Bevy does not fit here. One culling rule shared with `canlab surface`. **No lighting, no axes, no depth buffer.** |
 | W8.4 surface as SVG | `crates/canlab-scene/src/svg.rs`, `canlab surface` | A surface written as an SVG with back-face culling and the painter's algorithm. A shallow dish renders as a dish. **Not a viewport:** no orbit, no zoom, no lighting. |
 | W8.3 closed | `crates/canlab-scene/src/implicit.rs` | The surface net closes: a quad's four cells all have `c[axis] == corner[axis]`, and the first version moved the holder up one. A unit sphere went from 270 boundary edges and `V − E + F = −19` to **0 and 2**. |
@@ -85,14 +86,14 @@ carry the same claims in more detail.
 
 ## Test counts, last run
 
-`cargo test --offline -j 2` on the tree this note describes: **1257 passed, 0
+`cargo test --offline -j 2` on the tree this note describes: **1263 passed, 0
 failed, 5 ignored.** The five ignored are the snapshot frames, and they are
 ignored because this machine is not the one they were rendered on (see below).
 
 | Suite | Count |
 |---|---|
 | `canlab-solver` | 216 |
-| `canlab-gui` | 132 + 5 ignored |
+| `canlab-gui` | 133 + 5 ignored |
 | `canlab-cli` | 5 + 26 + 10 |
 | `canlab-core` | 100 + 1 + 6 + 10 |
 | `canlab-parse` | 101 |
@@ -102,7 +103,7 @@ ignored because this machine is not the one they were rendered on (see below).
 | `canlab-poly` | 16 + 10 |
 | `canlab-ode` | 26 + 8 |
 | `canlab-mathview` | 3 + 5 + 33 |
-| `canlab-scene` | 28 |
+| `canlab-scene` | 33 |
 | `canlab-tex` | 43 |
 | `canlab-num` | 45 |
 | `canlab-corpus` | 79 |
