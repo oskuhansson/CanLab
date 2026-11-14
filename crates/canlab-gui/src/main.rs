@@ -263,6 +263,13 @@ struct CasApp {
     /// The surface camera's azimuth and elevation, in radians. Kept across
     /// documents so that turning the surface is not undone by typing.
     surface_angles: (f64, f64),
+    /// How far the 3D camera is pulled in or pushed out, as a multiplier on the
+    /// distance that frames the surface. `1.0` is the framing the mesh was fitted
+    /// to.
+    surface_zoom: f64,
+    /// Where the 3D camera looks, as an offset from the mesh's centre along the
+    /// camera's own right and up axes. `(0, 0)` is the centre.
+    surface_pan: (f64, f64),
     /// Undo history for the document.
     undo: undo::Undo,
     /// When the document last changed, so a save can wait for a pause.
@@ -310,6 +317,8 @@ impl CasApp {
             sign_table: Vec::new(),
             view_3d: false,
             surface_angles: (0.6, 0.5),
+            surface_zoom: 1.0,
+            surface_pan: (0.0, 0.0),
             undo: undo::Undo::new(),
             dirty_since: None,
             // A test that restored the last session would depend on whichever

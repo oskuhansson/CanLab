@@ -1180,19 +1180,56 @@ fn surface(app: &mut CasApp, ui: &mut Ui, rect: Rect, response: &egui::Response)
     }
     // Drag to orbit: the surface follows the pointer, so the camera moves the
     // other way. The scales are chosen so that a drag across the panel is a
-    // little more than a half turn, which is what a reader expects.
+    // little more than a half turn, which is what a reader expects. Shift-drag
+    // pans instead, because a middle button is not on every machine and a
+    // modifier is discoverable from the caption.
     let delta = response.drag_delta();
+    // Right-drag pans and left-drag orbits. A modifier would be tidier to write
+    // and worse to test: egui derives `InputState::modifiers` from the events
+    // that carry them, and a `PointerMoved` carries none, so a shift-drag's
+    // state depends on which events happened to arrive. The button is in every
+    // drag event.
+    let panning = response.dragged_by(egui::PointerButton::Secondary);
     if response.dragged() && delta != egui::Vec2::ZERO {
-        app.surface_angles.0 -= f64::from(delta.x) * 0.01;
-        app.surface_angles.1 =
-            (app.surface_angles.1 + f64::from(delta.y) * 0.01).clamp(-1.5, 1.5);
+        if panning {
+            // Pan in the camera's own screen plane, so the surface follows the
+            // pointer whatever the orbit is. The scale is the world size of a
+            // pixel at the framed distance, so a drag moves the picture by the
+            // distance the pointer travelled.
+            let world_per_pixel =
+                2.0 * app.surface_zoom * (app.surface_angles.1.cos()).max(0.2) * 0.01;
+            app.surface_pan.0 -= f64::from(delta.x) * world_per_pixel;
+            app.surface_pan.1 += f64::from(delta.y) * world_per_pixel;
+        } else {
+            app.surface_angles.0 -= f64::from(delta.x) * 0.01;
+            app.surface_angles.1 =
+                (app.surface_angles.1 + f64::from(delta.y) * 0.01).clamp(-1.5, 1.5);
+        }
     }
-    let camera = canlab_scene::svg::framing_camera(
+    // Scroll to zoom, about the centre. The factor is exponential so that a
+    // wheel notch is the same *ratio* at every scale, which is what makes
+    // zooming feel the same near and far.
+    if response.hovered() {
+        let scroll = ui.input(|input| input.smooth_scroll_delta.y);
+        if scroll.abs() > 0.5 {
+            app.surface_zoom =
+                (app.surface_zoom * (-f64::from(scroll) * 0.002).exp()).clamp(0.2, 5.0);
+        }
+    }
+    let mut camera = canlab_scene::svg::framing_camera(
         &mesh,
         app.surface_angles.0,
         app.surface_angles.1,
         f64::from(rect.width() / rect.height().max(1.0)),
     );
+    // Apply the reader's zoom and pan on top of the framing, so that "fit" stays
+    // the reference and a document change does not lose the reader's view by
+    // more than the framing itself.
+    camera.distance *= app.surface_zoom;
+    camera.target = camera
+        .target
+        .add(camera.right().scale(app.surface_pan.0))
+        .add(camera.up().scale(app.surface_pan.1));
     let painter = ui.painter_at(rect);
     // The chrome first, so the surface covers the grid rather than the other way
     // round: a grid line over a solid surface reads as a scratch on it.
@@ -2698,6 +2735,141 @@ mod surface_tests {
             (parts[2] - expected).abs() < 0.05,
             "{label}: z should be about {expected}"
         );
+    }
+
+    /// Run the panel for one frame with the given events, returning the painted
+    /// polygon count.
+    ///
+    /// egui's interaction is frame-based: a press and a move in the same frame is
+    /// not a drag, and a scroll is consumed by the frame that sees it. So the
+    /// tests drive several frames on one `Context` rather than one frame with a
+    /// list of events.
+    fn frame(ctx: &egui::Context, app: &mut CasApp, events: Vec<egui::Event>) -> usize {
+        frame_with(ctx, app, events, egui::Modifiers::default())
+    }
+
+    /// The same, with the events' own modifier state.
+    ///
+    /// `RawInput` has no modifier field: egui derives `InputState::modifiers`
+    /// from the events that carry them, and a `PointerMoved` carries none. That
+    /// is why the viewport's pan is a right-drag and not a shift-drag — the
+    /// button is in every drag event and the modifier is not.
+    fn frame_with(
+        ctx: &egui::Context,
+        app: &mut CasApp,
+        events: Vec<egui::Event>,
+        modifiers: egui::Modifiers,
+    ) -> usize {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(400.0, 400.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(raw, |ui| plot(app, ui));
+        output.textures_delta.clear();
+        output
+            .shapes
+            .iter()
+            .filter(|clipped| matches!(clipped.shape, egui::Shape::Path(_)))
+            .count()
+    }
+
+    /// A press, a move and a release, over four frames.
+    fn drag(ctx: &egui::Context, app: &mut CasApp, button: egui::PointerButton) {
+        let modifiers = egui::Modifiers::default();
+        let start = egui::pos2(200.0, 200.0);
+        let end = egui::pos2(240.0, 210.0);
+        frame_with(ctx, app, vec![egui::Event::PointerMoved(start)], modifiers);
+        frame_with(
+            ctx,
+            app,
+            vec![egui::Event::PointerButton {
+                pos: start,
+                button,
+                pressed: true,
+                modifiers,
+            }],
+            modifiers,
+        );
+        frame_with(ctx, app, vec![egui::Event::PointerMoved(end)], modifiers);
+        frame_with(
+            ctx,
+            app,
+            vec![egui::Event::PointerButton {
+                pos: end,
+                button,
+                pressed: false,
+                modifiers,
+            }],
+            modifiers,
+        );
+    }
+
+    #[test]
+    fn scrolling_zooms_the_surface() {
+        // A wheel notch must change the scale, and the drawn surface must change
+        // size with it — a zoom that only moved a number would be invisible.
+        let mut app = app_with("0.2*(x^2 + y^2)");
+        app.view_3d = true;
+        let before = app.surface_zoom;
+        let pointer = egui::pos2(200.0, 200.0);
+        let ctx = egui::Context::default();
+        // The pointer has to be over the canvas before the wheel is read.
+        frame(&ctx, &mut app, vec![egui::Event::PointerMoved(pointer)]);
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, 120.0),
+                modifiers: egui::Modifiers::default(),
+                phase: egui::TouchPhase::Move,
+            }],
+        );
+        assert!(
+            app.surface_zoom < before,
+            "scrolling up did not zoom in: {} -> {}",
+            before,
+            app.surface_zoom
+        );
+        // And the clamp holds: a hundred notches cannot go past the bound.
+        app.surface_zoom = 0.21;
+        frame(&ctx, &mut app, vec![egui::Event::PointerMoved(pointer)]);
+        frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, 1200.0),
+                modifiers: egui::Modifiers::default(),
+                phase: egui::TouchPhase::Move,
+            }],
+        );
+        assert!(app.surface_zoom >= 0.2, "{}", app.surface_zoom);
+    }
+
+    #[test]
+    fn right_dragging_pans_and_a_left_drag_orbits() {
+        // Two gestures on the same canvas, told apart by the modifier. A test
+        // that only checked the angles would pass on a pan that did nothing.
+        let mut app = app_with("0.2*(x^2 + y^2)");
+        app.view_3d = true;
+        let ctx = egui::Context::default();
+        // A plain drag orbits and does not pan.
+        let angles = app.surface_angles;
+        let pan = app.surface_pan;
+        drag(&ctx, &mut app, egui::PointerButton::Primary);
+        assert_ne!(app.surface_angles, angles, "a plain drag did not orbit");
+        assert_eq!(app.surface_pan, pan, "a plain drag panned");
+        // A shift-drag pans and does not orbit.
+        let angles = app.surface_angles;
+        let pan = app.surface_pan;
+        drag(&ctx, &mut app, egui::PointerButton::Secondary);
+        assert_eq!(app.surface_angles, angles, "a right-drag orbited");
+        assert_ne!(app.surface_pan, pan, "a right-drag did not pan");
     }
 
     #[test]
