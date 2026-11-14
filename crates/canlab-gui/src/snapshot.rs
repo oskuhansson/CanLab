@@ -439,3 +439,36 @@ fn the_detector_panel_draws() {
     }
     harness.snapshot("detector");
 }
+
+/// The 3D view at a fixed clock, so the photons' positions can be checked.
+///
+/// At 120 ps the muon is a third of the way across and the first photons have
+/// travelled far enough to be visible: a picture of the emission, not of the
+/// instant the muon entered.
+#[test]
+fn the_detector_at_a_fixed_clock() {
+    let _frame = frame_lock();
+    let design = canlab_muon::timing_study::TimingDesign {
+        name: "hexagon",
+        scale_mm: 28.0,
+        thickness_mm: 30.0,
+        index: 1.49,
+        pde: 0.35,
+        shape: canlab_muon::timing_study::Shape::Hexagon,
+    };
+    let mut scene = crate::detector::DetectorScene::new(design, 3).expect("a scene");
+    scene.time_ps = 120.0;
+    scene.playing = false;
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(800.0, 600.0))
+        .build_ui(|ui| {
+            let rect = ui.available_rect_before_wrap();
+            crate::detector::draw(&mut scene, ui, rect);
+        });
+    crate::theme::install(&harness.ctx);
+    harness.ctx.all_styles_mut(|style| style.animation_time = 0.0);
+    for _ in 0..4 {
+        harness.step();
+    }
+    harness.snapshot("detector-clock");
+}
