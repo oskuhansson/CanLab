@@ -15,7 +15,7 @@
 //! photon that reached it gets there.
 
 use canlab_muon::timing_study::TimingDesign;
-use canlab_optics::{Block, Event, Face, Optical, PhotonRecord, SiPM, Vec3};
+use canlab_optics::{Block, Event, Optical, PhotonRecord, SiPM, Vec3};
 use canlab_scene::Camera;
 
 /// The speed of light, millimetres per picosecond.
@@ -151,17 +151,6 @@ impl DetectorScene {
         self.inside_start.add(self.heading.scale(time_ps * C_MM_PER_PS))
     }
 
-    /// Where a photon is at a clock time, or `None` before it is emitted and
-    /// after it has arrived.
-    pub fn photon_at(&self, photon: &PhotonRecord, time_ps: f64) -> Option<Vec3> {
-        let birth = self.birth_ps(photon);
-        if time_ps < birth {
-            return None;
-        }
-        let distance = (time_ps - birth) * C_MM_PER_PS / self.design.index;
-        point_along(&photon.path, distance)
-    }
-
     /// Advance the clock, and stop it at the end.
     pub fn advance(&mut self, dt_s: f64) {
         if !self.playing {
@@ -219,23 +208,6 @@ fn inside_segment(block: &Block, entry: Vec3, heading: Vec3) -> Option<(Vec3, Ve
     Some((start, exit.point))
 }
 
-/// The point at a distance along a polyline.
-fn point_along(path: &[Vec3], distance: f64) -> Option<Vec3> {
-    if path.is_empty() {
-        return None;
-    }
-    let mut remaining = distance.max(0.0);
-    for pair in path.windows(2) {
-        let segment = pair[1].sub(pair[0]).length();
-        if remaining <= segment {
-            let fraction = if segment > 0.0 { remaining / segment } else { 0.0 };
-            return Some(pair[0].add(pair[1].sub(pair[0]).scale(fraction)));
-        }
-        remaining -= segment;
-    }
-    path.last().copied()
-}
-
 /// The scene's camera, framed on the block.
 pub fn camera(scene: &DetectorScene, aspect: f64) -> Camera {
     let centre = scene.inside_start.add(scene.inside_end).scale(0.5);
@@ -270,10 +242,6 @@ pub fn corners(scene: &DetectorScene, top: bool) -> Vec<Vec3> {
         .collect()
 }
 
-/// The face a sensor sits on, for the flash.
-pub fn sensor_face(scene: &DetectorScene, index: usize) -> Option<Face> {
-    scene.sensors.get(index).map(|sensor| sensor.face)
-}
 
 /// Draw the scene into `rect`, and turn it when the reader drags.
 pub fn draw(scene: &mut DetectorScene, ui: &mut egui::Ui, rect: egui::Rect) -> egui::Response {

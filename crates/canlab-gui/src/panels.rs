@@ -3371,6 +3371,10 @@ pub fn designs(app: &mut CasApp, ui: &mut Ui) {
         ui.checkbox(&mut scene.show_photons, "photons");
         ui.checkbox(&mut scene.show_cone, "cone");
         ui.label(format!("t = {:.0} ps", scene.time_ps));
+        ui.label(format!(
+            "seed {} · {} photons reached a sensor",
+            scene.seed, scene.detected
+        ));
     });
 
     // The timestamps.
