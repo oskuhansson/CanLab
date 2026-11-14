@@ -98,6 +98,45 @@ pub enum Solutions {
     /// each one still renders and serialises the way it does alone; a union with
     /// one member is that member.
     Union(Vec<Solutions>),
+    /// An answer **and the candidates it rejected**, with the reason.
+    ///
+    /// `log₂x + log₂(x−2) = 3` has the algebraic roots `4` and `−2`, and `−2`
+    /// is not a solution because `log₂(−2)` is not defined. Dropping it silently
+    /// gives the right set and hides a step the student is expected to show; the
+    /// exam's own answer says "`x = 4` (`x = −2` is rejected: the argument must
+    /// be positive)". This variant is that sentence as a value: the answer is
+    /// `solutions`, and `rejected` is what was computed and thrown away, each
+    /// with the reason it was thrown away.
+    ///
+    /// It is *not* a union: the rejected values are not solutions, and a caller
+    /// that rendered them as one would be answering a different question.
+    Rejected {
+        /// The answer, as it would have been without this variant.
+        solutions: Box<Solutions>,
+        /// The candidates that were computed and do not satisfy the equation.
+        rejected: Vec<(Expr, Rejection)>,
+    },
+}
+
+/// Why a candidate is not a solution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Rejection {
+    /// A logarithm's argument is not positive there.
+    OutsideLogarithmDomain,
+    /// Substituting the candidate does not satisfy the equation.
+    DoesNotSatisfy,
+}
+
+impl Rejection {
+    /// The words the answer uses, in LaTeX.
+    pub fn to_latex(&self) -> &'static str {
+        match self {
+            Rejection::OutsideLogarithmDomain => {
+                "\\text{the argument of a logarithm must be positive}"
+            }
+            Rejection::DoesNotSatisfy => "\\text{it does not satisfy the equation}",
+        }
+    }
 }
 
 impl Solutions {
@@ -120,6 +159,31 @@ impl Solutions {
             Solutions::Inequality { intervals, .. } => intervals.is_empty(),
             // A union is empty exactly when every member is.
             Solutions::Union(members) => members.iter().all(Solutions::is_empty),
+            // A rejection is not part of the answer: it is what was thrown
+            // away, so the answer's emptiness is the inner answer's.
+            Solutions::Rejected { solutions, .. } => solutions.is_empty(),
+        }
+    }
+
+    /// The rejected candidates as one LaTeX sentence each, for a caller that
+    /// wants to show them beside the answer.
+    ///
+    /// Empty for every answer that rejected nothing. This is deliberately *not*
+    /// part of [`Solutions::to_latex`]: the answer is the set, and the
+    /// rejections are the working.
+    pub fn rejections_latex(&self) -> Vec<String> {
+        match self {
+            Solutions::Rejected { rejected, .. } => rejected
+                .iter()
+                .map(|(value, why)| {
+                    format!(
+                        "x = {}\\text{{ is rejected: {}}}",
+                        canlab_tex::to_latex(value),
+                        why.to_latex()
+                    )
+                })
+                .collect(),
+            _ => Vec::new(),
         }
     }
 
@@ -136,6 +200,12 @@ impl Solutions {
     /// which variable was asked about.
     pub fn to_latex(&self) -> String {
         match self {
+            // The **answer only**. The rejected candidates are a note about the
+            // working, not part of the solution set, and a caller comparing two
+            // answers — the corpus, a test — must see the set. They are
+            // available through [`Solutions::rejections_latex`], which the panel
+            // and the CLI print beside the answer.
+            Solutions::Rejected { solutions, .. } => solutions.to_latex(),
             Solutions::None => String::from("\\varnothing"),
             Solutions::All => String::from("\\mathbb{R}"),
             Solutions::Values(values) if values.is_empty() => String::from("\\varnothing"),
@@ -318,12 +388,37 @@ fn phase_latex(phase: &Expr) -> String {
 /// control word `\pik`.
 fn period_latex(period: &Expr, param: SymbolId) -> String {
     let parameter = ExprNode::sym(param);
-    // The fallback: let the canonical printer do the multiplication.
-    let multiplied =
-        || canlab_tex::to_latex(&canlab_core::mul([period.clone(), parameter.clone()]));
+    // The fallback: let the canonical printer do the multiplication. It is the
+    // printer's own order — a product is sorted by its factors — so `pi * k`
+    // comes out as `k \pi` whenever `k` sorts first. That is the right order for
+    // a general product and the wrong one for this form: an exam writes
+    // `\pi k`, not `k \pi`, and the corpus row `tan-one-family` and every doc
+    // in this project say so. The whole point of this function is to build the
+    // exam form, so it writes the parameter first and lets the period follow —
+    // which it already did before the product order changed under it.
+    // The exam form of a period is `2k \pi` when there is a numeric
+    // coefficient and `\pi k` when there is not: the parameter follows the
+    // number and precedes the symbolic part. The canonical product sorts its
+    // factors, and after `SymbolId` gained a name order (`canlab-core::symbol`)
+    // `pi * k` sorted to `k \pi`; that order is right for a product and wrong
+    // for this form, so the form is written here and not by the printer.
+    let multiplied = || {
+        let rest_latex = canlab_tex::to_latex(period);
+        let parameter_latex = canlab_tex::to_latex(&parameter);
+        if rest_latex.is_empty() {
+            parameter_latex
+        } else {
+            format!("{rest_latex} {parameter_latex}")
+        }
+    };
 
+    // `sin x = c` and `cos x = c` build the odd-half-turn family with
+    // `period = 2π`, so they take the `coefficient == 2` branch below and print
+    // `2k \pi`; the `tan` family has `period = π`, no coefficient, and prints
+    // `\pi k` through the fallback.
     let (coefficient, rest) = coefficient_and_rest(period);
     let Some(coefficient) = coefficient else {
+        // `period = \pi`: the parameter follows the period, `\pi k`.
         return multiplied();
     };
     if rest.is_one() {
@@ -518,5 +613,48 @@ mod tests {
             }
             .is_empty()
         );
+    }
+}
+
+#[cfg(test)]
+mod rejected_tests {
+    use super::*;
+    use canlab_core::{int, sym};
+
+    #[test]
+    fn a_rejection_is_not_a_solution_and_does_not_change_the_answer() {
+        // The answer is `{4}`; `−2` was computed and rejected. The variant must
+        // not make the answer look bigger, empty, or refused.
+        let answer = Solutions::Rejected {
+            solutions: Box::new(Solutions::Values(vec![int(4)])),
+            rejected: vec![(
+                int(-2),
+                Rejection::OutsideLogarithmDomain,
+            )],
+        };
+        assert!(!answer.is_empty());
+        // The answer is the set; the rejection is the working, and it is a
+        // separate accessor so that a caller comparing answers sees the set.
+        assert_eq!(answer.to_latex(), "\\left\\{4\\right\\}");
+        assert_eq!(answer.rejections_latex().len(), 1);
+        assert!(answer.rejections_latex()[0].contains("rejected"));
+        // An answer whose inner answer is empty is empty.
+        let empty = Solutions::Rejected {
+            solutions: Box::new(Solutions::None),
+            rejected: vec![(sym("x"), Rejection::DoesNotSatisfy)],
+        };
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn a_rejection_survives_the_json_round_trip() {
+        let answer = Solutions::Rejected {
+            solutions: Box::new(Solutions::Values(vec![int(4)])),
+            rejected: vec![(int(-2), Rejection::OutsideLogarithmDomain)],
+        };
+        let text = crate::json::encode_solutions(&answer);
+        let back = crate::json::decode_solutions(&text).expect("decodes");
+        assert_eq!(back, answer);
+        assert_eq!(crate::json::encode_solutions(&back), text);
     }
 }

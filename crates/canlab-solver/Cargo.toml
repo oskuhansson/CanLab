@@ -13,6 +13,10 @@ canlab-core = { path = "../canlab-core" }
 # the root".
 canlab-num = { path = "../canlab-num" }
 canlab-poly = { path = "../canlab-poly" }
+# `Value::from_latex` reads `[[1,2],[3,4]]` and `(1,2,3)`, and the one LaTeX
+# grammar in this workspace is `canlab-parse`. The dependency runs solver ->
+# parse, which is one direction: `canlab-parse` depends on `canlab-core` only.
+canlab-parse = { path = "../canlab-parse" }
 # A `Solutions` value is printed as LaTeX, and the printer already exists. A
 # second, narrower printer here would be a second answer to "what does this
 # expression look like", which is exactly the kind of drift this crate is

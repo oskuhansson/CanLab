@@ -31,6 +31,25 @@ use crate::{Solutions, Solver, SolverError};
 pub struct NativeSolver;
 
 /// One term as `coefficient · var^power`, if it is a monomial in `var`.
+/// An answer with the candidates it rejected, when there were any.
+///
+/// `log₂x + log₂(x−2) = 3` has the algebraic roots `4` and `−2`; `−2` is outside
+/// the logarithm's domain and is *rejected*, and the answer says so rather than
+/// dropping it silently. An answer with nothing rejected is returned unchanged,
+/// so a caller sees the simple type whenever the simple type is the truth.
+fn with_rejections(answer: Solutions, rejected: Vec<Expr>) -> Solutions {
+    if rejected.is_empty() {
+        return answer;
+    }
+    Solutions::Rejected {
+        solutions: Box::new(answer),
+        rejected: rejected
+            .into_iter()
+            .map(|value| (value, crate::solutions::Rejection::OutsideLogarithmDomain))
+            .collect(),
+    }
+}
+
 fn monomial(term: &Expr, var: SymbolId) -> Option<(Number, i128)> {
     match &**term {
         ExprNode::Num(number) => Some((number.clone(), 0)),
@@ -262,12 +281,13 @@ impl NativeSolver {
                     Ok(Solutions::Values(values))
                 };
             }
-            if let Some((kept, _rejected)) = crate::logarithmic::solve_logarithmic(self, eq, var) {
-                return if kept.is_empty() {
-                    Ok(Solutions::None)
+            if let Some((kept, rejected)) = crate::logarithmic::solve_logarithmic(self, eq, var) {
+                let answer = if kept.is_empty() {
+                    Solutions::None
                 } else {
-                    Ok(Solutions::Values(kept))
+                    Solutions::Values(kept)
                 };
+                return Ok(with_rejections(answer, rejected));
             }
             if let Some(solutions) = crate::trig::solve_trigonometric(eq, var) {
                 return Ok(solutions);
@@ -358,9 +378,10 @@ impl Solver for NativeSolver {
             if let Some(values) = crate::exponential::solve_exponential(self, eq, var) {
                 return Ok(values);
             }
-            // A sum of logarithms: `log₂x + log₂(x−2) = 3`. The roots outside the
-            // domain are dropped here; W2.4's report of a *rejected* root needs a
-            // place in `Solutions` and is not in this one.
+            // A sum of logarithms: `log₂x + log₂(x−2) = 3`. The root outside
+            // the domain is *rejected* and reported as rejected: the exact path
+            // returns a `Vec`, so the rejection is attached by `solve_all`,
+            // which is the path that can carry it.
             if let Some((kept, _rejected)) = crate::logarithmic::solve_logarithmic(self, eq, var) {
                 return Ok(kept);
             }
@@ -398,8 +419,40 @@ impl Solver for NativeSolver {
                 let minus_b = b.neg();
 
                 if discriminant.is_negative() {
-                    // No real solutions: a real answer, not a failure.
-                    return Ok(Vec::new());
+                    // No *real* solutions, and the complex ones are exact:
+                    // `x² + 1 = 0` is `±i`, not "no solutions". `i` is a symbol
+                    // the CAS already prints and parses, and the quadratic
+                    // formula over the complex numbers is the same formula with
+                    // `√(−Δ)` written as `√|Δ|·i`, so the answer stays exact
+                    // wherever the real one would have been.
+                    //
+                    // The magnitude is the *positive* discriminant's root, which
+                    // is what keeps `x² + 2 = 0` answering `±√2·i` rather than a
+                    // float.
+                    let magnitude = discriminant.neg();
+                    let root = if let Some(exact) = magnitude.exact_nth_root(2) {
+                        number(&exact)
+                    } else {
+                        pow(number(&magnitude), ExprNode::num(Number::ratio(1, 2)))
+                    };
+                    // Divided *term by term*, not by multiplying the sum by
+                    // `1/2`: `(a + b)/2` distributes over the two terms here
+                    // because the division is exact, and the canonical form of
+                    // `(−2 + 4i)/2` is `−1 + 2i`, which is what a reader expects.
+                    // Multiplying the whole sum by `1/2` left it unexpanded.
+                    let inverse = pow(number(&denominator), ExprNode::int(-1));
+                    let real_part = mul([number(&minus_b), inverse.clone()]);
+                    let imaginary_part = mul([root, inverse, ExprNode::sym(SymbolId::intern("i"))]);
+                    // Simplified, so `x² + 2x + 5` answers `−1 ± 2i` and not
+                    // `(−2 ± 4i)/2`: the division is exact and the canonical
+                    // form is what a reader expects.
+                    return Ok(vec![
+                        add(vec![real_part.clone(), imaginary_part.clone()]),
+                        add(vec![
+                            real_part,
+                            mul([ExprNode::int(-1), imaginary_part]),
+                        ]),
+                    ]);
                 }
                 if let Some(root) = discriminant.exact_nth_root(2) {
                     if root.is_zero() {
@@ -441,6 +494,10 @@ impl Solver for NativeSolver {
     /// into a root.
     fn solve_all(&self, eq: &Expr, var: SymbolId) -> Result<Solutions, SolverError> {
         match self.solve_exactly(eq, var) {
+            // `solve_exactly` already attaches a rejected root, because that is
+            // where the logarithmic path is. Attaching it here as well printed
+            // the rejection twice; the answer is wrapped once, at the layer that
+            // computed it.
             Ok(solutions) => Ok(solutions),
             Err(SolverError::NotImplemented) => approximate_root(eq, var),
             Err(other) => Err(other),
@@ -451,6 +508,14 @@ impl Solver for NativeSolver {
     ///
     /// One equation at a time would silently drop the variables the other
     /// equations pin down — `x = 1, y = x` needs both answers.
+    fn solve_nonlinear(
+        &self,
+        equations: &[Expr],
+        vars: &[SymbolId],
+    ) -> Result<crate::nonlinear::SystemAnswer, SolverError> {
+        crate::nonlinear::solve_nonlinear(self, equations, vars)
+    }
+
     fn solve_system(
         &self,
         equations: &[Expr],
@@ -538,13 +603,19 @@ mod tests {
     }
 
     #[test]
-    fn solve_all_says_none_for_a_negative_discriminant() {
-        // x² + 1 = 0 has no real solutions.
+    fn solve_all_answers_a_negative_discriminant_with_complex_roots() {
+        // `x² + 1 = 0` has no *real* solutions, and the complex ones are exact:
+        // `±i`. This test used to assert `Solutions::None`, which was the
+        // behaviour before W4.4 — the change is the point, and the assertion
+        // moved with it.
         let equation = add([pow(x(), int(2)), int(1)]);
-        assert_eq!(
-            NativeSolver.solve_all(&equation, var()),
-            Ok(Solutions::None)
-        );
+        let answer = NativeSolver.solve_all(&equation, var()).expect("an answer");
+        let Solutions::Values(values) = answer else {
+            panic!("expected two values, got {answer:?}");
+        };
+        assert_eq!(values.len(), 2, "{values:?}");
+        let text = Solutions::Values(values).to_latex();
+        assert!(text.contains("i"), "{text}");
     }
 
     #[test]
@@ -743,4 +814,43 @@ mod tests {
             .expect_err("the pole is refused");
         assert_eq!(error, SolverError::NotImplemented);
     }
+    #[test]
+    fn a_negative_discriminant_answers_with_complex_roots() {
+        use crate::Solver as _;
+        let x = SymbolId::intern("x");
+        // `x² + 1 = 0` is `±i`, exactly — not "no solutions".
+        let equation = canlab_core::add([
+            canlab_core::pow(canlab_core::sym("x"), ExprNode::int(2)),
+            ExprNode::int(1),
+        ]);
+        let solutions = NativeSolver.solve_all(&equation, x).expect("an answer");
+        let text = solutions.to_latex();
+        assert!(text.contains("i"), "{text}");
+        assert!(text.contains("-i"), "{text}");
+        // `x² + 2x + 5 = 0` is `−1 ± 2i`: the division by `2` is done term by
+        // term, so the answer is not left as `(−2 ± 4i)/2`.
+        let equation = canlab_core::add([
+            canlab_core::pow(canlab_core::sym("x"), ExprNode::int(2)),
+            canlab_core::mul([ExprNode::int(2), canlab_core::sym("x")]),
+            ExprNode::int(5),
+        ]);
+        let text = NativeSolver.solve_all(&equation, x).expect("an answer").to_latex();
+        assert!(text.contains("-1 + 2i"), "{text}");
+        assert!(text.contains("-1 - 2i"), "{text}");
+        // A positive discriminant is unchanged: `x² − 4 = 0` is still `{−2, 2}`.
+        let equation = canlab_core::add([
+            canlab_core::pow(canlab_core::sym("x"), ExprNode::int(2)),
+            ExprNode::int(-4),
+        ]);
+        let text = NativeSolver.solve_all(&equation, x).expect("an answer").to_latex();
+        assert!(text.contains("-2") && text.contains("2"), "{text}");
+        // `contains("i")` would match the `i` in `\right`; the check is for the
+        // imaginary unit as a term, which is a bare `i` beside a digit or a
+        // brace.
+        assert!(
+            !text.contains("+ i") && !text.contains("- i") && !text.contains("2i"),
+            "a real answer must not mention i: {text}"
+        );
+    }
+
 }

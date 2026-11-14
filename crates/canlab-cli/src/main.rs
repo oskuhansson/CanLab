@@ -32,8 +32,11 @@ USAGE:
     canlab eval   <latex>           parse and canonicalize, print plain text + LaTeX
     canlab tex    <latex>           print LaTeX only
     canlab plot   <latex> [opts]    render a plot to SVG
+    canlab sign   <latex> [opts]    the sign table of f' on an interval, shaded in the SVG
     canlab int    <latex> [opts]    integrate (uses SymPy when it is installed)
     canlab solve-all <latex> [opts] solve <latex> = 0 and print the solution set
+    canlab compile <latex> [opts]   print the Lua and the WGSL a kernel would be compiled from
+    canlab compile-sweep [opts]     the W7.3 validation sweep, compiled but not run on a GPU
     canlab solver [--probe]         report the SymPy backend, or test it
     canlab bench  [--write]         measure the evaluator, the sampler and the tracer
     canlab corpus run [opts]        run the exam corpus and write the coverage report
@@ -43,6 +46,10 @@ OPTIONS:
     -o, --out <file>             output file for plot (default: plot.svg)
         --xmin <f> --xmax <f>    plot domain (default: -10 10)
     -v, --var <name>             variable for integration or solve-all (default: guess)
+        --lua-only               (compile) print the Lua only
+        --wgsl-only              (compile) print the WGSL only
+        --seed <n>               (compile-sweep) generator seed (default: 1)
+        --count <n>              (compile-sweep) expressions to generate (default: 200)
         --probe                  really start the worker and make it answer
         --write                  (bench) write docs/bench.md instead of stdout
         --tag <tag>              (corpus run) only capabilities equal to `tag` or starting `tag.`
@@ -54,7 +61,7 @@ CORPUS ENVIRONMENT:
     CANLAB_CORPUS_MIRROR=<dir>   read a local mirror instead of the network
 
 REPL COMMANDS:
-    :help  :quit  :tex  :plot  :int  :solve-all  :solver
+    :help  :quit  :tex  :plot  :int  :solve-all  :solver  :compile
 ";
 
 fn main() -> ExitCode {
@@ -79,8 +86,11 @@ fn main() -> ExitCode {
         "eval" => eval_command(&args[1..]),
         "tex" => tex_command(&args[1..]),
         "plot" => plot_command(&args[1..]),
+        "sign" => sign_command(&args[1..]),
         "int" | "integrate" => integrate_command(&args[1..]),
         "solve-all" => solve_all_command(&args[1..]),
+        "compile" => compile_command(&args[1..]),
+        "compile-sweep" => return compile_sweep_command(&args[1..]),
         "solver" => solver_command(&args[1..]),
         other => Err(format!("unknown command `{other}`\n\n{USAGE}")),
     };
@@ -174,6 +184,7 @@ fn plot_command(args: &[String]) -> Result<(), String> {
             y_range: (y_min, y_max),
             stroke: "#1e88e5".to_string(),
             show_axes: true,
+            bands: Vec::new(),
         },
     );
 
@@ -184,6 +195,97 @@ fn plot_command(args: &[String]) -> Result<(), String> {
         curve.segments.len(),
         if curve.segments.len() == 1 { "" } else { "s" }
     );
+    Ok(())
+}
+
+/// `canlab sign` — the sign table of `f'` on an interval, and the picture of it.
+///
+/// The table is printed as the pieces an exam writes (`increasing on (−1, 0)`,
+/// `decreasing on (0, 2)`, …) and the same pieces are shaded in the SVG, so the
+/// artefact and the picture cannot disagree: both come from one call to
+/// [`canlab_parse::calculus::sign_table`].
+fn sign_command(args: &[String]) -> Result<(), String> {
+    let source = args.first().ok_or("sign needs a LaTeX expression")?;
+    let expr = parse_or_err(source)?;
+
+    let mut out = PathBuf::from("sign.svg");
+    let mut x_min = -10.0_f64;
+    let mut x_max = 10.0_f64;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-o" | "--out" => {
+                i += 1;
+                out = PathBuf::from(args.get(i).ok_or("--out needs a path")?);
+            }
+            "--xmin" => {
+                i += 1;
+                x_min = parse_float(args.get(i), "--xmin")?;
+            }
+            "--xmax" => {
+                i += 1;
+                x_max = parse_float(args.get(i), "--xmax")?;
+            }
+            other => return Err(format!("unknown sign option `{other}`")),
+        }
+        i += 1;
+    }
+    if !(x_min < x_max) {
+        return Err("--xmin must be less than --xmax".into());
+    }
+
+    let mut vars = Vec::new();
+    free_symbols(&expr, &mut vars);
+    let var = match vars.len() {
+        0 => return Err("that expression has no variable".into()),
+        1 => vars[0],
+        n => return Err(format!("sign needs exactly one variable, found {n}")),
+    };
+
+    let table = canlab_parse::calculus::sign_table(&expr, var, x_min, x_max)
+        .map_err(|error| error.message())?;
+    if table.is_empty() {
+        return Err("the interval has no pieces".into());
+    }
+    // The words an exam uses, and the colour each direction is shaded with.
+    let (up, down) = ("#c8e6c9", "#ffcdd2");
+    let mut bands = Vec::new();
+    for piece in &table {
+        let (word, colour) = match piece.direction {
+            1 => ("increasing", up),
+            -1 => ("decreasing", down),
+            _ => ("flat", "#eeeeee"),
+        };
+        println!("{word} on ({:.4}, {:.4})", piece.from, piece.to);
+        bands.push((piece.from, piece.to, colour.to_string()));
+    }
+
+    let program = Program::compile(&expr, &vars)
+        .ok_or("this expression cannot be evaluated numerically")?;
+    let curve = sample(
+        &program,
+        &SampleOptions {
+            x_min,
+            x_max,
+            ..SampleOptions::default()
+        },
+    );
+    let (y_min, y_max) = vertical_extent(&curve)
+        .ok_or("the function has no finite values in that range")?;
+    let svg = to_svg(
+        &curve,
+        &SvgOptions {
+            width: 900,
+            height: 600,
+            x_range: (x_min, x_max),
+            y_range: (y_min, y_max),
+            stroke: "#1e88e5".to_string(),
+            show_axes: true,
+            bands,
+        },
+    );
+    std::fs::write(&out, svg).map_err(|e| format!("could not write {}: {e}", out.display()))?;
+    println!("wrote {} ({} piece(s))", out.display(), table.len());
     Ok(())
 }
 
@@ -270,6 +372,11 @@ fn solve_all_command(args: &[String]) -> Result<(), String> {
     match backend().solve_all(&expr, var) {
         Ok(solutions) => {
             println!("{}", solutions.to_latex());
+            // The candidates that were computed and rejected are the working,
+            // not the answer: they are printed beside it and never inside it.
+            for rejection in solutions.rejections_latex() {
+                println!("  {rejection}");
+            }
             // `to_latex` prints an approximation as its number, because only
             // the caller knows whether it is writing "x = 1.2207" or comparing
             // two answers. The CLI *is* writing an answer, so otherwise
@@ -302,6 +409,199 @@ fn approximations_of(solutions: &Solutions) -> Vec<(String, f64)> {
         }
         Solutions::Union(members) => members.iter().flat_map(approximations_of).collect(),
         _ => Vec::new(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// canlab compile (W7.3)
+// ---------------------------------------------------------------------------
+
+/// `canlab compile` — the two viewers the command line needs.
+///
+/// The Lua is what `canlab_core::lua` printed; the WGSL is what
+/// `canlab_core::wgsl` compiled that Lua to. Neither is re-derived here, and
+/// neither is evaluated: nothing in this workspace runs WGSL yet, so the
+/// command shows the source of a kernel and says nothing about its numbers.
+///
+/// A refusal is printed as the message of the step that refused — the printer
+/// for a `Hold`, an unsupported function or a free symbol; the compiler for a
+/// construct outside its subset — and the exit code is a failure, because a
+/// compile that produced no kernel is not a success whatever the reason.
+fn compile_command(args: &[String]) -> Result<(), String> {
+    let mut latex: Option<&str> = None;
+    let mut variables: Vec<SymbolId> = Vec::new();
+    let mut lua_only = false;
+    let mut wgsl_only = false;
+
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "-v" | "--var" => {
+                index += 1;
+                let name = args.get(index).ok_or("--var needs a name")?;
+                let symbol = SymbolId::intern(name);
+                // A name given twice is still one local: `to_lua` looks it up by
+                // symbol, and two identical entries are the same entry.
+                if !variables.contains(&symbol) {
+                    variables.push(symbol);
+                }
+            }
+            "--lua-only" => lua_only = true,
+            "--wgsl-only" => wgsl_only = true,
+            // The one LaTeX argument. A second one is refused rather than
+            // ignored: a command that prints one kernel while given two
+            // expressions is printing the wrong one half the time.
+            argument if argument.starts_with('-') && argument.len() > 1 => {
+                return Err(format!("unknown compile option `{argument}`"));
+            }
+            argument => {
+                if latex.is_some() {
+                    return Err(format!(
+                        "compile takes one LaTeX expression, and `{argument}` is a second"
+                    ));
+                }
+                latex = Some(argument);
+            }
+        }
+        index += 1;
+    }
+
+    if lua_only && wgsl_only {
+        return Err("--lua-only and --wgsl-only ask for nothing to be printed".into());
+    }
+    let source = latex.ok_or("compile needs a LaTeX expression")?;
+    let expr = parse_or_err(source)?;
+
+    // With no `--var`, the variables are the expression's own free symbols, in
+    // the order they first appear: the same guess `int` and `solve-all` make.
+    if variables.is_empty() {
+        free_symbols(&expr, &mut variables);
+    }
+    let name = "kernel_expression";
+
+    if !wgsl_only {
+        match canlab_core::lua::to_lua_program(name, &expr, &variables) {
+            Ok(lua) => {
+                println!("-- Lua");
+                print!("{lua}");
+            }
+            Err(error) => {
+                return Err(format!("\n-- Lua\nthe printer refused this: {}", error.message()));
+            }
+        }
+    }
+    if lua_only {
+        return Ok(());
+    }
+    match canlab_solver::kernel::compile_expression(&expr, name, &variables) {
+        Ok(artefact) => {
+            println!(
+                "-- WGSL (f32 function; the expression's variables: {})",
+                if variables.is_empty() {
+                    String::from("none")
+                } else {
+                    variables
+                        .iter()
+                        .map(|symbol| symbol.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                }
+            );
+            print!("{}", artefact.wgsl);
+            Ok(())
+        }
+        Err(refusal) => {
+            // The Lua stage printing the expression already happened, unless
+            // `--wgsl-only` skipped it, so the message repeats the refusal the
+            // viewer above just showed: the two are printed together and a
+            // reader who redirects one stream still sees why.
+            Err(format!(
+                "\n-- WGSL\nthe compiler refused this (at the {} step): {}",
+                refusal.stage(),
+                refusal.message()
+            ))
+        }
+    }
+}
+
+/// `canlab compile-sweep` — the W7.3 validation check, as a command.
+///
+/// Prints the numbers the sweep measured and exits non-zero when any generated
+/// expression broke the tolerance or was printed to Lua and refused by the
+/// compiler. It says what it does not do on its own output, because a number
+/// printed beside no caveat is a number a reader will trust.
+fn compile_sweep_command(args: &[String]) -> ExitCode {
+    let mut seed = 1u64;
+    let mut count = canlab_solver::kernel::SWEEP_PROGRAMS;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--seed" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    eprintln!("error: --seed needs a whole number");
+                    return ExitCode::from(2);
+                };
+                match value.parse() {
+                    Ok(parsed) => seed = parsed,
+                    Err(_) => {
+                        eprintln!("error: --seed needs a whole number, not {value:?}");
+                        return ExitCode::from(2);
+                    }
+                }
+            }
+            "--count" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    eprintln!("error: --count needs a whole number");
+                    return ExitCode::from(2);
+                };
+                match value.parse::<usize>() {
+                    Ok(parsed) if parsed >= 1 => count = parsed,
+                    _ => {
+                        eprintln!("error: --count needs a positive whole number, not {value:?}");
+                        return ExitCode::from(2);
+                    }
+                }
+            }
+            other => {
+                eprintln!("error: unknown compile-sweep option `{other}`");
+                return ExitCode::from(2);
+            }
+        }
+        index += 1;
+    }
+
+    let report = canlab_solver::kernel::sweep(seed, count);
+    println!(
+        "{} generated expression(s) at seed {seed}: {} printed to Lua and compiled to WGSL, \
+         {} refused by the compiler",
+        report.programs, report.compared, report.wgsl_refusals
+    );
+    println!(
+        "{} sample point(s); worst relative difference {:e} against the {} bound",
+        report.points,
+        report.worst_relative,
+        canlab_solver::kernel::SWEEP_TOLERANCE
+    );
+    if let Some(worst) = &report.worst_at {
+        println!("  the worst point: {worst}");
+    }
+    println!(
+        "{} point(s) where the kernel's f32 overflowed and the CPU's f64 did not",
+        report.f32_overflowed
+    );
+    for failure in &report.failures {
+        println!("FAIL {failure}");
+    }
+    println!(
+        "This compares the CPU evaluation with an f32 replay of the arithmetic the WGSL \
+         emitter chose. It does not run WGSL: the CPU/GPU differential is W7.4's."
+    );
+    if report.is_ok() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(2)
     }
 }
 
@@ -679,6 +979,7 @@ fn repl() -> Result<(), String> {
                 "int" | "integrate" => report(integrate_command(&[argument.to_string()])),
                 "solve-all" => report(solve_all_command(&[argument.to_string()])),
                 "solver" => report(solver_command(&[argument.to_string()])),
+                "compile" => report(compile_command(&[argument.to_string()])),
                 other => eprintln!("unknown command `:{other}` (try :help)"),
             }
             continue;

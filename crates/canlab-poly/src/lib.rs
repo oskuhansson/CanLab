@@ -187,6 +187,16 @@ impl Coeff for Expr {
 pub struct Monomial(pub Vec<u32>);
 
 impl Monomial {
+    /// A monomial from its exponent vector, one exponent per variable.
+    ///
+    /// Public because a caller that substitutes a value for one variable has to
+    /// build the reduced monomial, and the exponent vector is the monomial's
+    /// data: a private constructor would force every such caller to reconstruct
+    /// the polynomial through `to_expr` and back.
+    pub fn new(exponents: Vec<u32>) -> Self {
+        Self(exponents)
+    }
+
     /// The monomial of a single variable to the first power.
     pub fn variable(index: usize, variables: usize) -> Self {
         let mut exponents = vec![0; variables];

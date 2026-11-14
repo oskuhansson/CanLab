@@ -220,3 +220,142 @@ fn solve_all_reports_a_decline_with_its_reason() {
         "the equation is missing: {stderr}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// canlab compile and canlab compile-sweep (W7.3)
+//
+// The command is a viewer for two modules that each have their own tests: what
+// is asserted here is the wiring — that the LaTeX reaches the printer, that the
+// printer's Lua reaches the compiler, and that every refusal is a message on
+// stderr and a non-zero exit rather than a plausible-looking kernel.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn compile_prints_the_lua_and_the_wgsl() {
+    let (ok, stdout, stderr) = canlab(&["compile", r"2x^2 + \sin(x)"]);
+    assert!(ok, "failed: {stderr}");
+    assert!(stdout.contains("-- Lua"), "{stdout}");
+    assert!(stdout.contains("local kernel_expression = "), "{stdout}");
+    assert!(stdout.contains("math.sin(x)"), "{stdout}");
+    assert!(stdout.contains("-- WGSL"), "{stdout}");
+    assert!(stdout.contains("fn kernel() -> f32 {"), "{stdout}");
+    assert!(stdout.contains("pow(x, 2.0)"), "{stdout}");
+    assert!(stdout.contains("sin(x)"), "{stdout}");
+}
+
+#[test]
+fn compile_prints_only_the_lua_or_only_the_wgsl_when_asked() {
+    let (ok, stdout, stderr) = canlab(&["compile", "x^2", "--lua-only"]);
+    assert!(ok, "failed: {stderr}");
+    assert!(stdout.contains("local kernel_expression"), "{stdout}");
+    assert!(!stdout.contains("-- WGSL"), "{stdout}");
+    assert!(!stdout.contains("fn kernel"), "{stdout}");
+
+    let (ok, stdout, stderr) = canlab(&["compile", "x^2", "--wgsl-only"]);
+    assert!(ok, "failed: {stderr}");
+    assert!(!stdout.contains("-- Lua"), "{stdout}");
+    assert!(stdout.contains("fn kernel() -> f32 {"), "{stdout}");
+}
+
+#[test]
+fn compile_refuses_both_only_flags_at_once() {
+    // Two viewers, neither wanted. Printing nothing and exiting zero would look
+    // like a successful compile of an expression that produced no kernel.
+    let (ok, _stdout, stderr) = canlab(&["compile", "x^2", "--lua-only", "--wgsl-only"]);
+    assert!(!ok, "asking for no output should fail");
+    assert!(
+        stderr.contains("--lua-only and --wgsl-only"),
+        "the reason should name both flags: {stderr}"
+    );
+}
+
+#[test]
+fn compile_names_an_unsupported_function_and_exits_non_zero() {
+    // `arcsin` is outside the Lua subset. The printer's own message is what the
+    // user sees, with the function named, and the exit code is a failure.
+    let (ok, stdout, stderr) = canlab(&["compile", r"\arcsin x"]);
+    assert!(!ok, "an unsupported function must not compile");
+    assert!(stderr.contains("arcsin"), "the name should be named: {stderr}");
+    assert!(
+        stderr.contains("not in the Lua subset"),
+        "the printer's reason should be shown: {stderr}"
+    );
+    assert!(!stdout.contains("fn kernel"), "nothing should be compiled: {stdout}");
+}
+
+#[test]
+fn compile_names_a_free_symbol_and_exits_non_zero() {
+    // A name that is not `--var` and not a constant is a free variable, and a
+    // kernel with a free variable has no meaning.
+    let (ok, _stdout, stderr) = canlab(&["compile", "sin(z) + 1", "--var", "x"]);
+    assert!(!ok, "a free symbol must not compile");
+    assert!(stderr.contains("`z`"), "the symbol should be named: {stderr}");
+    assert!(stderr.contains("no value"), "the reason: {stderr}");
+}
+
+#[test]
+fn compile_names_the_variables_from_var() {
+    // With `--var x` the kernel mentions `x`; without it the expression's own
+    // symbols are the guess.
+    let (ok, stdout, stderr) = canlab(&["compile", "x * y", "--var", "x", "--var", "y"]);
+    assert!(ok, "failed: {stderr}");
+    assert!(stdout.contains("(x * y)"), "{stdout}");
+    let (ok, stdout, stderr) = canlab(&["compile", "x * y"]);
+    assert!(ok, "failed: {stderr}");
+    assert!(stdout.contains("(x * y)"), "{stdout}");
+}
+
+#[test]
+fn compile_refuses_an_unknown_option_by_name() {
+    let (ok, _stdout, stderr) = canlab(&["compile", "x^2", "--bogus"]);
+    assert!(!ok);
+    assert!(stderr.contains("--bogus"), "{stderr}");
+}
+
+#[test]
+fn compile_refuses_a_second_expression() {
+    let (ok, _stdout, stderr) = canlab(&["compile", "x^2", "y"]);
+    assert!(!ok, "two expressions should be refused, not one silently printed");
+    assert!(stderr.contains("one LaTeX expression"), "{stderr}");
+}
+
+#[test]
+fn compile_compiles_an_integral_the_parser_already_evaluated() {
+    // Not a refusal test, and it says why: `\int_0^1 x^2 dx` is evaluated by
+    // the parser into `1/3` before `compile` ever sees it, so there is no
+    // `Hold` to refuse at this layer. The printer's `Hold` refusal has its own
+    // test in `canlab_core::lua`, built from an `Expr` with no parser in
+    // between; this pins the honest behaviour of the command on that input
+    // rather than pretending to test a refusal that cannot happen here.
+    let (ok, stdout, stderr) = canlab(&["compile", r"\int_0^1 x^2 dx"]);
+    assert!(ok, "failed: {stderr}");
+    assert!(stdout.contains("(1 / 3)"), "{stdout}");
+}
+
+#[test]
+fn compile_sweep_reports_a_clean_sweep() {
+    let (ok, stdout, stderr) = canlab(&["compile-sweep", "--count", "40"]);
+    assert!(ok, "sweep failed: {stderr}\n{stdout}");
+    assert!(stdout.contains("40 generated expression(s) at seed 1"), "{stdout}");
+    assert!(stdout.contains("worst relative difference"), "{stdout}");
+    // The command must say what it did not run, on its own output.
+    assert!(stdout.contains("does not run WGSL"), "{stdout}");
+    assert!(!stdout.contains("FAIL"), "{stdout}");
+}
+
+#[test]
+fn compile_sweep_is_the_same_sweep_for_the_same_seed() {
+    let (_, first, _) = canlab(&["compile-sweep", "--seed", "9", "--count", "12"]);
+    let (_, second, _) = canlab(&["compile-sweep", "--seed", "9", "--count", "12"]);
+    assert_eq!(first, second, "the sweep must be reproducible");
+}
+
+#[test]
+fn compile_sweep_refuses_a_bad_count() {
+    let (ok, _stdout, stderr) = canlab(&["compile-sweep", "--count", "0"]);
+    assert!(!ok);
+    assert!(stderr.contains("positive whole number"), "{stderr}");
+    let (ok, _stdout, stderr) = canlab(&["compile-sweep", "--seed", "x"]);
+    assert!(!ok);
+    assert!(stderr.contains("whole number"), "{stderr}");
+}

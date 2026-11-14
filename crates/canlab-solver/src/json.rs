@@ -54,10 +54,15 @@
 //! from the same two endpoints; an infinite end is always open, and encoding it
 //! as closed is rejected rather than silently repaired.
 //!
-//! The `approximation` kind is encoded but **not decoded**. A numeric root is
-//! made in-process by the native backend, so no worker ever sends one back; the
-//! decoder refuses the kind by name rather than pretending it is unknown. The
-//! asymmetry is deliberate and documented, not a gap left by accident.
+//! Every kind round trips: `none`, `all`, `values`, `family`, `inequality`,
+//! `union` and `approximation`. Two of them were once encoded and not decoded —
+//! `approximation`, because a worker never sends a numeric root back, and
+//! `union`, because the decoder had not been written — and both were still
+//! wrong: this module reads the transcripts it writes, and a kind it cannot read
+//! is a saved answer that cannot be loaded. A union may nest
+//! [`MAX_UNION_DEPTH`] levels and must have at least one member; an
+//! approximation's residual must be a finite JSON number, because a `NaN`
+//! residual is "unknown how good" wearing the shape of a measurement.
 //!
 //! # Hand-written on purpose
 //!
@@ -113,6 +118,22 @@ impl Json {
     pub(crate) fn as_bool(&self) -> Option<bool> {
         match self {
             Json::Bool(value) => Some(*value),
+            _ => None,
+        }
+    }
+
+    /// The numeric payload, if this is a number that parses as a finite `f64`.
+    ///
+    /// `Num` holds the number as written, and a JSON number is by definition
+    /// finite: `NaN`, `inf` and `1e999` are not JSON. So this returns `None`
+    /// for them, and a caller that reads a measurement — an approximation's
+    /// residual — has one place to refuse a value that is not one. The previous
+    /// version had no accessor at all, and the residual was written by
+    /// `format!("{:e}")` and never read back, which is how a `NaN` written by a
+    /// bug would have round-tripped into a plausible-looking answer.
+    pub(crate) fn as_number(&self) -> Option<f64> {
+        match self {
+            Json::Num(text) => text.parse::<f64>().ok().filter(|value| value.is_finite()),
             _ => None,
         }
     }
@@ -754,6 +775,26 @@ pub fn encode_solutions(solutions: &Solutions) -> String {
         // A union keeps its members whole, so the encoding is a list of complete
         // solution sets. The decoder does not read this kind back yet: it answers
         // "unknown kind", which is honest rather than a half-restored set.
+        Solutions::Rejected { solutions, rejected } => {
+            let mut out = String::from(r#"{"kind":"rejected","solutions":"#);
+            out.push_str(&encode_solutions(solutions));
+            out.push_str(r#","rejected":["#);
+            for (index, (value, why)) in rejected.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                out.push_str(r#"{"value":"#);
+                write_expr(value, &mut out);
+                out.push_str(r#","reason":"#);
+                out.push_str(&quote(match why {
+                    crate::solutions::Rejection::OutsideLogarithmDomain => "log-domain",
+                    crate::solutions::Rejection::DoesNotSatisfy => "not-a-solution",
+                }));
+                out.push('}');
+            }
+            out.push_str("]}");
+            out
+        }
         Solutions::Union(members) => {
             let mut out = String::from(r#"{"kind":"union","members":["#);
             for (index, member) in members.iter().enumerate() {
@@ -842,6 +883,18 @@ fn write_bound(bound: &Bound, out: &mut String) {
 /// [`decode`], so a worker cannot smuggle in a non-canonical value.
 pub fn decode_solutions(text: &str) -> Result<Solutions, SolverError> {
     let value = parse(text)?;
+    decode_solutions_value(&value, 0)
+}
+
+/// How deeply a union may nest.
+///
+/// `Solutions` is a tree, so a union of unions is well-typed and a decoder that
+/// recurses on it without a limit is a decoder a hostile or buggy worker can
+/// stop with one long string. Sixteen levels is far more than any answer has —
+/// `sin x = ½` is a union of two families, one level — and far below the stack.
+const MAX_UNION_DEPTH: usize = 16;
+
+fn decode_solutions_value(value: &Json, depth: usize) -> Result<Solutions, SolverError> {
     let members = value.as_object().ok_or_else(|| {
         SolverError::BadOutput("a solution set must be a JSON object with a \"kind\"".into())
     })?;
@@ -854,6 +907,76 @@ pub fn decode_solutions(text: &str) -> Result<Solutions, SolverError> {
     match kind {
         "none" => Ok(Solutions::None),
         "all" => Ok(Solutions::All),
+        "rejected" => {
+            let solutions = member_of(members, "solutions").ok_or_else(|| {
+                SolverError::BadOutput("rejected is missing \"solutions\"".into())
+            })?;
+            let rejected = member_of(members, "rejected")
+                .and_then(Json::as_array)
+                .ok_or_else(|| {
+                    SolverError::BadOutput("rejected is missing a \"rejected\" array".into())
+                })?;
+            let mut parsed = Vec::with_capacity(rejected.len());
+            for entry in rejected {
+                let fields = object_body(entry, "a rejected candidate")?;
+                let value = member_of(fields, "value").ok_or_else(|| {
+                    SolverError::BadOutput("a rejected candidate is missing \"value\"".into())
+                })?;
+                let reason = member_of(fields, "reason")
+                    .and_then(Json::as_str)
+                    .ok_or_else(|| {
+                        SolverError::BadOutput(
+                            "a rejected candidate is missing a string \"reason\"".into(),
+                        )
+                    })?;
+                let why = match reason {
+                    "log-domain" => crate::solutions::Rejection::OutsideLogarithmDomain,
+                    "not-a-solution" => crate::solutions::Rejection::DoesNotSatisfy,
+                    other => {
+                        return Err(SolverError::BadOutput(format!(
+                            "unknown rejection reason {other:?}"
+                        )))
+                    }
+                };
+                parsed.push((normalize(&expr_from_value(value)?), why));
+            }
+            Ok(Solutions::Rejected {
+                solutions: Box::new(decode_solutions_value(solutions, depth + 1)?),
+                rejected: parsed,
+            })
+        }
+        "union" => {
+            if depth >= MAX_UNION_DEPTH {
+                return Err(SolverError::BadOutput(format!(
+                    "a solution set nests unions more than {MAX_UNION_DEPTH} deep"
+                )));
+            }
+            let members = member_of(members, "members")
+                .and_then(Json::as_array)
+                .ok_or_else(|| {
+                    SolverError::BadOutput("union is missing a \"members\" array".into())
+                })?;
+            // An empty union has no reading: it is neither "no solution" (which
+            // has a kind of its own) nor "every number". Refusing it is the
+            // difference between an answer and a shape that happens to parse.
+            if members.is_empty() {
+                return Err(SolverError::BadOutput(
+                    "a union must have at least one member; use \"none\" for an empty answer"
+                        .into(),
+                ));
+            }
+            // One member is a union of one, which `Solutions` can hold and which
+            // is not the same value as that member alone: the encoder writes
+            // `{"kind":"union","members":[X]}` for `Union(vec![X])`, and a
+            // decoder that flattened it would break the round trip the tests
+            // assert. The *encoder* is where a one-member union would be
+            // normalised away, and it is not normalised.
+            let mut parsed = Vec::with_capacity(members.len());
+            for member in members {
+                parsed.push(decode_solutions_value(member, depth + 1)?);
+            }
+            Ok(Solutions::Union(parsed))
+        }
         "values" => {
             let values = member_of(members, "values")
                 .ok_or_else(|| SolverError::BadOutput("\"values\" is missing".into()))?;
@@ -920,15 +1043,33 @@ pub fn decode_solutions(text: &str) -> Result<Solutions, SolverError> {
                 intervals: parsed,
             })
         }
-        // Encoded but not decoded, on purpose: the numeric fallback runs
-        // in-process, so a worker never sends this kind back. Naming the
-        // decision is better than letting it fall into "unknown kind", which
-        // would read as a gap rather than a choice.
-        "approximation" => Err(SolverError::BadOutput(
-            "the \"approximation\" kind is encoded but not decoded: a numeric root is \
-             made locally, never sent back by a worker"
-                .into(),
-        )),
+        // Decoded as well as encoded. The comment here used to say a worker
+        // never sends a numeric root back, which was true and was still the
+        // wrong reason to leave a kind unreadable: a transcript is written and
+        // read by this module, and a kind it cannot read is a kind a customer's
+        // saved answer cannot come back as. The residual is a JSON number and
+        // must be finite, because a `NaN` residual would be "unknown how good"
+        // wearing the shape of a measurement.
+        "approximation" => {
+            let value = member_of(members, "value")
+                .ok_or_else(|| SolverError::BadOutput("approximation is missing \"value\"".into()))?;
+            let residual = member_of(members, "residual")
+                .and_then(Json::as_number)
+                .ok_or_else(|| {
+                    SolverError::BadOutput(
+                        "approximation is missing a numeric \"residual\"".into(),
+                    )
+                })?;
+            if !residual.is_finite() {
+                return Err(SolverError::BadOutput(format!(
+                    "an approximation's residual must be finite, not {residual}"
+                )));
+            }
+            Ok(Solutions::Approximation {
+                value: normalize(&expr_from_value(value)?),
+                residual,
+            })
+        }
         other => Err(SolverError::BadOutput(format!(
             "unknown solution-set kind {other:?}"
         ))),
@@ -1222,48 +1363,20 @@ mod tests {
         );
     }
 
-    /// The five answer kinds, built once so the encoding and the round trip
-    /// cannot drift apart.
-    fn every_kind() -> Vec<Solutions> {
-        vec![
-            Solutions::None,
-            Solutions::All,
-            Solutions::Values(vec![int(2), int(-2)]),
-            Solutions::Family {
-                base: mul([ratio(1, 6), sym("pi")]),
-                period: mul([int(2), sym("pi")]),
-                param: SymbolId::intern("k"),
-            },
-            Solutions::Inequality {
-                var: SymbolId::intern("x"),
-                intervals: vec![
-                    (
-                        Bound::Finite {
-                            value: int(-1),
-                            open: true,
-                        },
-                        Bound::Finite {
-                            value: int(3),
-                            open: false,
-                        },
-                    ),
-                    (
-                        Bound::Finite {
-                            value: int(4),
-                            open: false,
-                        },
-                        Bound::PosInfinity,
-                    ),
-                ],
-            },
-        ]
-    }
 
+    /// The round trip through the *wire* form, which is the original contract:
+    /// decode then encode is the same bytes. `every_kind` and this test existed
+    /// before the union decoder did — the helper's value list once stopped at
+    /// the kinds the decoder knew, so "every kind" meant "every decodable
+    /// kind" — and the list is now every kind the type has.
     #[test]
     fn solution_sets_round_trip_every_kind() {
         for solutions in every_kind() {
             let text = encode_solutions(&solutions);
-            let decoded = decode_solutions(&text).expect(&format!("{text} decodes"));
+            let decoded = match decode_solutions(&text) {
+                Ok(decoded) => decoded,
+                Err(error) => panic!("{text} should decode: {error}"),
+            };
             assert_eq!(decoded, solutions, "text={text}");
             // A decoded answer encodes to the same bytes: the wire form is
             // stable, not merely readable.
@@ -1329,14 +1442,34 @@ mod tests {
     }
 
     #[test]
-    fn the_approximation_kind_is_encoded_but_not_decoded() {
-        // The asymmetry is a decision: a numeric root is made in-process, so no
-        // worker sends one back. The refusal must name the decision instead of
-        // calling a kind this module knows "unknown".
+    fn the_approximation_kind_is_decoded_like_every_other_kind() {
+        // It used to be encoded and refused on the way back, with the reason
+        // that a worker never sends a numeric root. The reason was true and the
+        // refusal was still wrong: this module reads the transcripts it writes,
+        // and a kind it cannot read is a saved answer that cannot be loaded.
+        // The residual is written as a JSON *number* and is read back as one.
+        // The encoder writes an exact value as `{"Num":"5/4"}` — a ratio, which
+        // is what `parse_number_text` reads back as exact — so this is the form
+        // the wire actually carries.
+        let text = r#"{"kind":"approximation","value":{"Num":"5/4"},"residual":1e-16}"#;
+        let decoded = decode_solutions(text).expect("decoded");
+        assert_eq!(
+            decoded,
+            Solutions::Approximation {
+                value: ratio(5, 4),
+                residual: 1e-16,
+            }
+        );
+        // And a decimal value decodes as the float it says it is.
         let text = r#"{"kind":"approximation","value":{"Num":"1.25"},"residual":1e-16}"#;
-        let error = decode_solutions(text).expect_err("not decoded");
-        assert!(matches!(error, SolverError::BadOutput(_)), "{error:?}");
-        assert!(error.to_string().contains("not decoded"), "{error}");
+        let decoded = decode_solutions(text).expect("decoded");
+        assert_eq!(
+            decoded,
+            Solutions::Approximation {
+                value: ExprNode::num(Number::Float(1.25)),
+                residual: 1e-16,
+            }
+        );
     }
 
     #[test]
@@ -1403,4 +1536,114 @@ mod tests {
             );
         }
     }
+    // -- solution sets: the round trip is the contract ---------------------
+
+    /// Every kind an answer can be, so that "round trips" means all of them.
+    fn every_kind() -> Vec<Solutions> {
+        vec![
+            Solutions::None,
+            Solutions::All,
+            Solutions::Values(vec![int(1), int(-2), ratio(1, 2)]),
+            Solutions::Family {
+                base: ratio(1, 3),
+                period: sym("pi"),
+                param: SymbolId::intern("k"),
+            },
+            Solutions::Union(vec![
+                Solutions::Family {
+                    base: ratio(1, 6),
+                    period: int(2),
+                    param: SymbolId::intern("k"),
+                },
+                Solutions::Values(vec![int(3)]),
+            ]),
+            Solutions::Approximation {
+                value: ratio(5, 4),
+                residual: 1.5e-13,
+            },
+            // A union of one is a value `Solutions` can hold, and the encoder
+            // writes it; the decoder must therefore read it back as a union and
+            // not flatten it, or the round trip is not a round trip.
+            Solutions::Union(vec![Solutions::Values(vec![int(7)])]),
+        ]
+    }
+
+    #[test]
+    fn every_kind_of_answer_survives_the_encoder_and_the_decoder() {
+        for original in every_kind() {
+            let text = encode_solutions(&original);
+            match decode_solutions(&text) {
+                Ok(back) => assert_eq!(back, original, "for {text}"),
+                Err(error) => panic!("{text}: {error}"),
+            }
+            // Encoding is deterministic, so the re-encoded text is the same one.
+            assert_eq!(encode_solutions(&decode_solutions(&text).expect("decodes")), text);
+        }
+    }
+
+    #[test]
+    fn a_union_keeps_its_members_whole_and_its_order() {
+        // The bug this rules out: a decoder that concatenated the members' value
+        // sets would answer `{3}` for a union of a family and a value, and the
+        // family would be gone with nothing to say so.
+        let text = r#"{"kind":"union","members":[{"kind":"family","base":{"Num":"1/6"},"period":{"Num":"2"},"param":"k"},{"kind":"values","values":[{"Num":"3"}]}]}"#;
+        let decoded = decode_solutions(text).expect("a union decodes");
+        assert!(matches!(decoded, Solutions::Union(ref members) if members.len() == 2));
+        let Solutions::Union(members) = decoded else { unreachable!() };
+        assert!(matches!(members[0], Solutions::Family { .. }));
+        assert!(matches!(members[1], Solutions::Values(_)));
+    }
+
+    #[test]
+    fn a_union_that_cannot_be_an_answer_is_refused() {
+        // No members: neither "no solution" nor "every number".
+        let empty = decode_solutions(r#"{"kind":"union","members":[]}"#).unwrap_err();
+        assert!(format!("{empty}").contains("at least one member"), "{empty}");
+        // No array at all.
+        let missing = decode_solutions(r#"{"kind":"union"}"#).unwrap_err();
+        assert!(format!("{missing}").contains("members"), "{missing}");
+        // A member that is not a solution set.
+        let wrong = decode_solutions(r#"{"kind":"union","members":[{"kind":"nope"}]}"#).unwrap_err();
+        assert!(format!("{wrong}").contains("unknown solution-set kind"), "{wrong}");
+    }
+
+    #[test]
+    fn unions_cannot_nest_without_a_limit() {
+        // The decoder recurses on a tree the input controls, so the depth is
+        // bounded: a worker that sends two hundred nested unions gets a refusal,
+        // not a stack overflow.
+        let mut text = String::from(r#"{"kind":"values","values":[{"Num":"1"}]}"#);
+        for _ in 0..(MAX_UNION_DEPTH + 5) {
+            text = format!(r#"{{"kind":"union","members":[{text}]}}"#);
+        }
+        let error = decode_solutions(&text).unwrap_err();
+        assert!(format!("{error}").contains("nests unions"), "{error}");
+        // And one below the limit is read.
+        let mut fine = String::from(r#"{"kind":"values","values":[{"Num":"1"}]}"#);
+        for _ in 0..MAX_UNION_DEPTH {
+            fine = format!(r#"{{"kind":"union","members":[{fine}]}}"#);
+        }
+        assert!(decode_solutions(&fine).is_ok());
+    }
+
+    #[test]
+    fn an_approximation_needs_a_finite_residual() {
+        let good = r#"{"kind":"approximation","value":{"Num":"5/4"},"residual":1.5e-13}"#;
+        let decoded = decode_solutions(good).expect("decodes");
+        assert_eq!(
+            decoded,
+            Solutions::Approximation {
+                value: ratio(5, 4),
+                residual: 1.5e-13,
+            }
+        );
+        for bad in [
+            r#"{"kind":"approximation","value":{"Num":"5/4"}}"#,
+            r#"{"kind":"approximation","value":{"Num":"5/4"},"residual":"not a number"}"#,
+            r#"{"kind":"approximation","value":{"Num":"5/4"},"residual":"inf"}"#,
+        ] {
+            assert!(decode_solutions(bad).is_err(), "{bad} was accepted");
+        }
+    }
+
 }

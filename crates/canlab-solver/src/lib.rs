@@ -29,25 +29,38 @@
 //!
 //! # Deliberately out of scope
 //!
-//! There is no caching and no retry policy here. Both are policy decisions for
-//! the caller; bolting a cache into the bridge would hide the backend's
-//! cost model from the layer that can actually reason about it.
+//! There is no retry policy here. Retrying is a policy decision for the caller;
+//! bolting it into the bridge would hide the backend's cost model from the layer
+//! that can actually reason about it.
+//!
+//! The one cache in this crate is [`kernel::KernelCache`], and it is not a cache
+//! of solver answers: it is the W7.3 content-hash cache of *compiled kernels*,
+//! keyed on the Lua text a compile was made from. A solver answer depends on the
+//! whole document and the backend that produced it, which is a different key
+//! space and a different question.
 
 #![warn(missing_docs)]
 
 use canlab_core::{Expr, Relation, SymbolId};
 
+pub mod combinatorics;
+pub mod complex;
 pub mod exponential;
+pub mod geometry;
 pub mod inequality;
+pub mod kernel;
+pub mod linalg;
 pub mod logarithmic;
 pub mod json;
 pub mod mock;
+pub mod nonlinear;
 pub mod native;
 pub mod parametric;
 pub mod solutions;
 pub mod system;
 pub mod session;
 pub mod trig;
+pub mod value;
 pub mod sympy;
 
 pub use json::{decode, decode_array, decode_solutions, encode, encode_solutions};
@@ -196,6 +209,22 @@ pub trait Solver: Send + Sync {
         _equations: &[Expr],
         _vars: &[SymbolId],
     ) -> Result<Vec<(SymbolId, Expr)>, SolverError> {
+        Err(SolverError::NotImplemented)
+    }
+
+    /// Solve a system that may have **several** points, or none.
+    ///
+    /// Additive beside [`Solver::solve_system`], which keeps its one-assignment
+    /// signature and its linear behaviour: a circle and a line meet twice, and
+    /// returning one of the points is a right-looking answer to a different
+    /// question. The default is an honest decline, so a backend that cannot do
+    /// this says so rather than returning an empty list that a caller would
+    /// read as "no solution".
+    fn solve_nonlinear(
+        &self,
+        _equations: &[Expr],
+        _vars: &[SymbolId],
+    ) -> Result<crate::nonlinear::SystemAnswer, SolverError> {
         Err(SolverError::NotImplemented)
     }
 }
