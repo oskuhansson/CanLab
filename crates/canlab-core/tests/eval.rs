@@ -231,6 +231,7 @@ fn op_name(op: Op) -> &'static str {
         Op::Sinh => "sinh",
         Op::Cosh => "cosh",
         Op::Tanh => "tanh",
+        Op::Binom => "binom",
     }
 }
 
