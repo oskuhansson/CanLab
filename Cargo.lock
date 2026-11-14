@@ -2284,6 +2284,7 @@ dependencies = [
  "canlab-core",
  "canlab-input",
  "canlab-mathview",
+ "canlab-ode",
  "canlab-parse",
  "canlab-plot",
  "canlab-scene",

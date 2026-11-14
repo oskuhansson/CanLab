@@ -58,12 +58,47 @@ pub fn is_calculus_statement(line: &str) -> bool {
         trimmed.starts_with(command)
             && !trimmed[command.len()..].starts_with(|c: char| c.is_ascii_alphabetic())
     });
+    // An ODE line — `y' = -k*y` or `y(0) = 1` — is a statement too, and for the
+    // same reason: no `Expr` node holds a derivative or an initial condition, so
+    // the row is held whole and `canlab-ode` reads it. The apostrophe is the
+    // marker; a line with an `X` slot is still being typed and stays structural.
+    if !starts_with_command && is_ode_line(trimmed) {
+        return !trimmed.contains('X');
+    }
     // A line still being *typed* is not a statement. The palette inserts
     // `\int_{X}^{X}`, whose `X`s are empty slots the cursor lands in, and a row
     // with an empty slot is a construct under construction — the structural
     // reader owns it until the slots are filled. Only a line with no `X` left is
     // a finished statement, and only then does the parser read it.
     starts_with_command && !trimmed.contains('X')
+}
+
+/// Whether a line is an ODE statement: `y' = …` or `y(0) = …`.
+///
+/// A derivative line is `name` followed by `'` and an `=`; an initial condition is
+/// `name(…)` and an `=`. Both are held whole, because an `Expr` has no node for
+/// either — the same reason `\int` is held whole.
+fn is_ode_line(line: &str) -> bool {
+    let Some((left, _right)) = line.split_once('=') else {
+        return false;
+    };
+    let left = left.trim();
+    // `y'` — a name, an apostrophe, nothing else.
+    if let Some(name) = left.strip_suffix('\'') {
+        let name = name.trim();
+        return !name.is_empty()
+            && name.chars().all(|c| c.is_alphanumeric() || c == '_');
+    }
+    // `y(0)` — a name and a parenthesised argument.
+    if let Some(open) = left.find('(')
+        && left.ends_with(')')
+    {
+        let name = left[..open].trim();
+        return !name.is_empty()
+            && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+            && left[open + 1..left.len() - 1].trim().parse::<f64>().is_ok();
+    }
+    false
 }
 
 /// Read one palette `insert` string into the nodes it stands for.
@@ -457,6 +492,37 @@ fn plain(row: &Row) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod ode_statement_tests {
+    use super::*;
+
+    #[test]
+    fn a_derivative_line_is_a_statement_and_a_plain_equation_is_not() {
+        // `y' = -k*y` has no `Expr` node, so the row is held whole for
+        // `canlab-ode` to read — the same rule `\int` follows.
+        assert!(is_calculus_statement("y' = -k*y"));
+        assert!(is_calculus_statement("x'=y"));
+        // An initial condition is the other half of the same document.
+        assert!(is_calculus_statement("y(0) = 1"));
+        assert!(is_calculus_statement("x(-1.5) = 2"));
+        // A plain equation is an `Expr` and stays structural: the solver owns it.
+        assert!(!is_calculus_statement("y = -k*y"));
+        assert!(!is_calculus_statement("x^2 + y^2 = 1"));
+        // A half-typed line with an empty slot stays structural too.
+        assert!(!is_calculus_statement("y' = X"));
+    }
+
+    #[test]
+    fn an_ode_line_is_held_whole_and_a_plain_one_is_parsed() {
+        let row = parse("y' = -k*y").expect("a row");
+        assert_eq!(row.len(), 1);
+        assert!(matches!(row[0], crate::tree::Node::Raw(_)), "{:?}", row[0]);
+        // `y = 2x` is an ordinary equation and becomes a tree.
+        let row = parse("y = 2x").expect("a row");
+        assert!(!matches!(row[0], crate::tree::Node::Raw(_)), "{:?}", row[0]);
+    }
 }
 
 #[cfg(test)]

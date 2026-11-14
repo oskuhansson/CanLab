@@ -1185,6 +1185,51 @@ pub fn build_surface(app: &CasApp) -> Option<canlab_scene::surface::Mesh> {
 /// Returns `false` when there is nothing to draw, so that the caller can fall
 /// back to the 2D plot rather than showing an empty canvas.
 fn surface(app: &mut CasApp, ui: &mut Ui, rect: Rect, response: &egui::Response) -> bool {
+    // An ODE document has a trajectory and no surface, and it is drawn in the
+    // same scene: the camera, the projection and the drag are the same.
+    if let Some(points) = build_trajectory(app) {
+        let camera = canlab_scene::svg::framing_camera(
+            &canlab_scene::surface::Mesh {
+                vertices: points
+                    .iter()
+                    .map(|point| canlab_scene::surface::Vertex {
+                        position: *point,
+                        normal: canlab_scene::Vec3::UP,
+                        shade: 0.5,
+                    })
+                    .collect(),
+                triangles: Vec::new(),
+            },
+            app.surface_angles.0,
+            app.surface_angles.1,
+            f64::from(rect.width() / rect.height().max(1.0)),
+        );
+        let painter = ui.painter_at(rect);
+        let to_screen = |point: canlab_scene::Vec3| -> Option<egui::Pos2> {
+            let projected = camera.project(point)?;
+            let (x, y) = canlab_scene::Camera::to_pixels(
+                projected,
+                f64::from(rect.width()),
+                f64::from(rect.height()),
+            );
+            Some(rect.min + egui::vec2(x as f32, y as f32))
+        };
+        let stroke = egui::Stroke::new(1.6, crate::theme::accent());
+        let mut previous: Option<egui::Pos2> = None;
+        for point in &points {
+            match to_screen(*point) {
+                Some(at) => {
+                    if let Some(from) = previous {
+                        painter.line_segment([from, at], stroke);
+                    }
+                    previous = Some(at);
+                }
+                // Behind the camera: break the line rather than joining across.
+                None => previous = None,
+            }
+        }
+        return true;
+    }
     let Some(mesh) = build_surface(app) else {
         return false;
     };
@@ -1400,6 +1445,53 @@ fn draw_chrome(
             );
         }
     }
+}
+
+/// The ODE trajectory the document describes, or `None`.
+///
+/// Every non-empty row must be an ODE statement — `y' = …` or `y(0) = …` — which
+/// `canlab-input` holds whole as a `Node::Raw`. A document with one ordinary
+/// equation in it is not an ODE and gets no trajectory.
+pub fn build_trajectory(app: &CasApp) -> Option<Vec<canlab_scene::Vec3>> {
+    let mut lines: Vec<String> = Vec::new();
+    for row in app.field.rows() {
+        if row.is_empty() {
+            continue;
+        }
+        let [canlab_input::Node::Raw(text)] = row.as_slice() else {
+            return None;
+        };
+        lines.push(text.clone());
+    }
+    if lines.len() < 2 {
+        return None;
+    }
+    let system = canlab_ode::system::parse_system(&lines).ok()?;
+    // The span is the plot's own window, which is where the reader said to look.
+    let trace = canlab_ode::system::dopri_system(
+        &system,
+        app.x_min,
+        app.x_max,
+        1e-8,
+        (app.x_max - app.x_min) / 100.0,
+    )
+    .ok()?;
+    if trace.points.len() < 2 {
+        return None;
+    }
+    Some(
+        trace
+            .points
+            .iter()
+            .map(|point| {
+                canlab_scene::Vec3::new(
+                    point.y.first().copied().unwrap_or(0.0),
+                    point.y.get(1).copied().unwrap_or(0.0),
+                    point.y.get(2).copied().unwrap_or(0.0),
+                )
+            })
+            .collect(),
+    )
 }
 
 pub fn plot(app: &mut CasApp, ui: &mut Ui) {
@@ -3014,6 +3106,36 @@ mod surface_tests {
         }
         assert_eq!(app.surface_zoom, 1.0, "fit did not reset the zoom");
         assert_eq!(app.surface_pan, (0.0, 0.0), "fit did not reset the pan");
+    }
+
+    #[test]
+    fn an_ode_document_builds_a_trajectory_and_an_ordinary_one_does_not() {
+        // The document is held whole by `canlab-input` and read by `canlab-ode`,
+        // so the panel draws what the command line draws.
+        let mut app = CasApp::new();
+        app.field = canlab_input::MathField::from_latex_lines(&[
+            "x' = y".to_string(),
+            "y' = -x".to_string(),
+            "x(0) = 1".to_string(),
+            "y(0) = 0".to_string(),
+        ])
+        .expect("an ode document");
+        app.x_min = 0.0;
+        app.x_max = std::f64::consts::TAU;
+        app.recompute();
+        let points = build_trajectory(&app).expect("a trajectory");
+        assert!(points.len() > 20, "only {} points", points.len());
+        // One turn of the oscillator is a circle of radius 1 in the plane.
+        for point in &points {
+            let radius = (point.x * point.x + point.y * point.y).sqrt();
+            assert!((radius - 1.0).abs() < 1e-6, "radius {radius}");
+            assert!(point.z.abs() < 1e-12, "the trajectory left the plane");
+        }
+        // An ordinary equation is not an ODE and gets no trajectory.
+        let mut app = CasApp::new();
+        app.field = canlab_input::MathField::from_latex("x^2 + 1").expect("an expression");
+        app.recompute();
+        assert!(build_trajectory(&app).is_none());
     }
 
     #[test]
