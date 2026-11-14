@@ -3362,7 +3362,9 @@ pub fn designs(app: &mut CasApp, ui: &mut Ui) {
     let fill = ui.visuals().faint_bg_color;
     // Millimetres to pixels: the envelope is 56 across and 110 tall, with a
     // margin so the sketch does not touch the panel's edge.
-    let scale = ((rect.width() - 16.0) / 56.0).min((rect.height() - 16.0) / 110.0);
+    let scale = ((rect.width() - 16.0) / 56.0)
+        .min((rect.height() - 16.0) / 110.0)
+        .max(0.1);
     let centre = rect.center();
     let at = |x: f64, y: f64| pos2(centre.x + (x as f32) * scale, centre.y - (y as f32) * scale);
 
