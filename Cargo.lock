@@ -2243,6 +2243,7 @@ version = "0.1.0"
 dependencies = [
  "canlab-core",
  "canlab-corpus",
+ "canlab-ode",
  "canlab-parse",
  "canlab-plot",
  "canlab-scene",

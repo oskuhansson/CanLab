@@ -257,6 +257,74 @@ fn solve_all_reports_a_decline_with_its_reason() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn ode_draws_a_closed_orbit_for_the_harmonic_oscillator() {
+    // `x' = y, y' = -x` from `(1, 0)` is a circle, and one turn of it must come
+    // back to where it started. The SVG is the check: one polyline, and its last
+    // point on its first.
+    let out = temp_svg("ode-orbit.svg");
+    let (ok, stdout, stderr) = canlab(&[
+        "ode",
+        "x' = y",
+        "y' = -x",
+        "x(0) = 1",
+        "y(0) = 0",
+        "--span",
+        "0",
+        "6.283185307179586",
+        "-o",
+        out.to_str().expect("a path"),
+    ]);
+    assert!(ok, "stderr: {stderr}");
+    assert!(stdout.contains("point(s)"), "{stdout}");
+    let svg = std::fs::read_to_string(&out).expect("the svg");
+    assert_eq!(svg.matches("<polyline").count(), 1, "{}", &svg[..200.min(svg.len())]);
+    let points = svg
+        .split("points=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("points");
+    let pairs: Vec<(f64, f64)> = points
+        .split(' ')
+        .map(|pair| {
+            let (x, y) = pair.split_once(',').expect("a pair");
+            (
+                x.parse().expect("a number"),
+                y.parse().expect("a number"),
+            )
+        })
+        .collect();
+    assert!(pairs.len() > 20, "only {} points", pairs.len());
+    // A closed orbit: the last point is within a couple of pixels of the first.
+    let (first, last) = (pairs[0], pairs[pairs.len() - 1]);
+    let gap = ((first.0 - last.0).powi(2) + (first.1 - last.1).powi(2)).sqrt();
+    assert!(gap < 3.0, "the orbit is not closed: {first:?} to {last:?}, {gap} px");
+    // And it is a circle, not a line: the width and height are both substantial.
+    let xs: Vec<f64> = pairs.iter().map(|pair| pair.0).collect();
+    let ys: Vec<f64> = pairs.iter().map(|pair| pair.1).collect();
+    let width = xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
+        - xs.iter().cloned().fold(f64::INFINITY, f64::min);
+    let height = ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
+        - ys.iter().cloned().fold(f64::INFINITY, f64::min);
+    assert!(width > 100.0 && height > 100.0, "{width} x {height}");
+    assert!(
+        (width - height).abs() / width.max(height) < 0.1,
+        "the orbit is not circular: {width} x {height}"
+    );
+}
+
+#[test]
+fn ode_refuses_a_system_it_cannot_read() {
+    // `y' = 1 + y'` is not isolated, and the refusal names the reason.
+    let (ok, _stdout, stderr) = canlab(&["ode", "y' = 1 + y'", "y(0) = 1"]);
+    assert!(!ok, "an unisolated derivative was accepted");
+    assert!(stderr.contains("not isolated"), "{stderr}");
+    // No lines at all is refused by name.
+    let (ok, _stdout, stderr) = canlab(&["ode"]);
+    assert!(!ok);
+    assert!(stderr.contains("ode needs"), "{stderr}");
+}
+
+#[test]
 fn compile_prints_the_lua_and_the_wgsl() {
     let (ok, stdout, stderr) = canlab(&["compile", r"2x^2 + \sin(x)"]);
     assert!(ok, "failed: {stderr}");

@@ -88,6 +88,7 @@ fn main() -> ExitCode {
         "plot" => plot_command(&args[1..]),
         "sign" => sign_command(&args[1..]),
         "surface" => surface_command(&args[1..]),
+        "ode" => ode_command(&args[1..]),
         "int" | "integrate" => integrate_command(&args[1..]),
         "solve-all" => solve_all_command(&args[1..]),
         "compile" => compile_command(&args[1..]),
@@ -224,6 +225,113 @@ fn plot_command(args: &[String]) -> Result<(), String> {
 /// Bevy, which does not fit on this machine — it is the smallest thing that makes
 /// a mesh visible, using the same camera, projection and depth sort the viewport
 /// will.
+/// `canlab ode <line>... [--span a b] [--tolerance x] [-o out.svg]
+/// [--azimuth a --elevation e]`
+///
+/// Integrates the system the lines describe and writes its trajectory as an SVG,
+/// with the same camera and projection `canlab surface` uses — so a trajectory
+/// and a surface drawn from one viewpoint line up. This is W8.5's "the ODE path
+/// drawn in the same scene", from the command line rather than the panel.
+fn ode_command(args: &[String]) -> Result<(), String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut out = PathBuf::from("ode.svg");
+    let mut span = (0.0_f64, 10.0_f64);
+    let mut tolerance = 1e-8_f64;
+    let mut azimuth = 0.6_f64;
+    let mut elevation = 0.5_f64;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-o" | "--out" => {
+                i += 1;
+                out = PathBuf::from(args.get(i).ok_or("--out needs a path")?);
+            }
+            "--span" => {
+                let from = parse_float(args.get(i + 1), "--span")?;
+                let to = parse_float(args.get(i + 2), "--span")?;
+                if !(from < to) {
+                    return Err("--span needs an increasing pair".into());
+                }
+                span = (from, to);
+                i += 2;
+            }
+            "--tolerance" => {
+                i += 1;
+                tolerance = parse_float(args.get(i), "--tolerance")?;
+                if !(tolerance > 0.0) {
+                    return Err("--tolerance must be positive".into());
+                }
+            }
+            "--azimuth" => {
+                i += 1;
+                azimuth = parse_float(args.get(i), "--azimuth")?;
+            }
+            "--elevation" => {
+                i += 1;
+                elevation = parse_float(args.get(i), "--elevation")?;
+            }
+            other if other.starts_with('-') => {
+                return Err(format!("unknown ode option `{other}`"))
+            }
+            _ => lines.push(args[i].clone()),
+        }
+        i += 1;
+    }
+    if lines.is_empty() {
+        return Err(
+            "ode needs at least one line, like \"x' = y\" and \"x(0) = 1\"".into(),
+        );
+    }
+    let system = canlab_ode::system::parse_system(&lines).map_err(|error| error.message())?;
+    let trace = canlab_ode::system::dopri_system(&system, span.0, span.1, tolerance, 0.01)
+        .map_err(|error| error.message())?;
+    if trace.points.len() < 2 {
+        return Err("the integration produced fewer than two points".into());
+    }
+    // The first three components, and `z = 0` for a system with fewer: a phase
+    // portrait of `x' = y, y' = -x` is a curve in the plane, and putting it in
+    // the plane is what a reader expects.
+    let points: Vec<canlab_scene::Vec3> = trace
+        .points
+        .iter()
+        .map(|point| {
+            canlab_scene::Vec3::new(
+                point.y.first().copied().unwrap_or(0.0),
+                point.y.get(1).copied().unwrap_or(0.0),
+                point.y.get(2).copied().unwrap_or(0.0),
+            )
+        })
+        .collect();
+    let camera = framing_points(&points, azimuth, elevation);
+    let svg = canlab_scene::svg::path_svg(&points, &camera, &canlab_scene::svg::SvgOptions::default());
+    std::fs::write(&out, svg)
+        .map_err(|error| format!("could not write {}: {error}", out.display()))?;
+    println!(
+        "wrote {} ({} point(s), {} component(s))",
+        out.display(),
+        points.len(),
+        system.dimension()
+    );
+    Ok(())
+}
+
+/// A camera that frames a list of points, from the angles the caller gives.
+fn framing_points(
+    points: &[canlab_scene::Vec3],
+    azimuth: f64,
+    elevation: f64,
+) -> canlab_scene::Camera {
+    let camera = canlab_scene::Camera {
+        azimuth,
+        elevation,
+        aspect: 4.0 / 3.0,
+        ..canlab_scene::Camera::default()
+    };
+    let mut fitted = camera.fit(points);
+    fitted.distance *= 1.1;
+    fitted
+}
+
 fn surface_command(args: &[String]) -> Result<(), String> {
     let source = args.first().ok_or("surface needs a LaTeX expression in x and y")?;
     let expr = parse_or_err(source)?;
