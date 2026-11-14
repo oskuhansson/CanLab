@@ -85,11 +85,11 @@ crossing time to differ between sensors.
 
 | Design | EUR | g | Sensors | Angle | Directed muons | Verdict |
 |---|---|---|---|---|---|---|
-| Counter | 115 | 44.9 | 1 | none | 40.9 | No direction |
-| Cherenkov timing | 185 | 47.7 | 4 | 81.2° bound | 11.4 | Fails at 30° |
-| **Short tracker** | **245** | **31.6** | **8** | **(23.4°) formula** | **13.3** | **Passes** |
-| Coarse tracker | 245 | 31.6 | 8 | (11.7°) formula | 7.3 | Too few muons |
-| Fine tracker | 890 | 31.6 | 32 | (3.9°) formula | 4.4 | Over budget |
+| Counter | 148 | 37.2 | 1 | none | 31.3 | No direction |
+| Cherenkov timing | 218 | 47.7 | 4 | 81.2° bound | 11.4 | Fails at 30° |
+| **Short tracker** | **278** | **28.0** | **8** | **(23.4°) formula** | **10.1** | **Passes** |
+| Coarse tracker | 278 | 28.0 | 8 | (11.7°) formula | 5.3 | Too few muons |
+| Fine tracker | 923 | 28.0 | 32 | (3.9°) formula | 3.1 | Over budget |
 | Ring imager | 490 | 22.7 | 16 | (10.6°) estimate | 11.4 | Unproven |
 
 *Directed muons* are the crossings that reach both planes in a 100 s flight — the
@@ -153,6 +153,7 @@ flowchart TB
 
 | File | What it holds |
 |---|---|
+| [physics.md](physics.md) | The physics in detail: every equation, every constant, and the worked budgets |
 | [simulation.md](simulation.md) | The simulation in detail: every module, every draw, and what is not modelled |
 | [designs.md](designs.md) | The five designs, their numbers, and the trade each one makes |
 | [components.md](components.md) | The four parts, their datasheet numbers, availability, and the jitter budget |

@@ -17,10 +17,11 @@ updated: 2026-11-14
 | Constraint | Value | Source |
 |---|---|---|
 | Volume | 115 mm high, Ø66 mm | `CANSAT-GRUND.md` §3 |
-| Cross-section | 34.2 cm², 32.2 cm² after 1 mm of allowance | computed |
+| Cross-section | 34.2 cm², 24.6 cm² after 5 mm of allowance | computed |
 | Mass | 300–350 g total, including the battery | `CANSAT-GRUND.md` §3 |
 | Budget | ≤ 500 € | `CANSAT-GRUND.md` §3 |
 | Detector's share | 200–300 € | the team's allocation |
+| Optical adhesive | 32.70 € | Norland NOA 68, 1 oz, AMS Technologies |
 | Acceleration | 20 G required, ~30 G measured | `CANSAT-GRUND.md` §3 |
 | Parachute mount | ≥ 50 N | `CANSAT-GRUND.md` §3 |
 | Power | 2 h on one charge | `CANSAT-GRUND.md` §3 |
@@ -115,7 +116,7 @@ direction is not a direction detector:
 | Requirement | Limit | Note |
 |---|---|---|
 | The design measures a direction | angle ≤ 30° | A design with no direction fails |
-| The design costs at most the detector's budget | 300 € | The fine tracker fails at 890 € |
+| The design costs at most the detector's budget | 300 € | The fine tracker fails at 923 € |
 
 ---
 
@@ -126,8 +127,8 @@ direction is not a direction detector:
 | counter | fails: no direction |
 | cherenkov timing | fails: 81.2° (placement, not clock) |
 | coarse tracker | **passes** |
-| fine tracker | fails: 890 € against 300 € |
-| ring imager | fails: 490 € against 300 € |
+| fine tracker | fails: 923 € against 300 € |
+| ring imager | fails: 523 € against 300 € |
 
 One design passes, and it is the recommendation.
 

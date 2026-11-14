@@ -84,15 +84,17 @@ impl std::fmt::Display for CanError {
 impl std::error::Error for CanError {}
 
 impl Can {
-    /// The competition's can: 115 mm tall, Ø66 mm, with a millimetre of wall and
-    /// tolerance taken off each dimension.
+    /// The competition's can: 115 mm tall, Ø66 mm, with five millimetres of wall
+    /// and tolerance taken off each dimension.
     ///
-    /// A millimetre is a guess at the tolerance and it is a *parameter*, not a
-    /// constant hidden here: the real can has a rolled rim, a lid, and a
+    /// Five millimetres is a guess at the tolerance and it is a *parameter*, not
+    /// a constant hidden here: the real can has a rolled rim, a lid, and a
     /// mounting frame, and a team that measures its own can should pass its own
-    /// number.
+    /// number. The first version of this study used one millimetre, which is
+    /// too small for a rolled rim and a lid: the detector's radius would be
+    /// 32 mm against a 33 mm wall, and the rim alone is more than that.
     pub fn standard() -> Can {
-        Can { radius_mm: 33.0, height_mm: 115.0, wall_mm: 1.0 }
+        Can { radius_mm: 33.0, height_mm: 115.0, wall_mm: 5.0 }
     }
 
     /// The radius a block may actually use.
@@ -108,8 +110,8 @@ impl Can {
     /// The area of the can's cross-section, mm² — the largest face a detector
     /// mounted across the axis could present.
     ///
-    /// Ø66 mm is 3421 mm², or 34.2 cm²; with the millimetre of allowance it is
-    /// 3217 mm², or 32.2 cm². The mission documents quote "~30 cm²" for a
+    /// Ø66 mm is 3421 mm², or 34.2 cm²; with five millimetres of allowance it is
+    /// 2463 mm², or 24.6 cm². The mission documents quote "~30 cm²" for a
     /// scintillator plate, which is this number with the mounting frame taken
     /// off.
     pub fn cross_section_mm2(&self) -> f64 {
@@ -225,13 +227,15 @@ mod tests {
         match refused {
             Err(CanError::TooTall { height_mm, limit_mm }) => {
                 assert!((height_mm - 135.0).abs() < 1e-9, "{height_mm}");
-                assert!((limit_mm - 114.0).abs() < 1e-9, "{limit_mm}");
+                assert!((limit_mm - 110.0).abs() < 1e-9, "{limit_mm}");
             }
             other => panic!("a 30 mm tent was not refused for height: {other:?}"),
         }
-        // 25 mm is 112.5 mm tall: it fits, with 1.5 mm to spare.
-        assert_eq!(can.admits(25.0, 10.0), Ok(()));
-        assert!(can.admits(26.0, 10.0).is_err(), "117 mm of block in a 114 mm can");
+        // 24 mm is 108 mm tall: it fits, with 2 mm to spare. 25 mm is 112.5 mm
+        // and no longer does.
+        assert_eq!(can.admits(24.0, 10.0), Ok(()));
+        assert!(can.admits(25.0, 10.0).is_err(), "112.5 mm of block in a 110 mm can");
+        assert!(can.admits(26.0, 10.0).is_err(), "117 mm of block in a 110 mm can");
     }
 
     #[test]
@@ -242,9 +246,9 @@ mod tests {
         let can = Can::standard();
         match can.admits(10.0, 70.0) {
             Err(CanError::TooWide { half_diagonal_mm, limit_mm }) => {
-                // √(10² + 35²) = 36.4 mm from the axis, against 32 mm of radius.
+                // √(10² + 35²) = 36.4 mm from the axis, against 28 mm of radius.
                 assert!((half_diagonal_mm - 36.4).abs() < 0.05, "{half_diagonal_mm}");
-                assert!((limit_mm - 32.0).abs() < 1e-9, "{limit_mm}");
+                assert!((limit_mm - 28.0).abs() < 1e-9, "{limit_mm}");
             }
             other => panic!("a 70 mm thick block was not refused for width: {other:?}"),
         }
@@ -264,30 +268,31 @@ mod tests {
     #[test]
     fn the_largest_scale_is_the_smaller_of_the_two_bounds() {
         let can = Can::standard();
-        // At 10 mm deep the height binds: 114/4.5 = 25.33 mm.
+        // At 10 mm deep the height binds: 110/4.5 = 24.44 mm.
         let largest = can.largest_scale_mm(10.0).expect("some room");
-        assert!((largest - 114.0 / 4.5).abs() < 1e-9, "{largest}");
+        assert!((largest - 110.0 / 4.5).abs() < 1e-9, "{largest}");
         assert_eq!(can.admits(largest, 10.0), Ok(()));
         assert!(can.admits(largest + 0.1, 10.0).is_err());
-        // At 60 mm deep the circle binds instead, and it is a different number.
-        let wide = can.largest_scale_mm(60.0).expect("some room");
+        // At 40 mm deep the circle binds instead, and it is a different number.
+        // (60 mm no longer fits the 56 mm circle at all.)
+        let wide = can.largest_scale_mm(40.0).expect("some room");
         assert!(wide < largest, "{wide} vs {largest}");
-        assert_eq!(can.admits(wide, 60.0), Ok(()));
-        assert!(can.admits(wide + 0.1, 60.0).is_err());
+        assert_eq!(can.admits(wide, 40.0), Ok(()));
+        assert!(can.admits(wide + 0.1, 40.0).is_err());
         // A thickness that fills the circle leaves nothing.
-        assert!(can.largest_scale_mm(64.0).is_none());
+        assert!(can.largest_scale_mm(56.0).is_none());
     }
 
     #[test]
     fn the_cross_section_is_the_can_and_not_a_rectangle() {
-        // 34.2 cm² of circle, 32.2 cm² with the allowance — the number the
+        // 34.2 cm² of circle, 24.6 cm² with the allowance — the number the
         // mission documents round to "~30 cm²". A 50 × 50 mm square would be
         // 25 cm² and its diagonal 70.7 mm, which does not fit the circle at all:
         // the area is not the constraint, the diagonal is.
         let can = Can::standard();
         let outer = std::f64::consts::PI * 33.0 * 33.0;
         assert!((outer / 100.0 - 34.21).abs() < 0.01, "{}", outer / 100.0);
-        assert!((can.cross_section_mm2() / 100.0 - 32.17).abs() < 0.01);
+        assert!((can.cross_section_mm2() / 100.0 - 24.63).abs() < 0.01);
         let square_diagonal = (50.0f64 * 50.0 + 50.0 * 50.0).sqrt();
         assert!(square_diagonal > 2.0 * can.inner_radius_mm(), "{square_diagonal}");
     }

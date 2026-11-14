@@ -58,6 +58,13 @@ pub const TOTAL_BUDGET_EUR: f64 = 500.0;
 /// timing detector costs once the board and the connectors are counted.
 pub const DETECTOR_BUDGET_EUR: (f64, f64) = (200.0, 300.0);
 
+/// The optical adhesive, euros: the smallest purchase of Norland NOA 68.
+///
+/// The *material* used is a few hundredths of a millilitre and costs cents; the
+/// *purchase* is a one-ounce bottle at EUR 32.70 from AMS Technologies. The
+/// budget carries the purchase, because that is what the team pays.
+pub const ADHESIVE_EUR: f64 = 32.70;
+
 /// The acceleration the rules require the can to survive, g.
 pub const G_REQUIRED: f64 = 20.0;
 /// The acceleration the team designs for, g — the measured value in Vasa.
@@ -395,7 +402,7 @@ mod tests {
             .find(|v| v.requirement.contains("fits inside the can"))
             .expect("a fit violation");
         assert!((fit.measured - 135.0).abs() < 1e-9, "{fit}");
-        assert!((fit.limit - 114.0).abs() < 1e-9, "{fit}");
+        assert!((fit.limit - 110.0).abs() < 1e-9, "{fit}");
     }
 
     #[test]
@@ -449,6 +456,7 @@ mod tests {
         assert_eq!(CAN_DIAMETER_MM, 66.0);
         assert_eq!(TOTAL_MASS_G, (300.0, 350.0));
         assert_eq!(TOTAL_BUDGET_EUR, 500.0);
+        assert!((ADHESIVE_EUR - 32.70).abs() < 1e-9);
         assert_eq!(G_REQUIRED, 20.0);
         assert_eq!(G_DESIGN, 30.0);
         assert_eq!(PARACHUTE_MOUNT_N, 50.0);

@@ -100,6 +100,9 @@ pub struct Design {
     pub needs_timer: bool,
     /// The board, connectors and mechanics, euros.
     pub board_eur: f64,
+    /// Whether the design uses optical adhesive, which is a purchase and not a
+    /// usage: the material is cents and the bottle is 33 EUR.
+    pub bonded: bool,
 }
 
 /// Where an angle number came from, because they are not the same kind of number.
@@ -178,7 +181,7 @@ impl Design {
         Design {
             name: "counter",
             approach: Approach::Counter,
-            // A disc across the can's axis: Ø64 mm is the largest that fits and
+            // A disc across the can's axis: Ø56 mm is the largest that fits and
             // is 57 % more area than the square inscribed in the same circle.
             shape: PlaneShape::Disc,
             planes: 1,
@@ -186,11 +189,12 @@ impl Design {
             pixel_mm: 0.0,
             separation_mm: 0.0,
             thickness_mm: 10.0,
-            width_mm: 64.0,
-            height_mm: 64.0,
+            width_mm: 56.0,
+            height_mm: 56.0,
             sensor: SiPMChoice::microfc_60035(),
             needs_timer: false,
             board_eur: 25.0,
+            bonded: true,
         }
     }
 
@@ -213,6 +217,7 @@ impl Design {
             sensor: SiPMChoice::microfc_10035(),
             needs_timer: true,
             board_eur: 60.0,
+            bonded: true,
         }
     }
 
@@ -224,9 +229,9 @@ impl Design {
         Design {
             name: "coarse tracker",
             approach: Approach::Tracker,
-            // 40 x 48 mm: a 62.5 mm diagonal, the largest rectangle that fits the
-            // 64 mm inner diameter at this width. 40 x 80 would be 89 mm and does
-            // not fit any orientation.
+            // 40 x 39 mm: a 55.9 mm diagonal, the largest rectangle that fits the
+            // 56 mm inner diameter at this width. 40 x 48 would be 62.5 mm and no
+            // longer fits.
             shape: PlaneShape::Rectangle,
             planes: 2,
             pixels_per_side: 2,
@@ -234,10 +239,11 @@ impl Design {
             separation_mm: 40.0,
             thickness_mm: 5.0,
             width_mm: 40.0,
-            height_mm: 48.0,
+            height_mm: 39.0,
             sensor: SiPMChoice::microfc_10035(),
             needs_timer: false,
             board_eur: 45.0,
+            bonded: true,
         }
     }
 
@@ -259,10 +265,11 @@ impl Design {
             separation_mm: 20.0,
             thickness_mm: 5.0,
             width_mm: 40.0,
-            height_mm: 48.0,
+            height_mm: 39.0,
             sensor: SiPMChoice::microfc_10035(),
             needs_timer: false,
             board_eur: 45.0,
+            bonded: true,
         }
     }
 
@@ -282,10 +289,11 @@ impl Design {
             separation_mm: 60.0,
             thickness_mm: 5.0,
             width_mm: 40.0,
-            height_mm: 48.0,
+            height_mm: 39.0,
             sensor: SiPMChoice::microfc_10035(),
             needs_timer: false,
             board_eur: 90.0,
+            bonded: true,
         }
     }
 
@@ -316,6 +324,7 @@ impl Design {
             sensor: SiPMChoice::microfc_10035(),
             needs_timer: false,
             board_eur: 90.0,
+            bonded: true,
         }
     }
 
@@ -369,7 +378,8 @@ impl Design {
     pub fn cost_eur(&self) -> f64 {
         let sensors = self.channels() as f64 * self.sensor.eur.1;
         let timer = if self.needs_timer { 25.0 } else { 0.0 };
-        sensors + self.board_eur + timer
+        let adhesive = if self.bonded { crate::mission::ADHESIVE_EUR } else { 0.0 };
+        sensors + self.board_eur + timer + adhesive
     }
 
     /// Photoelectrons one plane registers from a muon crossing it.
@@ -822,19 +832,20 @@ mod tests {
 
     #[test]
     fn the_fine_tracker_is_the_one_that_breaks_the_budget() {
-        // 32 sensors at 25 EUR plus 90 EUR of board is 890 EUR, which is three
-        // times the detector's budget. The design that measures best is the one
-        // that cannot be built, and the table has to say so.
+        // 32 sensors at 25 EUR plus 90 EUR of board and 32.70 EUR of adhesive is
+        // 922.70 EUR, which is three times the detector's budget. The design that
+        // measures best is the one that cannot be built, and the table has to
+        // say so.
         let mission = Mission::standard();
         let fine = Design::fine_tracker();
         let cost = fine.cost_eur();
-        assert!((cost - 890.0).abs() < 1e-9, "{cost}");
+        assert!((cost - 922.70).abs() < 1e-9, "{cost}");
         let violations = fine.audit(&mission);
         assert!(violations.iter().any(|v| v.starts_with("cost:")), "{violations:#?}");
-        // The coarse tracker is inside it: 8 x 25 + 45 = 245 EUR, under the
-        // 300 EUR target.
+        // The coarse tracker is inside it: 8 x 25 + 45 + 32.70 = 277.70 EUR,
+        // under the 300 EUR target.
         let coarse = Design::coarse_tracker().cost_eur();
-        assert!((coarse - 245.0).abs() < 1e-9, "{coarse}");
+        assert!((coarse - 277.70).abs() < 1e-9, "{coarse}");
         assert!(coarse < mission.detector_budget_eur.1);
     }
 
@@ -865,26 +876,26 @@ mod tests {
     #[test]
     fn the_coincidence_costs_more_than_the_area_does() {
         // The two rates a tracker has, and the difference between them is the
-        // whole of this test. A 40 x 48 mm plane is 19.2 cm², which at 127 m-2s-1
-        // for 100 s is 24.4 crossings. A 40 mm gap keeps 30 % of them, so 7.3
-        // muons reach the second plane — a factor of 3.3 that the first version
+        // whole of this test. A 40 x 39 mm plane is 15.6 cm², which at 127 m-2s-1
+        // for 100 s is 19.8 crossings. A 40 mm gap keeps 27 % of them, so 5.3
+        // muons reach the second plane — a factor of 3.7 that the first version
         // of this table did not apply.
         let coarse = Design::coarse_tracker();
-        assert!((coarse.crossings_per_flight() - 24.4).abs() < 0.5, "{}", coarse.crossings_per_flight());
-        assert!((coarse.acceptance() - 0.30).abs() < 0.02, "{}", coarse.acceptance());
-        assert!((coarse.muons_per_flight() - 7.3).abs() < 0.3, "{}", coarse.muons_per_flight());
+        assert!((coarse.crossings_per_flight() - 19.8).abs() < 0.5, "{}", coarse.crossings_per_flight());
+        assert!((coarse.acceptance() - 0.27).abs() < 0.02, "{}", coarse.acceptance());
+        assert!((coarse.muons_per_flight() - 5.3).abs() < 0.3, "{}", coarse.muons_per_flight());
         // The counter needs no coincidence, so its two rates are one rate, and
-        // its disc is 32.2 cm²: 40.9 muons, five times the tracker's sample.
+        // its disc is 24.6 cm²: 31.3 muons, nearly six times the tracker's sample.
         let counter = Design::counter();
         assert_eq!(counter.acceptance(), 1.0);
-        assert!((counter.crossings_per_flight() - 40.9).abs() < 0.5, "{}", counter.crossings_per_flight());
+        assert!((counter.crossings_per_flight() - 31.3).abs() < 0.5, "{}", counter.crossings_per_flight());
         assert!((counter.muons_per_flight() - counter.crossings_per_flight()).abs() < 1e-9);
         // And halving the gap nearly doubles the acceptance, which is the trade
         // the short tracker exists to make.
         let short = Design::short_tracker();
-        assert!((short.acceptance() - 0.54).abs() < 0.02, "{}", short.acceptance());
+        assert!((short.acceptance() - 0.51).abs() < 0.02, "{}", short.acceptance());
         assert!(short.muons_per_flight() > coarse.muons_per_flight());
-        assert!(short.muons_per_flight() > 10.0, "{}", short.muons_per_flight());
+        assert!(short.muons_per_flight() > 9.5, "{}", short.muons_per_flight());
     }
 
     #[test]

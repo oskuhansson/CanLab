@@ -182,12 +182,12 @@ the walls — averaged over 200 events:
 | Quantity | Value |
 |---|---|
 | Cherenkov photons born | ~210 |
-| Reaching a sensor after Fresnel, absorption and coverage | ~8 |
+| Reaching a sensor after Fresnel, absorption and coverage | ~19 |
 | Sensors with at least one photon | 2.95 of 4 |
 | Photons lost to total internal reflection | ~11 % |
 | Arrival-time spread within one sensor | ~18 ps |
 | Timing difference between the furthest sensors | ~224 ps |
-| Muons through the plane in a 100 s flight | ~41–46 |
+| Muons through the plane in a 100 s flight | ~31–46 |
 
 The last two are the study's problem. The spread within one sensor is 18 ps, which
 is the *geometry's* own blur and is comparable to the timer's 20 ps. The timing

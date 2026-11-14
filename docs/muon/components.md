@@ -90,6 +90,71 @@ component change.
 
 ---
 
+## The optical adhesive
+
+The block's faces are machined, and a machined acrylic face has about a micrometre
+of roughness: light trapped by total internal reflection meets that roughness at
+every bounce, and Fresnel reflection assumes a mirror. Optical adhesive fixes that
+— it fills the scratches, so the interface becomes optically smooth.
+
+**But that is the smaller half of what it does.** At a PMMA/air face the critical
+angle is 42.2°, so only
+
+```text
+(1 − cos 42.2°) / 2 = 13 %
+```
+
+of the light arriving at that face escapes and **87 % is trapped**. An adhesive
+with an index above PMMA's makes the interface go from lower to higher index, so
+there is **no critical angle at all**.
+
+| Product | n cured | Δn vs PMMA (1.491) | Plastic adhesion | Price |
+|---|---|---|---|---|
+| Norland NOA 65 | 1.52 | +0.029 | "Fair" | $38 / 1 oz |
+| **Norland NOA 68** | **1.54** | **+0.049** | **"improved adhesion to acrylic"** | **€32.70 / 1 oz** |
+| Norland NOA 88 | 1.56 | +0.069 | not stated | — |
+| 3M LOCA 2321 | 1.49 | 0.000 | glass-to-glass | bulk only |
+
+All four remove the critical angle and all four are index-matched well enough that
+the Fresnel loss is a part in 10 000 — `((1.54 − 1.491)/(1.54 + 1.491))² = 2.6 ×
+10⁻⁴`. So the choice is **adhesion to acrylic**, which is what NOA 68's datasheet
+says it was formulated for, plus availability in a one-ounce bottle in Europe.
+
+3M's LOCA 2321 is the only perfect index match and it is a display-bonding product
+sold by the litre, so it is not a candidate for one detector.
+
+### What it costs
+
+| Item | Cost | Note |
+|---|---|---|
+| Norland NOA 68, 1 oz | **€32.70** | The smallest purchase; the material used is 0.05 ml |
+| UV source, 365–395 nm | to be quoted | Not researched; a 4.5 J/cm² dose is needed |
+
+The material is negligible — a 40 × 39 mm bond at 25 µm is 0.039 ml of a 30 ml
+bottle — so the budget carries the *purchase*, not the usage.
+
+### The curing problem, which is the real risk
+
+PMMA's transmission band starts at **380 nm** and the adhesive cures at **350–380
+nm** with a peak at 365. So **you cannot cure through the block**: the acrylic
+absorbs the light that would set the adhesive behind it.
+
+Three ways round it, in order of preference:
+
+1. **Cure from the bond line's edge.** The bond is at the face's perimeter, and
+   the adhesive is exposed there. A 395–405 nm LED penetrates PMMA and the
+   adhesive's absorption tail still cures at that wavelength — slower, and the
+   dose needs checking with a radiometer.
+2. **Bond the sensor to a thin carrier first**, cure that in the open, then bond
+   the carrier to the block and cure the second interface from its edge.
+3. **Use a two-part epoxy** that cures without light. EPO-TEK 301 is the standard
+   choice at `n = 1.5385` and roughly ten times the price.
+
+The first is what the design assumes. It is a process risk, not a physics one, and
+it is the thing to try on scrap acrylic before committing.
+
+---
+
 ## The jitter budget
 
 | Part | ps | Random | Source |

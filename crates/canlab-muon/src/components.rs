@@ -143,6 +143,81 @@ pub fn dominant() -> Contribution {
     best
 }
 
+/// The optical adhesive, with the datasheet numbers that decide whether it works.
+///
+/// The block's faces are machined, and a machined acrylic face has a micrometre
+/// of roughness: light trapped by total internal reflection meets that roughness
+/// at every bounce, and Fresnel reflection assumes a mirror. Optical adhesive
+/// fixes that — it fills the scratches, so the interface becomes optically
+/// smooth — and it fixes something larger that the roughness discussion hides.
+///
+/// # The larger effect: the escape cone
+///
+/// At a PMMA/air face with `n = 1.491`, the critical angle is 42.2°, so only
+/// `(1 − cos 42.2°)/2 = 13 %` of the light arriving at that face escapes and
+/// **87 % is trapped**. An adhesive with `n > 1.491` makes the interface go from
+/// lower to higher index, so there is **no critical angle at all**: every photon
+/// that reaches the bonded face crosses it.
+///
+/// That is a factor of 7.7 on the sensor's face, against the 10–20 % the
+/// roughness is worth. The adhesive is not a polish substitute; it is the largest
+/// single optical change available to the block.
+///
+/// # Why NOA 68 and not the others
+///
+/// | Product | n cured | Δn vs PMMA | Plastic adhesion | Price |
+/// |---|---|---|---|---|
+/// | Norland NOA 65 | 1.52 | +0.029 | "Fair" | $38 / 1 oz |
+/// | **Norland NOA 68** | **1.54** | **+0.049** | **"improved adhesion to acrylic"** | **€32.70 / 1 oz** |
+/// | Norland NOA 88 | 1.56 | +0.069 | not stated | — |
+/// | 3M LOCA 2321 | 1.49 | 0.000 | glass-to-glass | bulk only |
+///
+/// All four are index-matched well enough that the Fresnel loss is a part in
+/// 10 000 — `((1.54 − 1.491)/(1.54 + 1.491))² = 2.6 × 10⁻⁴` — and all four have
+/// `n > 1.491`, so all four remove the critical angle. The choice is therefore
+/// **adhesion to acrylic**, which is what NOA 68's datasheet says it was
+/// formulated for, and availability in Europe in a one-ounce bottle.
+///
+/// 3M's LOCA 2321 is the only perfect index match (1.49 against PMMA's 1.491) and
+/// it is a display-bonding product sold by the litre, so it is not a candidate for
+/// one detector.
+pub struct Adhesive {
+    /// The product.
+    pub part: &'static str,
+    /// The cured refractive index at 589 nm.
+    pub index: f64,
+    /// The fraction of light crossing a bonded interface into the sensor.
+    ///
+    /// Not 1.0 because the bond is not perfect: the TDS quotes a volume shrinkage
+    /// of a few percent and the process leaves voids and unwetted patches. The
+    /// figure is the *assumption* in this row and it is randomised.
+    pub transmission: f64,
+    /// The cost of the smallest purchase, euros.
+    pub eur: f64,
+    /// Where the numbers came from.
+    pub source: &'static str,
+}
+
+/// The adhesive this study recommends, with its datasheet figures.
+pub fn adhesive() -> Adhesive {
+    Adhesive {
+        part: "Norland NOA 68",
+        index: 1.54,
+        transmission: 0.95,
+        eur: 32.70,
+        source: "NOA 68 TDS: cured index 1.54, viscosity 5000 cps, 4.5 J/cm2 at 350-380 nm, formulated for acrylic adhesion; price from AMS Technologies, 1 oz bottle",
+    }
+}
+
+/// The fraction of light that escapes a PMMA/air face, for comparison.
+///
+/// `(1 − cos θc)/2` with `sin θc = 1/1.491`, which is 13 %. The bonded case is
+/// [`Adhesive::transmission`], and the ratio is what the adhesive buys.
+pub fn escape_cone_fraction() -> f64 {
+    let critical = (1.0 / 1.491f64).asin();
+    (1.0 - critical.cos()) / 2.0
+}
+
 /// The datasheet facts the simulation's sensor model does not carry yet.
 ///
 /// Each is a number the transport could use and currently does not, listed here
@@ -213,6 +288,30 @@ mod tests {
         assert!((with_walk - 53.6).abs() < 0.1, "{with_walk}");
         assert!((total_jitter_ps() - 47.4).abs() < 0.1);
         assert!(!budget().iter().any(|c| c.ps == COMPARATOR_WALK_PS));
+    }
+
+    #[test]
+    fn the_adhesive_is_index_matched_and_removes_the_critical_angle() {
+        // The two facts that decide whether the adhesive works, both from the
+        // datasheet: its cured index is above PMMA's, so there is no critical
+        // angle, and it is close enough that the Fresnel loss is negligible.
+        let glue = adhesive();
+        let pmma = 1.491;
+        assert!(glue.index > pmma, "{} is not above {pmma}", glue.index);
+        let reflectance = ((glue.index - pmma) / (glue.index + pmma)).powi(2);
+        assert!(reflectance < 1e-3, "Fresnel reflectance {reflectance}");
+        // And the air case it replaces: 13 % escapes, 87 % is trapped.
+        let cone = escape_cone_fraction();
+        assert!((cone - 0.13).abs() < 0.01, "{cone}");
+        // The ratio is what the adhesive buys on the bonded face.
+        let gain = glue.transmission / cone;
+        assert!((gain - 7.3).abs() < 0.6, "{gain}");
+        // The cost is the smallest purchase, not the material used: a 40 x 48 mm
+        // bond at 25 um is 0.048 ml of a 30 ml bottle.
+        assert!((glue.eur - 32.70).abs() < 1e-9);
+        let bond_ml = 40.0 * 48.0 * 0.025 / 1000.0;
+        assert!(bond_ml < 0.1, "{bond_ml} ml");
+        assert!(glue.source.contains("TDS"), "{}", glue.source);
     }
 
     #[test]

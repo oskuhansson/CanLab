@@ -16,11 +16,11 @@ module range scaled by area, not a quote.*
 
 | Design | EUR | g | Sensors | Angle | Crossings | Directed | Verdict |
 |---|---|---|---|---|---|---|---|
-| counter | 115 | 44.9 | 1 | — | 40.9 | 40.9 | no direction |
-| cherenkov timing | 185 | 47.7 | 4 | 81.2° | 11.4 | 11.4 | fails at 30° |
-| **short tracker** | **245** | **31.6** | **8** | **23.4°** | **24.4** | **13.3** | **passes** |
-| coarse tracker | 245 | 31.6 | 8 | 11.7° | 24.4 | 7.3 | too few muons |
-| fine tracker | 890 | 31.6 | 32 | 3.9° | 24.4 | 4.4 | over budget |
+| counter | 148 | 37.2 | 1 | — | 31.3 | 31.3 | no direction |
+| cherenkov timing | 218 | 47.7 | 4 | 81.2° | 11.4 | 11.4 | fails at 30° |
+| **short tracker** | **278** | **28.0** | **8** | **(23.4°)** | **19.8** | **10.1** | **passes** |
+| coarse tracker | 278 | 28.0 | 8 | (11.7°) | 19.8 | 5.3 | too few muons |
+| fine tracker | 923 | 28.0 | 32 | (3.9°) | 19.8 | 3.1 | over budget |
 | ring imager | 490 | 22.7 | 16 | (10.6°) | 11.4 | 11.4 | unproven |
 
 **Crossings** are muons through the first plane in a 100 s flight. **Directed** are
@@ -69,13 +69,13 @@ flowchart TB
         ROOM["64 mm left for battery and radio"]
     end
     subgraph G_STACK["Tracker stack: 50 of 114 mm"]
-        P1["Plane 1: 40 x 48 x 5, 2 x 2 pixels"]
+        P1["Plane 1: 40 x 39 x 5, 2 x 2 pixels"]
         GAP["Gap: 20 or 40 mm of air"]
         P2["Plane 2: the same, in coincidence"]
     end
-    subgraph G_WHY["Why 40 x 48 and not 40 x 80"]
+    subgraph G_WHY["Why 40 x 39 and not 40 x 80"]
         DIAG["40 x 80 has an 89 mm diagonal"]
-        LIMIT["64 mm circle: 40 mm plane, 48 mm tall"]
+        LIMIT["56 mm circle: 40 mm plane, 39 mm tall"]
     end
     TOP --> STACK
     STACK --> ROOM
@@ -86,26 +86,26 @@ flowchart TB
 
 | Design | Shape | Plane, mm | Area, cm² | Stack, mm | Fits |
 |---|---|---|---|---|---|
-| counter | disc | Ø64 × 10 | 32.2 | 10 | yes |
+| counter | disc | Ø56 × 10 | 24.6 | 10 | yes |
 | cherenkov timing | tent prism | 40 × 90 × 10 | 9.0 (wall) | 10 | yes |
-| short tracker | rectangle | 40 × 48 × 5 | 19.2 | 30 | yes |
-| coarse tracker | rectangle | 40 × 48 × 5 | 19.2 | 50 | yes |
-| fine tracker | rectangle | 40 × 48 × 5 | 19.2 | 70 | yes |
+| short tracker | rectangle | 40 × 39 × 5 | 15.6 | 30 | yes |
+| coarse tracker | rectangle | 40 × 39 × 5 | 15.6 | 50 | yes |
+| fine tracker | rectangle | 40 × 39 × 5 | 15.6 | 70 | yes |
 | ring imager | tent prism | 40 × 90 × 10 | 9.0 (wall) | 10 | yes |
 
 Three numbers in that table are worth explaining.
 
-**The planes are 40 × 48 mm, not 40 × 80.** A rectangle fits a Ø64 mm circle only
+**The planes are 40 × 39 mm, not 40 × 80.** A rectangle fits a Ø56 mm circle only
 if its diagonal does, and 40 × 80 has an 89 mm diagonal. The widest 40 mm plane is
-48 mm tall — 62.5 mm of diagonal, with 1.5 mm to spare. The first version of this
+39 mm tall — 55.9 mm of diagonal, with 0.1 mm to spare. The first version of this
 study used 40 × 80 and never checked.
 
-**The counter is a disc.** The square inscribed in a Ø64 circle is 45.3 mm on a
-side, 20.5 cm²; the disc is 32.2 cm², 57 % more light for the same can. A counter
+**The counter is a disc.** The square inscribed in a Ø56 circle is 39.6 mm on a
+side, 15.7 cm²; the disc is 24.6 cm², 57 % more light for the same can. A counter
 has no reason to be square.
 
 **The Cherenkov block is on edge.** Its tent plane is 40 mm across and 90 mm tall,
-which cannot lie flat in a 64 mm circle — but it does not have to, because the
+which cannot lie flat in a 56 mm circle — but it does not have to, because the
 block's plane can hold the can's axis. The circle then constrains the 40 × 10
 cross-section (20.6 mm of half-diagonal against 32 mm of radius) and the height
 constrains the 90 mm. The muon crosses the walls, so the face it enters is
@@ -128,8 +128,8 @@ It uses the **largest** sensor of the three, and that is not waste. A counter's
 science is a rate *and* a crude energy, so it needs the pulse height, and a pulse
 height that fills the sensor is a pulse height that has stopped carrying energy.
 
-Its plate is a **Ø64 mm disc**, 10 mm thick, mounted across the can's axis: 32.2 cm²
-and 40.9 muons in a 100 s flight. That is **three times the sample** a two-plane
+Its plate is a **Ø56 mm disc**, 10 mm thick, mounted across the can's axis: 24.6 cm²
+and 31.3 muons in a 100 s flight. That is **three times the sample** a two-plane
 tracker gets, because a counter needs no coincidence and a disc uses the whole
 circle.
 
@@ -161,7 +161,7 @@ picosecond electronics at all.
 
 The photon count is the other half of the problem. The transport measures **8
 photoelectrons** per muon for the Cherenkov block — not the 18 that a
-born-times-collection estimate gives, because 52 % of the light is trapped by
+born-times-collection estimate gives, because 11 % of the light is trapped by
 total internal reflection and much of the rest leaves through a face no sensor
 covers. Against the scintillator's 1 745, the Cherenkov design is photon-starved
 by a factor of 95 at PMMA's index.
@@ -171,7 +171,7 @@ by a factor of 95 at PMMA's index.
 ## Design 3 — the short tracker
 
 **Optimises: the sample.** Two planes of 2 × 2 pixels, a **20 mm** gap, eight
-sensors. **245 €, 23.4°, 13.3 muons — and the only design that passes the audit.**
+sensors. **278 €, 23.4°, 10.1 muons — and the only design that passes the audit.**
 
 This design exists because of a question the first version of the table could not
 answer: *does the tracker catch enough muons?* It did not, and the answer is the
@@ -187,9 +187,9 @@ The gap is also what buys the angle, so the two are one trade:
 
 | Gap | Acceptance | Directed muons | Angle |
 |---|---|---|---|
-| 20 mm | 0.54 | 13.3 | 23.4° |
-| 40 mm | 0.30 | 7.3 | 11.7° |
-| 60 mm | 0.18 | 4.4 | 3.9° |
+| 20 mm | 0.51 | 10.1 | 23.4° |
+| 40 mm | 0.27 | 5.3 | 11.7° |
+| 60 mm | 0.15 | 3.1 | 3.9° |
 
 Halving the gap doubles the sample and doubles the angle. The short tracker is the
 20 mm end, and it is the recommendation because **seven muons is not a
@@ -201,7 +201,7 @@ flight.
 ## Design 4 — the coarse tracker
 
 **Optimises: the angle per event.** Two planes of 2 × 2 pixels, a 40 mm gap, eight
-sensors. **245 €, 11.7°, and 7.3 muons — too few to pass.**
+sensors. **278 €, 11.7°, and 5.3 muons — too few to pass.**
 
 The resolution is `√2·σ_h/L`: a 20 mm pixel has `σ_h = 20/√12 = 5.77 mm`, and over
 a 40 mm gap that is `√2 × 5.77/40 = 0.204 rad = 11.7°`.
@@ -213,7 +213,7 @@ Two things make it work:
   3.9°.
 - **Saturation does not matter.** A tracker reads out *which* pixel fired, so a
   clipped pulse is still a hit. That is what lets it use the 1 mm² part at 25 €
-  instead of the 3 mm² at 45 €, and it is the difference between 245 € and 405 €.
+  instead of the 3 mm² at 45 €, and it is the difference between 278 € and 428 €.
 
 **What it cannot do:** gather a sample. Seven muons in a flight is enough to
 demonstrate that the technique works and not enough to measure an angular
@@ -225,14 +225,14 @@ that.
 ## Design 5 — the fine tracker
 
 **Optimises: the best direction money can buy.** Two planes of 4 × 4 pixels, a
-60 mm gap, thirty-two sensors. **890 €, 3.9°.**
+60 mm gap, thirty-two sensors. **923 €, 3.9°.**
 
 Three times the budget for three times the resolution, and it is over the
 detector's 200–300 € allocation by a factor of three. It is in the table because a
 trade study that only lists the affordable options is not a trade study: the
-question "what would 3.9° cost" has an answer, and the answer is 890 €.
+question "what would 3.9° cost" has an answer, and the answer is 923 €.
 
-The cost is entirely the sensors — 32 × 25 € is 800 € of the 890 €. A multiplexed
+The cost is entirely the sensors — 32 × 25 € is 800 € of the 923 €. A multiplexed
 readout would cut it, at the price of not knowing which pixel fired without a
 coincidence, which is the same information the tracker exists to provide.
 
@@ -241,7 +241,7 @@ coincidence, which is the same information the tracker exists to provide.
 ## Design 6 — the ring imager
 
 **Optimises: direction from one face.** A Cherenkov block with a 4 × 4 sensor array
-on its exit face. **490 €, (10.6°), unproven.**
+on its exit face. **523 €, (10.6°), unproven.**
 
 A muon crossing the block emits a cone at 47.8°, and where the cone meets the exit
 face is a ring. The ring's radius gives the angle and its centre gives where the
@@ -253,7 +253,7 @@ reports *which* face, not *where* on it, so the ring's radius is not something t
 current code can measure. The 10.6° in the table is `pixel/ring_radius` — a
 geometric estimate — and it is marked unchecked wherever it appears.
 
-**And it has 8 photoelectrons per muon.** A ring needs tens of photons to have a
+**And it has 19 photoelectrons per muon.** A ring needs tens of photons to have a
 shape; eight is a handful of dots. The design is listed because the idea is worth
 checking, not because the light is there — and the light is the first thing to
 check.
@@ -296,7 +296,7 @@ constrained by it.
 flowchart TB
     subgraph G_CAN["The can, 115 mm tall and 66 mm across"]
         CAN["Cylinder: 115 mm high, diameter 66 mm"]
-        CIRCLE["34.2 cm2, or 32.2 after allowance"]
+        CIRCLE["34.2 cm2, or 24.6 after allowance"]
     end
     subgraph G_BLOCK["The block inside it"]
         TENT["Tent outline: 2R wide, 4.5R tall"]
@@ -312,7 +312,7 @@ flowchart TB
     TENT --> DEPTH
     DEPTH --> MASS
     TENT -.->|"R over 25.3 mm"| TALL
-    DEPTH -.->|"thickness over 64 mm"| WIDE
+    DEPTH -.->|"thickness over 56 mm"| WIDE
 ```
 
 The geometry sweep's best row is a 30 mm tent, which is `4.5 × 30 = 135 mm` of
@@ -327,10 +327,10 @@ could be twice as long — which is the cheapest improvement available.
 
 ## The recommendation
 
-**Build the short tracker — 20 mm gap, 23.4°, 13.3 muons — and simulate it before
+**Build the short tracker — 20 mm gap, 23.4°, 10.1 muons — and simulate it before
 trusting the number.**
 
-It is the only design that passes the audit at 245 €. The trade it makes is the one
+It is the only design that passes the audit at 278 €. The trade it makes is the one
 the table exists to show: halving the gap from 40 mm doubles the sample and doubles
 the angle, and thirteen muons at 23° is a better science instrument than seven at
 12°, because seven is not a distribution.

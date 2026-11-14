@@ -134,15 +134,15 @@ fn the_scintillator_yield_is_its_two_datasheet_numbers() {
 fn the_can_is_pi_r_squared_and_the_flux_is_a_rate_times_an_area() {
     // The can's cross-section, from its diameter and nothing else.
     let can = Can::standard();
-    // Two areas, and the difference is the millimetre of allowance: the can's
-    // own 33 mm radius is 3421 mm² and the usable 32 mm is 3217 mm². The method
-    // returns the usable one, because a detector cannot use the wall.
+    // Two areas, and the difference is the five millimetres of allowance: the
+    // can's own 33 mm radius is 3421 mm² and the usable 28 mm is 2463 mm². The
+    // method returns the usable one, because a detector cannot use the wall.
     let outer = std::f64::consts::PI * 33.0 * 33.0;
-    let inner = std::f64::consts::PI * 32.0 * 32.0;
+    let inner = std::f64::consts::PI * 28.0 * 28.0;
     assert!((outer / 100.0 - 34.21).abs() < 0.01, "{}", outer / 100.0);
-    assert!((inner / 100.0 - 32.17).abs() < 0.01, "{}", inner / 100.0);
+    assert!((inner / 100.0 - 24.63).abs() < 0.01, "{}", inner / 100.0);
     assert!((can.cross_section_mm2() - inner).abs() < 1e-9, "{}", can.cross_section_mm2());
-    assert!((can.inner_radius_mm() - 32.0).abs() < 1e-12);
+    assert!((can.inner_radius_mm() - 28.0).abs() < 1e-12);
     // The flux through a 40 × 90 mm plane in 100 s, from the rate and the area.
     let area_m2 = 40.0 * 90.0 / 1.0e6;
     let by_hand = MUON_FLUX_INTEGRATED_M2_S * area_m2 * 100.0;
