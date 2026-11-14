@@ -51,6 +51,7 @@
 //! `0.0 / 0.0` for a division that may be a NaN, which is the same NaN every
 //! WGSL implementation produces, and the test compares with `is_nan()`.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
 /// Why a program is not in the subset.
@@ -963,6 +964,335 @@ fn format_float(value: f64) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The interpreter: the same program, run on the CPU
+// ---------------------------------------------------------------------------
+
+/// Which arithmetic the interpreter uses.
+///
+/// The WGSL emitter writes `f32`, so a GPU run rounds every operation to
+/// single precision. An interpreter that used `f64` throughout would disagree
+/// with the GPU for a reason that has nothing to do with the kernel — so the
+/// precision is a parameter and not a constant, and a differential test runs the
+/// same program both ways.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Precision {
+    /// `f64`, which is what the Rust reference computes.
+    F64,
+    /// `f32`, which is what the emitted WGSL computes.
+    F32,
+}
+
+impl Precision {
+    fn round(self, value: f64) -> f64 {
+        match self {
+            Precision::F64 => value,
+            Precision::F32 => f64::from(value as f32),
+        }
+    }
+}
+
+/// Why a program could not be run.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RunError {
+    /// The program is not in the subset.
+    Diagnostic(Diagnostic),
+    /// A name was read before it was written.
+    Unbound(String),
+    /// A `return` outside a function body — which is every `return` here, since
+    /// the program *is* the body.
+    NoValue,
+    /// The program ran more statements than the budget allows. A `while` that
+    /// never terminates is a bug in the kernel, and a hang is not a diagnostic.
+    BudgetExceeded {
+        /// How many statements were allowed.
+        budget: u64,
+    },
+}
+
+impl RunError {
+    /// The message a caller shows.
+    pub fn message(&self) -> String {
+        match self {
+            RunError::Diagnostic(diagnostic) => diagnostic.message(),
+            RunError::Unbound(name) => {
+                format!("`{name}` is read before it is written")
+            }
+            RunError::NoValue => {
+                "the program returned no value, and a kernel must".to_string()
+            }
+            RunError::BudgetExceeded { budget } => format!(
+                "the program ran {budget} statements without finishing; a kernel loop is unbounded"
+            ),
+        }
+    }
+}
+
+impl From<Diagnostic> for RunError {
+    fn from(diagnostic: Diagnostic) -> RunError {
+        RunError::Diagnostic(diagnostic)
+    }
+}
+
+/// How many statements one run may execute before it is called a runaway.
+///
+/// A kernel is a few hundred statements per invocation; a million is far above
+/// any real one and far below a hang.
+pub const RUN_BUDGET: u64 = 1_000_000;
+
+/// Run a Lua-subset program on the CPU, returning its `return` value.
+///
+/// This is the other half of "written once": [`compile`] parses the program and
+/// emits WGSL for the GPU, and this runs the *same parsed program* here. Without
+/// it the two sources would be a source and a re-implementation, which is the
+/// drift this workstream exists to avoid — and `mlua` is not a dependency, so
+/// there is no Lua runtime to run the text with.
+///
+/// `arguments` are the program's free names, in the order the caller supplies
+/// them; `seed` is the per-invocation random stream that `rand()` draws from.
+pub fn interpret(
+    program: &str,
+    arguments: &[(&str, f64)],
+    seed: u64,
+    precision: Precision,
+) -> Result<f64, RunError> {
+    let tokens = tokenize(program)?;
+    let mut parser = Parser {
+        tokens,
+        position: 0,
+    };
+    let chunk = parser.chunk()?;
+    let mut machine = Machine {
+        variables: HashMap::new(),
+        precision,
+        rng: seed,
+        steps: 0,
+    };
+    for (name, value) in arguments {
+        machine.variables.insert((*name).to_string(), *value);
+    }
+    match machine.run(&chunk)? {
+        Flow::Return(value) => Ok(value),
+        // A program with no `return` returns zero, which is what the emitter
+        // writes for one (`return 0.0;`) so that the two agree.
+        Flow::Normal | Flow::Break => Ok(0.0),
+    }
+}
+
+enum Flow {
+    Normal,
+    Break,
+    Return(f64),
+}
+
+struct Machine {
+    variables: HashMap<String, f64>,
+    precision: Precision,
+    /// The random stream's state. splitmix64, so that a seed gives the same
+    /// draws on every machine and in every language.
+    rng: u64,
+    steps: u64,
+}
+
+impl Machine {
+    fn tick(&mut self) -> Result<(), RunError> {
+        self.steps += 1;
+        if self.steps > RUN_BUDGET {
+            return Err(RunError::BudgetExceeded {
+                budget: RUN_BUDGET,
+            });
+        }
+        Ok(())
+    }
+
+    /// The next draw in `[0, 1)`.
+    ///
+    /// splitmix64 and not a language's default generator: the same seed must
+    /// give the same stream here and in the WGSL, or a differential test is
+    /// comparing two different photons.
+    fn random(&mut self) -> f64 {
+        self.rng = self.rng.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.rng;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        // The top 53 bits, so the result is a `f64` in `[0, 1)` without a bias.
+        (z >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    fn run(&mut self, statements: &[Statement]) -> Result<Flow, RunError> {
+        for statement in statements {
+            self.tick()?;
+            match statement {
+                Statement::Local(name, value) | Statement::Assign(name, value) => {
+                    let value = self.eval(value)?;
+                    self.variables.insert(name.clone(), value);
+                }
+                Statement::If(branches, otherwise) => {
+                    let mut taken = false;
+                    for (condition, body) in branches {
+                        if self.eval(condition)? != 0.0 {
+                            match self.run(body)? {
+                                Flow::Normal => {}
+                                other => return Ok(other),
+                            }
+                            taken = true;
+                            break;
+                        }
+                    }
+                    if !taken && let Some(body) = otherwise {
+                        match self.run(body)? {
+                            Flow::Normal => {}
+                            other => return Ok(other),
+                        }
+                    }
+                }
+                Statement::While(condition, body) => {
+                    while self.eval(condition)? != 0.0 {
+                        self.tick()?;
+                        match self.run(body)? {
+                            Flow::Normal => {}
+                            Flow::Break => break,
+                            other => return Ok(other),
+                        }
+                    }
+                }
+                Statement::For(name, from, to, step, body) => {
+                    let from = self.eval(from)?;
+                    let to = self.eval(to)?;
+                    let step = match step {
+                        Some(step) => self.eval(step)?,
+                        None => 1.0,
+                    };
+                    // A zero step would loop forever; the budget catches it, but
+                    // a `for` that cannot advance is refused by name instead of
+                    // by running a million times first.
+                    if step == 0.0 {
+                        return Err(RunError::Diagnostic(Diagnostic::new(
+                            "a `for` with a zero step",
+                            0,
+                            "the loop would never advance",
+                        )));
+                    }
+                    let mut value = from;
+                    while (step > 0.0 && value <= to) || (step < 0.0 && value >= to) {
+                        self.tick()?;
+                        self.variables.insert(name.clone(), value);
+                        match self.run(body)? {
+                            Flow::Normal => {}
+                            Flow::Break => break,
+                            other => return Ok(other),
+                        }
+                        value += step;
+                    }
+                }
+                Statement::Break => return Ok(Flow::Break),
+                Statement::Return(value) => {
+                    let value = self.eval(value)?;
+                    return Ok(Flow::Return(value));
+                }
+            }
+        }
+        Ok(Flow::Normal)
+    }
+
+    fn eval(&mut self, expression: &Expr) -> Result<f64, RunError> {
+        let value = match expression {
+            Expr::Number(value) => *value,
+            Expr::Name(name) => *self
+                .variables
+                .get(name)
+                .ok_or_else(|| RunError::Unbound(name.clone()))?,
+            Expr::Unary(operator, operand) => {
+                let operand = self.eval(operand)?;
+                match *operator {
+                    "-" => -operand,
+                    _ => {
+                        if operand == 0.0 {
+                            1.0
+                        } else {
+                            0.0
+                        }
+                    }
+                }
+            }
+            Expr::Binary(operator, left, right) => {
+                let a = self.eval(left)?;
+                let b = self.eval(right)?;
+                match *operator {
+                    "+" => a + b,
+                    "-" => a - b,
+                    "*" => a * b,
+                    "/" => a / b,
+                    "%" => a % b,
+                    "^" => a.powf(b),
+                    "<" => bool_value(a < b),
+                    ">" => bool_value(a > b),
+                    "<=" => bool_value(a <= b),
+                    ">=" => bool_value(a >= b),
+                    "==" => bool_value(a == b),
+                    "~=" => bool_value(a != b),
+                    "and" => bool_value(a != 0.0 && b != 0.0),
+                    "or" => bool_value(a != 0.0 || b != 0.0),
+                    other => {
+                        return Err(RunError::Diagnostic(Diagnostic::new(
+                            format!("the operator `{other}`"),
+                            0,
+                            "the arithmetic subset is `+ - * / % ^`",
+                        )))
+                    }
+                }
+            }
+            Expr::Call(name, arguments) => {
+                let mut values = Vec::with_capacity(arguments.len());
+                for argument in arguments {
+                    values.push(self.eval(argument)?);
+                }
+                self.call(name, &values)?
+            }
+        };
+        Ok(self.precision.round(value))
+    }
+
+    fn call(&mut self, name: &str, values: &[f64]) -> Result<f64, RunError> {
+        let one = |values: &[f64]| values.first().copied();
+        let value = match (name, values.len()) {
+            ("math.sin", 1) => one(values).map(f64::sin),
+            ("math.cos", 1) => one(values).map(f64::cos),
+            ("math.tan", 1) => one(values).map(f64::tan),
+            ("math.exp", 1) => one(values).map(f64::exp),
+            ("math.log", 1) => one(values).map(f64::ln),
+            ("math.sqrt", 1) => one(values).map(f64::sqrt),
+            ("math.abs", 1) => one(values).map(f64::abs),
+            ("math.floor", 1) => one(values).map(f64::floor),
+            ("math.min", 2) => Some(values[0].min(values[1])),
+            ("math.max", 2) => Some(values[0].max(values[1])),
+            ("math.pow", 2) => Some(values[0].powf(values[1])),
+            ("rand", 0) => Some(self.random()),
+            ("math.random", 0) => Some(self.random()),
+            (other, count) => {
+                return Err(RunError::Diagnostic(Diagnostic::new(
+                    format!("the call `{other}({count} argument(s))`"),
+                    0,
+                    "the builtin table is `math.sin/cos/tan/exp/log/sqrt/abs/floor/min/max/pow` \
+                     and `rand()`",
+                )))
+            }
+        };
+        value.ok_or_else(|| {
+            RunError::Diagnostic(Diagnostic::new(
+                format!("the call `{name}`"),
+                0,
+                "a builtin was called with the wrong number of arguments",
+            ))
+        })
+    }
+}
+
+fn bool_value(condition: bool) -> f64 {
+    if condition { 1.0 } else { 0.0 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1079,6 +1409,93 @@ mod tests {
     fn the_random_stream_is_a_call_the_shader_defines() {
         let kernel = compile_ok("return rand()");
         assert!(kernel.wgsl.contains("rand(seed)"), "{}", kernel.wgsl);
+    }
+
+    #[test]
+    fn the_interpreter_runs_the_program_the_compiler_parsed() {
+        // The point of the interpreter: `compile` and `interpret` read the same
+        // text through the same parser, so a kernel has one source and two
+        // executions.
+        let value = interpret("return 2 * 3 + 1", &[], 0, Precision::F64).expect("a value");
+        assert_eq!(value, 7.0);
+        // A local, a loop and a branch.
+        let program = "local s = 0\nfor i = 1, 4 do\n  s = s + i\nend\nreturn s";
+        assert_eq!(interpret(program, &[], 0, Precision::F64).expect("a value"), 10.0);
+        // An argument.
+        let value = interpret("return x * x", &[("x", 3.0)], 0, Precision::F64).expect("a value");
+        assert_eq!(value, 9.0);
+        // `while` with a `break`.
+        let program = "local i = 0\nwhile 1 do\n  i = i + 1\n  if i > 4 then\n    break\n  end\nend\nreturn i";
+        assert_eq!(interpret(program, &[], 0, Precision::F64).expect("a value"), 5.0);
+    }
+
+    #[test]
+    fn the_two_precisions_agree_to_single_precision() {
+        // The differential test W7.2 asks for, without a GPU: the same program
+        // in `f64` and in `f32`. The `f32` run is what the emitted WGSL would
+        // compute, so their difference is the floating-point difference the GPU
+        // would show — not a driver's, and the doc says so.
+        let program = "local a = x * x + 3 * x\nlocal b = math.sqrt(a + 1)\nreturn b / (1 + a)";
+        for x in [0.5, 1.0, 2.0, 7.5] {
+            let wide = interpret(program, &[("x", x)], 0, Precision::F64).expect("a value");
+            let narrow = interpret(program, &[("x", x)], 0, Precision::F32).expect("a value");
+            let relative = if wide == 0.0 {
+                (narrow - wide).abs()
+            } else {
+                ((narrow - wide) / wide).abs()
+            };
+            assert!(
+                relative < 1e-6,
+                "at x = {x}: f64 {wide}, f32 {narrow}, relative {relative}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_random_stream_is_the_same_for_the_same_seed() {
+        // A seed must give the same draws every time, or a differential test
+        // compares two different photons.
+        let program = "return rand() + rand()";
+        let first = interpret(program, &[], 42, Precision::F64).expect("a value");
+        let second = interpret(program, &[], 42, Precision::F64).expect("a value");
+        assert_eq!(first, second);
+        // A different seed gives a different draw.
+        let other = interpret(program, &[], 43, Precision::F64).expect("a value");
+        assert_ne!(first, other);
+        // And the draws are in `[0, 1)`.
+        for seed in 0..16 {
+            let value = interpret("return rand()", &[], seed, Precision::F64).expect("a value");
+            assert!((0.0..1.0).contains(&value), "seed {seed} drew {value}");
+        }
+    }
+
+    #[test]
+    fn a_runaway_loop_stops_at_the_budget_instead_of_hanging() {
+        // A kernel's `while` is unbounded, and a hang is not a diagnostic.
+        let error = interpret("while 1 do\nend\nreturn 0", &[], 0, Precision::F64)
+            .expect_err("a runaway");
+        assert!(
+            matches!(error, RunError::BudgetExceeded { .. }),
+            "{error:?}"
+        );
+        assert!(error.message().contains("without finishing"), "{}", error.message());
+    }
+
+    #[test]
+    fn a_name_read_before_it_is_written_is_refused() {
+        let error = interpret("return y", &[], 0, Precision::F64).expect_err("a refusal");
+        assert_eq!(error, RunError::Unbound(String::from("y")));
+        // A construct outside the subset is a diagnostic, not a wrong number.
+        let error = interpret("local t = {1, 2}\nreturn 0", &[], 0, Precision::F64)
+            .expect_err("a refusal");
+        assert!(error.message().contains("table"), "{}", error.message());
+    }
+
+    #[test]
+    fn a_for_with_a_zero_step_is_refused_rather_than_run_a_million_times() {
+        let error = interpret("for i = 0, 10, 0 do\nend\nreturn 0", &[], 0, Precision::F64)
+            .expect_err("a refusal");
+        assert!(error.message().contains("never advance"), "{}", error.message());
     }
 
     #[test]
