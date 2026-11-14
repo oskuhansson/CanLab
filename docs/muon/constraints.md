@@ -103,9 +103,11 @@ requirement nobody enforces.
 | The block is within the machine's depth | 60 mm | `Manufacturing::max_depth_mm` |
 | The timing jitter is within 10× of the timing signal | ratio ≤ 10 | `timing_signal_ps` |
 
-The last one is the study's finding stated as a requirement. The design point
-fails it at a ratio of 212, and that failure is not a bug: it is the answer to
-"can four SiPMs time a muon".
+The design point **passes** the timing requirement: the signal is 224 ps against
+47.4 ps of jitter, a ratio of 0.21. It failed at a ratio of 212 in the first
+version of this study, because the speed of light was a thousand times too large —
+which is why the requirement is now checked against a constant that
+`tests/units.rs` pins independently.
 
 The design comparison adds two more, because a design that cannot measure a
 direction is not a direction detector:
@@ -122,7 +124,7 @@ direction is not a direction detector:
 | Design | Result |
 |---|---|
 | counter | fails: no direction |
-| cherenkov timing | fails: 81 176° |
+| cherenkov timing | fails: 81.2° (placement, not clock) |
 | coarse tracker | **passes** |
 | fine tracker | fails: 890 € against 300 € |
 | ring imager | fails: 490 € against 300 € |

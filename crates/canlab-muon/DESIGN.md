@@ -47,26 +47,38 @@ Three unknowns against four timestamps, so a least-squares fit recovers the
 heading. That arithmetic is correct, and `canlab_muon::timing::reconstruct`
 implements it and returns the exact heading from exact timestamps.
 
-**The scale is what fails.** Light moves 0.2 mm/ps in PMMA, so the *whole
-detector's* spread of `(r_i · d)/v` is **0.22 ps**. The readout's jitter is
-**47.4 ps**. The signal is 212 times smaller than the noise.
+**The scale is measurable, and the placement wastes it.** Light moves 0.2 mm/ps in
+PMMA, so the *whole detector's* spread of `(r_i · d)/v` is **224 ps** — light needs
+269 ps to cross the 54.1 mm between the two furthest sensors. The readout's jitter
+is **47.4 ps**, so the signal-to-noise is 4.7.
 
 | | ps |
 |---|---|
-| Timing signal across the whole detector | **0.22** |
+| Timing signal across the whole detector | **224** |
 | SiPM SPTR (100 ps FWHM → σ) | 42.5 |
 | MAX35101 timer accuracy | 20.0 |
 | OPA858 noise over the edge | 6.0 |
 | MAX40026 jitter | 2.0 |
 | **Total, quadrature** | **47.4** |
 
-The Cramér–Rao bound on the heading is `σ·v/L`, and it comes out at **81 000°**.
-An uncertainty larger than the sphere is a refusal, not a resolution. Making the
-electronics perfect would not help: at a 1 ps jitter the bound is still hopeless,
-because the missing quantity is the **lever arm**, not the clock.
+The Cramér–Rao bound on the heading is `σ·v/L`, and for the four face centres it
+comes out at **81°** at the worst heading and 48° at the best. The reason is the
+placement: the two end sensors sit at the centres of the ±z faces, only **10 mm
+apart**, so a heading along that axis has almost no lever arm.
 
-To reach 10° you would need 6 femtoseconds of total jitter. That is not a
-component anyone sells.
+| Placement | Worst | Best |
+|---|---|---|
+| four face centres (the current one) | 81° | 48° |
+| four block corners | 56° | **16°** |
+| a well-spread 54 mm tetrahedron | 17.5° | 17.5° |
+
+So timing works and this placement does not. Moving the sensors to the corners is
+the fix, and it is a board change rather than a part change.
+
+**This section was wrong by a factor of a thousand.** The first version said the
+signal was 0.22 ps and the bound 81 000°, because `C_MM_PER_PS` was written as
+299.79 — millimetres per nanosecond. `tests/units.rs` now states every physical
+fact independently and is what caught it.
 
 ---
 

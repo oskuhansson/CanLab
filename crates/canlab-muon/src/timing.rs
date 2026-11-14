@@ -42,8 +42,20 @@ use canlab_optics::Vec3;
 
 use crate::solve;
 
-/// The speed of light in vacuum, mm/ps.
-pub const C_MM_PER_PS: f64 = 299.792_458;
+/// The speed of light in vacuum, millimetres per **picosecond**.
+///
+/// `c = 299 792 458 m/s`, and a picosecond is 10⁻¹² s, so light travels
+/// `299 792 458 × 10⁻¹² m = 0.2998 mm` in one picosecond — a third of a
+/// millimetre, not three hundred.
+///
+/// The first version of this constant was `299.792458`, which is millimetres per
+/// *nanosecond*. It made light a thousand times too fast, and with it every
+/// timing signal in the study a thousand times too small: a block that a photon
+/// crosses in 269 ps was reported as 0.27 ps, and a direction that is measurable
+/// at tens of degrees was reported as unmeasurable at eighty thousand. The unit
+/// was in the name and the number disagreed with it, which is exactly the kind of
+/// error a test has to catch rather than a reader.
+pub const C_MM_PER_PS: f64 = 0.299_792_458;
 
 /// The speed of light in a block of index `n`, mm/ps.
 pub fn speed_mm_per_ps(index: f64) -> Option<f64> {
@@ -313,6 +325,48 @@ mod tests {
         let mut observations = observations(&positions, Vec3::new(1.0, 0.0, 0.0), 201.2, 0.0);
         observations[1].time_ps = f64::NAN;
         assert_eq!(reconstruct(&observations), Err(FitError::NotFinite));
+    }
+
+    #[test]
+    fn light_travels_a_third_of_a_millimetre_in_a_picosecond() {
+        // The number the whole study rests on, pinned three ways so a unit slip
+        // cannot pass: the constant itself, the speed in a plastic, and a
+        // distance over that speed.
+        assert!((C_MM_PER_PS - 0.299_792_458).abs() < 1e-12, "{C_MM_PER_PS}");
+        // One picosecond is 0.3 mm of vacuum: a metre is 3.34 ns, and a
+        // nanosecond is a foot. Both are the same fact.
+        assert!((1.0e3 / C_MM_PER_PS / 1.0e3 - 3.3356).abs() < 1e-3, "{}", 1.0 / C_MM_PER_PS);
+        let pmma = speed_mm_per_ps(1.49).expect("a speed");
+        assert!((pmma - 0.2012).abs() < 1e-3, "{pmma}");
+        // A photon takes 269 ps to cross the 54.1 mm between the two furthest
+        // sensors. The first version of this file said 0.27 ps, which is a
+        // thousand times too fast and put every conclusion in the study out by
+        // the same factor.
+        assert!((54.1 / pmma - 268.9).abs() < 0.5, "{}", 54.1 / pmma);
+    }
+
+    #[test]
+    fn the_speed_agrees_with_the_transport_that_measures_it() {
+        // The strongest form of the test above: `canlab-optics` computes a
+        // photon's flight time from `c` in metres per second, which is a unit
+        // nobody can slip on. If this crate's constant disagrees with the time
+        // the transport reports, one of the two is wrong — and the study's bound
+        // is built on this constant, so it would be wrong with it.
+        use canlab_optics::fresnel::Polarisation;
+        use canlab_optics::{Block, Optical, Transport, Tropical};
+        let block = Block::new(Tropical::fits_in(20.0, 10.0).expect("fits"));
+        let optical = Optical::block_in_air(1.49, 10_000.0);
+        let transport = Transport::new(block, optical);
+        let mut no_reflection = || 1.0;
+        let traced = transport
+            .trace(Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0), Polarisation::S, &mut no_reflection)
+            .expect("a trace");
+        let measured = traced.displacement_mm / traced.time_ps;
+        let ours = speed_mm_per_ps(1.49).expect("a speed");
+        assert!((measured - ours).abs() < 1e-6, "{measured} vs {ours}");
+        // And the time itself is hundreds of picoseconds, not fractions of one:
+        // the block is 20 mm across and light needs 99 ps for it.
+        assert!(traced.time_ps > 50.0, "{} ps", traced.time_ps);
     }
 
     #[test]

@@ -38,14 +38,21 @@
 //!    count*. Adding it in quadrature with the random terms would be wrong; it
 //!    belongs in the model as an amplitude-dependent bias.
 //!
-//! # And the reason none of it matters
+//! # What the budget buys
 //!
-//! The timing signal across the whole detector is 0.22 ps. The best budget in
-//! this table is 47 ps. The ratio is 200, and the bound on the heading is the
-//! ratio times the geometry's own scale — tens of thousands of degrees. Making
-//! the electronics perfect would move the ratio to infinity and the bound to a
-//! number that is still larger than the sphere, because the lever arm, not the
-//! clock, is what is missing.
+//! The timing signal across the whole detector is **224 ps** and this budget is
+//! **47.4 ps**, so the signal-to-noise is 4.7: the electronics can resolve the
+//! geometry, and the budget is what decides how well. Halving it would halve the
+//! angular uncertainty, which is why the terms are worth knowing.
+//!
+//! The budget is not the limit on the design. The limit is **where the sensors
+//! are**: the two end sensors sit 10 mm apart, so the worst heading has almost no
+//! lever arm and the Cramér–Rao bound is 81° however good the clock is. A
+//! placement on the block's corners gives 16° at its best heading with this same
+//! budget.
+//!
+//! The first version of this section said the opposite — that no budget could
+//! help — because the study's speed of light was a thousand times too large.
 
 /// One component's contribution to the timing budget.
 #[derive(Debug, Clone, Copy, PartialEq)]

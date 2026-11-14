@@ -14,17 +14,19 @@ can, and the five designs it has been used to compare. The numbers are from
 
 ## The headline
 
-**A direction cannot be measured from arrival times.** The whole detector's timing
-signal is 0.22 ps and the readout's jitter is 47.4 ps, so the Cramér–Rao bound on
-the heading is 81 000° — an uncertainty larger than the sphere. The missing
-quantity is not precision; it is the **lever arm**. Light crosses the block in
-0.22 ps, so there is nothing for a clock to measure.
+**A direction from arrival times is measurable, and the block's sensor placement
+wastes it.** Light crosses the 54.1 mm between the two furthest sensors in
+**269 ps**, and the readout's jitter is 47.4 ps — a signal-to-noise of 4.7, which
+is a measurement. The Cramér–Rao bound on the heading is **81°** at the worst
+heading, and the reason it is not the ~17° a well-spread tetrahedron gives is that
+the two end sensors sit only **10 mm apart**. Moving them to the block's corners
+gives 56° at worst and 16° at best.
 
-**A direction can be measured from position.** Two planes separated by a gap give
-two crossing points, and two points give a line. A 20 mm pixel over a 40 mm gap is
-11.7°, and the gap is air inside a can that is 115 mm tall.
+**A direction from position is better and simpler.** Two planes separated by a gap
+give two crossing points, and two points give a line. A 20 mm pixel over a 40 mm
+gap is **11.7°**, and the gap is air inside a can that is 115 mm tall.
 
-**A plastic scintillator gives 74 times the light of a Cherenkov radiator.** The
+**A plastic scintillator gives 95 times the light of a Cherenkov radiator at PMMA's index.** The
 same centimetre that emits 270 Cherenkov photons emits 20 000 scintillation
 photons. That removes the photon starvation the Cherenkov design fights, and it
 changes which sensor is correct: the 1 mm² part with 504 microcells saturates on a
@@ -40,7 +42,7 @@ flowchart LR
         MUON(("Muon, 4 GeV, beta 0.99996"))
         MAT["Block: PMMA or plastic scintillator"]
         SCINT["Scintillation: 20000 photons per cm"]
-        CHER["Cherenkov: 270 photons per cm"]
+        CHER["Cherenkov: 210 photons per cm"]
     end
     subgraph OPT["Photon transport"]
         TIR["Total internal reflection"]
@@ -69,7 +71,7 @@ flowchart LR
     SIPM --> PDE
     PDE --> TIME
     PDE --> POS
-    TIME -.->|"bound 81176 deg"| DIR
+    TIME -.->|"bound 81 deg"| DIR
     POS -->|"bound 12 deg"| DIR
 ```
 
@@ -84,7 +86,7 @@ crossing time to differ between sensors.
 | Design | EUR | g | Sensors | Angle | Verdict |
 |---|---|---|---|---|---|
 | Counter | 115 | 48.8 | 1 | none | Cheapest; no direction |
-| Cherenkov timing | 185 | 47.7 | 4 | 81 176° | Rejected by the bound |
+| Cherenkov timing | 185 | 47.7 | 4 | 81.2° | Fails at 30°: placement, not clock |
 | **Coarse tracker** | **245** | **44.7** | **8** | **11.7°** | **Passes every requirement** |
 | Fine tracker | 890 | 44.7 | 32 | 3.9° | Over budget |
 | Ring imager | 490 | 44.7 | 16 | (10.6°) | Unproven |
@@ -108,7 +110,7 @@ flowchart TB
         HOW{"Which observable carries it"}
     end
     subgraph G_TIME["From timing"]
-        CHER["Cherenkov timing: 81176 deg, rejected"]
+        CHER["Cherenkov timing: 81 deg"]
     end
     subgraph G_POS["From position"]
         PLANES{"How many planes"}
@@ -145,6 +147,25 @@ flowchart TB
 | [designs.md](designs.md) | The five designs, their numbers, and the trade each one makes |
 | [components.md](components.md) | The four parts, their datasheet numbers, availability, and the jitter budget |
 | [constraints.md](constraints.md) | The mission's parameters and requirements, and the audit that enforces them |
+
+---
+
+## A correction this study had to make
+
+The first version of these numbers was wrong by a factor of a thousand. The speed
+of light was written as `299.792458 mm/ps`, which is millimetres per **nanosecond**:
+light a thousand times too fast, every timing signal a thousand times too small,
+and a direction that is measurable at tens of degrees reported as unmeasurable at
+eighty thousand.
+
+The tests did not catch it because they asserted the code's own arithmetic —
+`signal == 54.1 / 201.2` passes whether 201.2 is millimetres per picosecond or per
+nanosecond. `crates/canlab-muon/tests/units.rs` now states every physical fact
+**independently** (a metre is 3.34 ns; a nanosecond is a foot; the transport
+computes from `c` in metres per second) and asks whether the code agrees.
+
+The lesson is in [lessons.md](../lessons.md): a test that uses the same constant on
+both sides of an assertion tests nothing about the constant.
 
 ---
 

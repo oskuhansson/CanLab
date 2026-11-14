@@ -358,18 +358,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_design_point_passes_every_requirement_but_the_timing_one() {
-        // The design block fits, is light enough and is affordable. It fails the
-        // timing requirement, and that failure is the study's finding rather
-        // than a bug: the audit is what turns the bound into a verdict.
+    fn the_design_point_passes_the_missions_own_audit() {
+        // The design block fits, is light enough, is affordable, and its timing
+        // signal is 224 ps against 47.4 ps of jitter — a ratio of 0.21, well
+        // inside the 10x the requirement allows.
+        //
+        // This test used to assert that the design point failed the timing
+        // requirement, and it did: the study's speed of light was a thousand
+        // times too large, so the signal was 0.22 ps and the ratio was 212. The
+        // assertion was true and the number behind it was wrong, which is why
+        // the audit cannot be the only check — `tests/units.rs` states the
+        // physical facts independently and is what caught it.
         let mission = Mission::standard();
         let violations = mission.audit(&Candidate::design());
-        assert_eq!(violations.len(), 1, "{violations:#?}");
-        assert_eq!(
-            violations[0].requirement,
-            "the timing jitter is within 10x of the timing signal"
-        );
-        assert!(violations[0].measured > 100.0, "{}", violations[0].measured);
+        assert!(violations.is_empty(), "{violations:#?}");
+        // The direction requirement is the designs module's, and the Cherenkov
+        // design fails it at 81 degrees. That failure is a placement problem.
+        let signal = crate::timing::timing_signal_ps(
+            &mission.can_sensor_positions(&Candidate::design()),
+            canlab_optics::Vec3::new(0.0, 0.0, 1.0).normalized().expect("a direction"),
+            crate::timing::speed_mm_per_ps(1.49).expect("a speed"),
+        )
+        .expect("a signal");
+        assert!(signal > 47.4, "the signal is {signal} ps against 47.4 ps of jitter");
     }
 
     #[test]

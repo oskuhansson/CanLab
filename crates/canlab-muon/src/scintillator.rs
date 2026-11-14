@@ -9,8 +9,10 @@
 //! A **plastic scintillator** is a different material with a different mechanism.
 //! A muon crossing it excites the fluors, which emit ~10 000 photons per MeV, and
 //! a minimum-ionising muon deposits ~2 MeV per centimetre. The same centimetre
-//! that gives 270 Cherenkov photons gives **20 000** scintillation photons: a
-//! factor of 74.
+//! gives **20 000** scintillation photons against the Cherenkov radiator's 210 at
+//! PMMA's index — a factor of **95** — or 269 at the high-index plastic's, a
+//! factor of 74. The ratio depends on the material because the Cherenkov yield
+//! does; the scintillation yield does not.
 //!
 //! # The consequence, which is not the one the study expected
 //!
@@ -142,16 +144,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_scintillator_gives_seventy_times_the_cherenkov_light() {
-        // The number the whole comparison turns on. A centimetre of PVT emits
-        // 10 000 photons/MeV x 2 MeV = 20 000 photons; a centimetre of the
-        // Cherenkov block emits 26.9 photons/mm x 10 = 269.
+    fn a_scintillator_gives_ninety_five_times_the_cherenkov_light() {
+        // The number the whole comparison turns on, at the index the design
+        // block actually uses. A centimetre of PVT emits 10 000 photons/MeV x
+        // 2 MeV = 20 000 photons; a centimetre of PMMA emits 21 photons/mm x 10
+        // = 210. The ratio is 95, and it is 74 at the high-index plastic's
+        // n = 1.84, because only the Cherenkov side changes with the index.
         let scintillator = Scintillator::pvt();
         assert!((scintillator.photons_per_mm() - 1_995.0).abs() < 1.0, "{}", scintillator.photons_per_mm());
-        let cherenkov = canlab_optics::source::photons_per_mm(1.0, 1.84).expect("above threshold");
-        let ratio = scintillator.photons_per_mm() / cherenkov;
-        assert!((ratio - 74.0).abs() < 2.0, "{ratio}");
-        // And at the design block's 10 mm path: 19 950 against 269.
+        let pmma = canlab_optics::source::photons_per_mm(1.0, 1.49).expect("above threshold");
+        let ratio = scintillator.photons_per_mm() / pmma;
+        assert!((ratio - 95.0).abs() < 1.0, "{ratio}");
+        let high_index = canlab_optics::source::photons_per_mm(1.0, 1.84).expect("above threshold");
+        let other = scintillator.photons_per_mm() / high_index;
+        assert!((other - 74.0).abs() < 1.0, "{other}");
+        // And at the design block's 10 mm path: 19 950 against 210.
         assert!((scintillator.photons(10.0) - 19_950.0).abs() < 10.0);
     }
 

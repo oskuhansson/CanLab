@@ -219,6 +219,74 @@ fn main() {
         }
     }
 
+    // The bound depends on where the sensors are, and the four faces the block
+    // has are not the four points that would measure best. This section is the
+    // difference: the same block, the same jitter, three placements.
+    println!("\nSENSOR PLACEMENT — the same block and jitter, three layouts");
+    let block = Block::new(Tropical::fits_in(20.0, 10.0).expect("fits"));
+    let speed = speed_mm_per_ps(1.49).expect("a speed");
+    let jitter = jitter_ps();
+    let (width, _height) = canlab_muon::can::tent_extent_mm(20.0).expect("an extent");
+    let half_thickness = 5.0;
+    let layouts: [(&str, [Vec3; 4]); 3] = [
+        ("four face centres", block.sensor_positions()),
+        (
+            // A proper tetrahedron on the block's four extreme corners. The
+            // first version of this layout alternated z with x and y in a way
+            // that put all four points on one plane, and a coplanar layout has
+            // an infinite bound in the direction normal to it: it reported 100°
+            // where the same four points in three dimensions give 13°.
+            "four corners",
+            [
+                Vec3::new(-width / 2.0, 30.0, half_thickness),
+                Vec3::new(width / 2.0, 30.0, -half_thickness),
+                Vec3::new(-width / 2.0, -30.0, -half_thickness),
+                Vec3::new(width / 2.0, -30.0, half_thickness),
+            ],
+        ),
+        (
+            "two ends, two walls",
+            [
+                Vec3::new(0.0, 8.0, half_thickness),
+                Vec3::new(0.0, 8.0, -half_thickness),
+                Vec3::new(width / 2.0, 0.0, 0.0),
+                Vec3::new(-width / 2.0, 0.0, 0.0),
+            ],
+        ),
+    ];
+    println!("{:>22} {:>12} {:>12} {:>12} {:>10}", "layout", "worst deg", "best deg", "arm mm", "signal ps");
+    for (name, positions) in layouts {
+        let mut worst = 0.0f64;
+        let mut best = f64::INFINITY;
+        let mut signal = 0.0f64;
+        let mut arm = 0.0f64;
+        for heading in [
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(1.0, 1.0, 0.0),
+            Vec3::new(0.0, 1.0, 1.0),
+        ] {
+            let Some(heading) = heading.normalized() else { continue };
+            if let Some(bound) = timing_bound(&positions, heading, jitter, speed) {
+                worst = worst.max(bound.sigma_deg());
+                best = best.min(bound.sigma_deg());
+            }
+            if let Some(this) = timing_signal_ps(&positions, heading, speed) {
+                signal = signal.max(this);
+            }
+        }
+        for i in 0..4 {
+            for j in (i + 1)..4 {
+                arm = arm.max((positions[i].sub(positions[j])).length());
+            }
+        }
+        println!(
+            "{name:>22} {worst:>12.1} {best:>12.1} {arm:>12.1} {signal:>10.0}"
+        );
+    }
+
     println!("\nPOSITION — the angular uncertainty of a line through two hit points");
     println!("{:>10} {:>12} {:>10}", "pixel mm", "separation mm", "bound deg");
     for &pixel in &[0.05, 0.1, 0.5, 1.0, 2.0] {

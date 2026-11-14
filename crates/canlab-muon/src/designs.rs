@@ -18,11 +18,16 @@
 //!
 //! # Why a tracker and not a timing detector
 //!
-//! A direction needs a **lever arm** and a **position**. Timing has no lever arm
-//! in a 90 mm block — the light crosses it in 0.22 ps — so the only observable
-//! left is *where* the muon crossed. Two planes separated by a gap give two
-//! crossing points, and two points give a line. The resolution is
-//! `√2·σ_h/L`: the pixel's own uncertainty over the separation, and nothing else.
+//! A direction needs a **lever arm**. Timing has one — the light crosses the 90 mm
+//! block in 450 ps — but the block's four sensor faces are a poor tetrahedron: the
+//! two end sensors are 10 mm apart, so a heading along that axis has almost no
+//! lever arm and the bound is 81° at its worst. The same block with the sensors on
+//! its corners gives 16° at best.
+//!
+//! A **position** observable has a better lever arm for less: two planes separated
+//! by a gap give two crossing points, and two points give a line. The resolution
+//! is `√2·σ_h/L` — the pixel's own uncertainty over the separation, and nothing
+//! else — and the separation is air inside a can that is 115 mm tall.
 //!
 //! That is why the tracker designs are the ones with a number worth quoting: a
 //! 20 mm pixel over a 40 mm gap is 12°, and a 10 mm pixel over 60 mm is 4°. The
@@ -256,9 +261,13 @@ impl Design {
     /// one.
     pub fn detector_g(&self) -> f64 {
         let material = match self.approach {
+            // A Cherenkov block is PMMA; a scintillator plane is PVT. The two
+            // densities differ by 16 %, which is not enough to change a verdict
+            // and is enough to make the table wrong.
             Approach::CherenkovTiming => {
                 return tent_mass_g(20.0, self.thickness_mm, 1.19).unwrap_or(0.0) + 12.0;
             }
+            Approach::RingImager => 1.19,
             _ => Scintillator::pvt().density_g_per_cm3,
         };
         let volume_mm3 = self.width_mm * self.height_mm * self.thickness_mm * self.planes as f64;
@@ -273,20 +282,65 @@ impl Design {
     }
 
     /// Photoelectrons one plane registers from a muon crossing it.
+    ///
+    /// Two different models, because the two light sources lose their light in
+    /// different ways.
+    ///
+    /// A **scintillator** plane is a diffuse-reflector box: the yield times a
+    /// collection efficiency times the PDE, which is a model and is labelled one.
+    ///
+    /// A **Cherenkov** block is a total-internal-reflection cavity, and it traps
+    /// most of what it makes. The born-times-collection estimate gives 18 for the
+    /// design block; the transport measures **8.1**, because 52 % of the light is
+    /// trapped and much of the rest leaves through a face no sensor covers. Using
+    /// the model for the Cherenkov designs overstates them by a factor of two,
+    /// which is the wrong direction to be wrong in.
     pub fn photoelectrons(&self) -> f64 {
-        let scintillator = Scintillator::pvt();
-        match self.approach {
-            // The Cherenkov block's 10 mm path, through the same collection and
-            // PDE the scintillator uses, so the two are comparable. PMMA at
-            // n = 1.49, which the sweep found collects more light than the
-            // high-index plastic: 21 photons/mm against 26.9, but far less
-            // trapped by total internal reflection.
-            Approach::CherenkovTiming => {
-                let photons = canlab_optics::source::expected_photons(10.0, 1.0, 1.49).unwrap_or(0.0);
-                photons * scintillator.collection * scintillator.pde
-            }
-            _ => scintillator.photoelectrons(self.thickness_mm),
+        if self.is_cherenkov() {
+            return self.measured_cherenkov_photoelectrons();
         }
+        Scintillator::pvt().photoelectrons(self.thickness_mm)
+    }
+
+    /// Whether the design's light comes from a Cherenkov radiator.
+    pub fn is_cherenkov(&self) -> bool {
+        matches!(self.approach, Approach::CherenkovTiming | Approach::RingImager)
+    }
+
+    /// The photons the transport actually delivers, per muon, averaged over 100
+    /// events with a fixed seed.
+    ///
+    /// The transport is the only thing in this crate that knows about total
+    /// internal reflection, Fresnel loss and the sensors' coverage of their
+    /// faces, and a design that quotes a light budget without it is quoting a
+    /// hope. The seed is fixed so the table is reproducible.
+    fn measured_cherenkov_photoelectrons(&self) -> f64 {
+        let Ok(outline) = canlab_optics::Tropical::fits_in(20.0, self.thickness_mm) else {
+            return 0.0;
+        };
+        let block = canlab_optics::Block::new(outline);
+        let optical = canlab_optics::Optical::block_in_air(1.49, 10_000.0);
+        let sensors: [canlab_optics::SiPM; 4] =
+            canlab_optics::SENSOR_FACES.map(canlab_optics::SiPM::typical);
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut random = move || {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((state >> 11) as f64) / (1u64 << 53) as f64
+        };
+        let entry = Vec3::new(-30.0, 0.0, 0.0);
+        let heading = Vec3::new(1.0, 0.0, 0.0);
+        let mut detected = 0usize;
+        let mut events = 0usize;
+        for _ in 0..100 {
+            let Ok(event) = canlab_optics::detector::simulate(
+                &block, &optical, &sensors, entry, heading, 17.0, 1.0, &mut random,
+            ) else {
+                continue;
+            };
+            events += 1;
+            detected += event.detected_count();
+        }
+        if events == 0 { 0.0 } else { detected as f64 / events as f64 }
     }
 
     /// The angular uncertainty, degrees, and whether it is a checked number.
@@ -482,9 +536,21 @@ mod tests {
             violations.iter().any(|v| v.starts_with("direction:")),
             "{violations:#?}"
         );
-        // The bound is the crate's own, not a second estimate.
+        // The bound is the crate's own, not a second estimate. 81 degrees is a
+        // direction in name only, and the reason is the sensor placement rather
+        // than the clock: the two end sensors are 10 mm apart.
         let angle = cherenkov.metrics().angle_deg.expect("a bound");
-        assert!(angle > 1_000.0, "{angle}");
+        assert!((angle - 81.2).abs() < 1.0, "{angle}");
+        assert!(angle > 30.0, "it must fail the direction requirement");
+        // And the timing signal is real, which is what makes the failure a
+        // placement problem: 224 ps of signal against 47.4 ps of jitter.
+        let signal = crate::timing::timing_signal_ps(
+            &cherenkov.cherenkov_positions(),
+            Vec3::new(0.0, 0.0, 1.0).normalized().expect("a direction"),
+            crate::timing::speed_mm_per_ps(1.49).expect("a speed"),
+        )
+        .expect("a signal");
+        assert!(signal > 47.4, "{signal} ps");
         // The coarse tracker passes every requirement it is audited on.
         let tracker = Design::coarse_tracker();
         assert!(tracker.audit(&mission).is_empty(), "{:#?}", tracker.audit(&mission));

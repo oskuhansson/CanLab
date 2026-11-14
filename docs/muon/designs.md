@@ -17,10 +17,10 @@ module range scaled by area, not a quote.*
 | Design | EUR | g | Sensors | pe/plane | Saturates | Angle | Verdict |
 |---|---|---|---|---|---|---|---|
 | counter | 115 | 48.8 | 1 | 1745 | no | — | no direction |
-| cherenkov timing | 185 | 47.7 | 4 | 18 | no | 81 176° | rejected |
+| cherenkov timing | 185 | 47.7 | 4 | 8 | no | 81.2° | fails at 30° |
 | **coarse tracker** | **245** | **44.7** | **8** | **873** | yes | **11.7°** | **passes** |
 | fine tracker | 890 | 44.7 | 32 | 873 | yes | 3.9° | over budget |
-| ring imager | 490 | 44.7 | 16 | 1745 | yes | (10.6°) | unproven |
+| ring imager | 490 | 50.1 | 16 | 8 | no | (10.6°) | unproven |
 
 `pe/plane` is photoelectrons per muon crossing one plane. `Saturates` is whether
 that fills the sensor's microcells — which is **not** automatically bad, and the
@@ -54,18 +54,28 @@ point is not a line.
 **Optimises: the existing parts.** The block, four sensors, a time-to-digital
 converter.
 
-This is the design the study started from, and the bound rejects it. The whole
-detector's timing signal is 0.22 ps and the readout's jitter is 47.4 ps, so the
-heading's uncertainty is 81 176°.
+This is the design the study started from, and it fails the 30° direction
+requirement at **81.2°** — but not for the reason the first version of this study
+gave. Light crosses the 54.1 mm between the two furthest sensors in **269 ps**,
+against 47.4 ps of jitter: a signal-to-noise of 4.7, which is a measurement. The
+failure is the **sensor placement**, not the clock.
 
-It is also the **most expensive way to learn nothing**: 185 € for four sensors and
-a timer, against 115 € for a counter that at least counts.
+The two end sensors sit at the centres of the block's `±z` faces, which are
+**10 mm apart** — the block's thickness. A heading along that axis therefore has
+almost no lever arm, and the worst-case bound is governed by it. The same block
+with the four sensors on its corners gives 56° at worst and **16° at best**, and a
+well-spread 54 mm tetrahedron gives 17.5°.
 
-The photon count is the other half of the problem. A Cherenkov radiator gives 21
-photons per millimetre at n = 1.49, so a 10 mm path gives 210 photons and, after
-25 % collection and 35 % PDE, **18 photoelectrons** — against the scintillator's
-1 745. The Cherenkov design is photon-starved and the scintillator is not, and the
-factor is 74.
+So the honest verdict is: timing works, this placement does not. It is still not
+the recommendation, because a tracker reaches 11.7° with no timer and no
+picosecond electronics at all.
+
+The photon count is the other half of the problem. The transport measures **8
+photoelectrons** per muon for the Cherenkov block — not the 18 that a
+born-times-collection estimate gives, because 52 % of the light is trapped by
+total internal reflection and much of the rest leaves through a face no sensor
+covers. Against the scintillator's 1 745, the Cherenkov design is photon-starved
+by a factor of 95 at PMMA's index.
 
 ---
 
@@ -122,6 +132,11 @@ reports *which* face, not *where* on it, so the ring's radius is not something t
 current code can measure. The 10.6° in the table is `pixel/ring_radius` — a
 geometric estimate — and it is marked unchecked wherever it appears.
 
+**And it has 8 photoelectrons per muon.** A ring needs tens of photons to have a
+shape; eight is a handful of dots. The design is listed because the idea is worth
+checking, not because the light is there — and the light is the first thing to
+check.
+
 It is listed because the idea is worth checking and because leaving it out would
 imply the space is closed. It is not a recommendation.
 
@@ -135,15 +150,19 @@ matter of degree.
 | | Timing | Position |
 |---|---|---|
 | What is measured | when the light arrived | where it crossed |
-| Lever arm | 0.22 ps across the whole block | 40 mm between planes |
+| Lever arm | 269 ps across the whole block | 40 mm between planes |
 | Readout jitter | 47.4 ps | 5.8 mm of pixel |
-| Signal-to-noise | 0.005 | 7 |
-| Bound | 81 176° | 11.7° |
+| Signal-to-noise | 5.7 | 7 |
+| Bound, this placement | 81° | 11.7° |
+| Bound, a good placement | 16° | 11.7° |
 
-The timing design's signal-to-noise is 0.005: the thing being measured is two
-hundred times smaller than the noise measuring it. The position design's is 7: the
-pixel is seven times smaller than the gap. That is the whole comparison, and no
-amount of electronic care moves the first column.
+The two observables are **comparable in signal-to-noise** — 5.7 against 7 — and
+that is the correction this study had to make. Timing is not hopeless; it is
+merely harder, because its resolution depends on where the sensors sit and its
+readout is a picosecond timer, while a tracker's resolution depends on a gap of
+air and its readout is a coincidence.
+
+The tracker wins on cost and simplicity, not on physics.
 
 ---
 

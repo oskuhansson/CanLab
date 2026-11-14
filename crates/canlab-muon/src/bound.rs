@@ -274,7 +274,7 @@ mod tests {
     }
 
     #[test]
-    fn the_design_block_cannot_measure_a_direction_at_all() {
+    fn the_design_blocks_sensor_placement_wastes_its_lever_arm() {
         // The number this crate exists to produce. The four sensor centres of a
         // 20 mm tent, 10 mm deep, are the ones `Block::sensor_positions` returns;
         // the jitter is the SiPM's; the speed is light in PMMA.
@@ -285,18 +285,55 @@ mod tests {
             Vec3::new(20.0, 0.0, 0.0),
         ];
         let speed = timing::speed_mm_per_ps(1.49).expect("a speed");
-        let heading = Vec3::new(0.0, 0.0, 1.0);
-        let bound = timing_bound(&positions, heading, 100.0, speed).expect("a bound");
-        assert!(bound.is_hopeless(), "{:.0}° is not hopeless", bound.sigma_deg());
-        // The signal the fit is trying to read, against the noise it reads it
-        // with: a third of a picosecond against a hundred.
-        let signal = timing::timing_signal_ps(&positions, heading, speed).expect("a signal");
-        assert!(signal < 0.5, "the timing signal is {signal} ps");
-        assert!(signal / 100.0 < 0.01, "the signal-to-jitter ratio is {}", signal / 100.0);
-        // And the same geometry with a *perfect* clock would still be hopeless
-        // at a picosecond, which is the point: the lever arm is the problem.
-        let perfect = timing_bound(&positions, heading, 1.0, speed).expect("a bound");
-        assert!(perfect.is_hopeless(), "{:.0}° at 1 ps", perfect.sigma_deg());
+        // The signal is real: 224 ps across the detector against 47.4 ps of
+        // jitter, so a timestamp does carry direction information. The first
+        // version of this study said the opposite because its speed of light was
+        // a thousand times too large.
+        let mut signal = 0.0f64;
+        let mut worst = 0.0f64;
+        let mut best = f64::INFINITY;
+        for heading in [
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 1.0, 1.0),
+        ] {
+            let heading = heading.normalized().expect("a direction");
+            signal = signal.max(timing::timing_signal_ps(&positions, heading, speed).expect("a signal"));
+            let bound = timing_bound(&positions, heading, 47.4, speed).expect("a bound");
+            worst = worst.max(bound.sigma_deg());
+            best = best.min(bound.sigma_deg());
+        }
+        assert!((signal - 224.0).abs() < 2.0, "the timing signal is {signal} ps");
+        assert!(signal > 47.4, "the signal must exceed the jitter to be a measurement");
+        // The bound is 81 degrees at worst and 48 at best, which is a direction
+        // in name only: the placement is the problem, not the clock.
+        assert!((worst - 81.2).abs() < 1.0, "{worst}");
+        assert!((best - 48.2).abs() < 1.0, "{best}");
+        // The reason: the two end sensors are 10 mm apart, so a heading along
+        // that axis has almost no lever arm. A placement on the block's corners
+        // is four times better at its best heading, and the test is what makes
+        // "the placement is the problem" a measurement rather than a claim.
+        let corners = [
+            Vec3::new(-20.0, 30.0, 5.0),
+            Vec3::new(20.0, 30.0, -5.0),
+            Vec3::new(-20.0, -30.0, -5.0),
+            Vec3::new(20.0, -30.0, 5.0),
+        ];
+        let mut corners_best = f64::INFINITY;
+        for heading in [
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 1.0, 1.0),
+        ] {
+            let heading = heading.normalized().expect("a direction");
+            corners_best = corners_best.min(
+                timing_bound(&corners, heading, 47.4, speed).expect("a bound").sigma_deg(),
+            );
+        }
+        assert!(corners_best < best, "{corners_best} vs {best}");
+        assert!((corners_best - 16.4).abs() < 1.0, "{corners_best}");
     }
 
     #[test]

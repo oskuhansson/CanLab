@@ -186,13 +186,19 @@ the walls — averaged over 200 events:
 | Sensors with at least one photon | 2.95 of 4 |
 | Photons lost to total internal reflection | ~11 % |
 | Arrival-time spread within one sensor | ~18 ps |
+| Timing difference between the furthest sensors | ~224 ps |
 | Muons through the plane in a 100 s flight | ~41–46 |
 
 The last two are the study's problem. The spread within one sensor is 18 ps, which
-is the *geometry's* own blur and is larger than the timer's 20 ps; and the timing
-difference *between* sensors is 0.22 ps, which is 80 times smaller than the blur.
-A timestamp cannot resolve a 0.22 ps difference when the thing it is timing is
-smeared over 18 ps.
+is the *geometry's* own blur and is comparable to the timer's 20 ps. The timing
+difference *between* sensors is **224 ps** across the block — light needs 269 ps
+to cross the 54.1 mm between the two furthest sensors — so the geometry is
+resolvable and the blur is a detail rather than an obstacle.
+
+That is the corrected figure. The first version of this document said 0.22 ps,
+because the study's speed of light was millimetres per *nanosecond* rather than per
+picosecond. It made the signal a thousand times too small and the conclusion
+backwards.
 
 ---
 
