@@ -279,6 +279,8 @@ struct CasApp {
     /// The theme has been restored from a session but not applied yet, because
     /// applying it needs an egui context and `new` has none.
     theme_pending: bool,
+    /// Which muon detector design the Designs panel is showing.
+    selected_design: usize,
 }
 
 impl CasApp {
@@ -325,6 +327,7 @@ impl CasApp {
             // document the developer last had open — and would overwrite it.
             sessions: !cfg!(test),
             theme_pending: false,
+            selected_design: 0,
         };
         app.restore_session();
         // `CANLAB_PALETTE=Nord` picks a scheme for this run, which is what a
@@ -1533,6 +1536,7 @@ impl CasApp {
             PanelKind::Variables => panels::variables(self, ui),
             PanelKind::Plot => panels::plot(self, ui),
             PanelKind::History => panels::history(self, ui),
+            PanelKind::Designs => panels::designs(self, ui),
         }
     }
 }

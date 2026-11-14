@@ -3282,6 +3282,148 @@ mod sign_table_tests {
     }
 }
 
+/// The muon detector designs: the six the study compares, plus the hexagonal
+/// Cherenkov block, with a side sketch of each and its numbers.
+///
+/// The sketch is a **side view**: the can's inner envelope is 56 mm across and
+/// 110 mm tall, and the design is drawn inside it at the same scale. It is not a
+/// ray trace and it is not to be read as one — it answers "what shape is this and
+/// where does it sit in the can", which a table of numbers cannot.
+pub fn designs(app: &mut CasApp, ui: &mut Ui) {
+    use canlab_muon::designs::{Approach, Design};
+
+    let designs = Design::all();
+    let hexagon = canlab_muon::timing_study::TimingDesign {
+        name: "hexagon timing",
+        scale_mm: 28.0,
+        thickness_mm: 30.0,
+        index: 1.49,
+        pde: 0.35,
+        shape: canlab_muon::timing_study::Shape::Hexagon,
+    };
+    let count = designs.len() + 1;
+    let selected = app.selected_design.min(count - 1);
+
+    ui.heading("Muon detector designs");
+    ui.label("The six designs the study compares, plus the hexagonal Cherenkov block.");
+    ui.separator();
+
+    egui::ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
+        for (index, design) in designs.iter().enumerate() {
+            let metrics = design.metrics();
+            let label = format!(
+                "{} — {:.0} EUR, {:.0} g, {} sensors",
+                design.name, metrics.cost_eur, metrics.detector_g, metrics.channels
+            );
+            if ui.selectable_label(index == selected, label).clicked() {
+                app.selected_design = index;
+            }
+        }
+        if ui
+            .selectable_label(selected == designs.len(), "hexagon timing — 218 EUR, 73 g, 4 sensors")
+            .clicked()
+        {
+            app.selected_design = designs.len();
+        }
+    });
+
+    ui.separator();
+
+    // The numbers, then the sketch.
+    if selected < designs.len() {
+        let metrics = designs[selected].metrics();
+        ui.horizontal_wrapped(|ui| {
+            ui.label(format!("{:.0} EUR", metrics.cost_eur));
+            ui.label(format!("{:.0} g", metrics.detector_g));
+            ui.label(format!("{} sensors", metrics.channels));
+            match metrics.angle_deg {
+                Some(angle) => ui.label(format!("{angle:.1}° ({})", metrics.angle_source.tag())),
+                None => ui.label("no direction"),
+            };
+            ui.label(format!("{:.1} muons/flight", metrics.muons_per_flight));
+        });
+    } else {
+        ui.horizontal_wrapped(|ui| {
+            ui.label("218 EUR");
+            ui.label("73 g");
+            ui.label("4 sensors");
+            ui.label("21.6° (network)");
+            ui.label("26 muons/flight");
+        });
+    }
+
+    let (response, painter) = ui.allocate_painter(
+        vec2(ui.available_width().max(120.0), ui.available_height().max(160.0)),
+        Sense::hover(),
+    );
+    let rect = response.rect;
+    let faint = Stroke::new(1.0, ui.visuals().weak_text_color());
+    let strong = Stroke::new(1.5, crate::theme::accent());
+    let fill = ui.visuals().faint_bg_color;
+    // Millimetres to pixels: the envelope is 56 across and 110 tall, with a
+    // margin so the sketch does not touch the panel's edge.
+    let scale = ((rect.width() - 16.0) / 56.0).min((rect.height() - 16.0) / 110.0);
+    let centre = rect.center();
+    let at = |x: f64, y: f64| pos2(centre.x + (x as f32) * scale, centre.y - (y as f32) * scale);
+
+    // The can's inner envelope.
+    let envelope = Rect::from_min_max(at(-28.0, 55.0), at(28.0, -55.0));
+    painter.rect_stroke(envelope, egui::CornerRadius::same(4), faint, egui::StrokeKind::Inside);
+
+    if selected < designs.len() {
+        let design = &designs[selected];
+        match design.approach {
+            Approach::Counter => {
+                // The disc seen edge-on: 56 mm across, 10 mm thick.
+                painter.rect_filled(
+                    Rect::from_min_max(at(-28.0, 5.0), at(28.0, -5.0)),
+                    egui::CornerRadius::same(2),
+                    fill,
+                );
+            }
+            Approach::CherenkovTiming | Approach::RingImager => {
+                // The tent: 40 mm across, 90 mm tall, centred in the can.
+                let tent = canlab_optics::outline::CORNERS
+                    .iter()
+                    .map(|(x, y)| at(x * 20.0, y * 20.0 - 15.0))
+                    .collect::<Vec<_>>();
+                painter.add(egui::Shape::convex_polygon(tent, fill, strong));
+                // The four sensors, from the block the transport uses.
+                if let Ok(outline) = canlab_optics::Tropical::fits_in(20.0, 10.0) {
+                    let block = canlab_optics::Block::new(outline);
+                    for position in block.sensor_positions() {
+                        painter.circle_filled(at(position.x, position.y - 15.0), 3.0, crate::theme::accent());
+                    }
+                }
+            }
+            Approach::Tracker => {
+                // Two planes 40 mm across, 5 mm thick, separated by the gap.
+                let half = design.separation_mm / 2.0;
+                for y in [half, -half] {
+                    painter.rect_filled(
+                        Rect::from_min_max(at(-20.0, y + 2.5), at(20.0, y - 2.5)),
+                        egui::CornerRadius::same(2),
+                        fill,
+                    );
+                }
+            }
+        }
+    } else {
+        // The hexagon: 56 mm across corners, 48.5 mm across flats.
+        let hex = canlab_optics::outline::HEXAGON
+            .iter()
+            .map(|(x, y)| at(x * 28.0, y * 28.0))
+            .collect::<Vec<_>>();
+        painter.add(egui::Shape::convex_polygon(hex, fill, strong));
+        // The four sensors: Top, Bottom, Side(0), Side(2).
+        if let Some(block) = hexagon.block() {
+            for position in block.sensor_positions() {
+                painter.circle_filled(at(position.x, position.y), 3.0, crate::theme::accent());
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

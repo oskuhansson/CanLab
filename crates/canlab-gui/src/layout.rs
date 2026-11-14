@@ -32,15 +32,17 @@ pub enum PanelKind {
     Variables,
     Plot,
     History,
+    Designs,
 }
 
 impl PanelKind {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Editor,
         Self::Palette,
         Self::Variables,
         Self::Plot,
         Self::History,
+        Self::Designs,
     ];
 
     pub fn label(self) -> &'static str {
@@ -50,6 +52,7 @@ impl PanelKind {
             Self::Variables => "Variables",
             Self::Plot => "Plot",
             Self::History => "History",
+            Self::Designs => "Designs",
         }
     }
 }
@@ -125,7 +128,11 @@ impl Workspace {
                     col(
                         0.52,
                         leaf(PanelKind::Variables),
-                        col(0.54, leaf(PanelKind::Plot), leaf(PanelKind::History)),
+                        col(
+                            0.54,
+                            leaf(PanelKind::Plot),
+                            row(0.5, leaf(PanelKind::History), leaf(PanelKind::Designs)),
+                        ),
                     ),
                 ),
             ),
@@ -135,7 +142,11 @@ impl Workspace {
                 row(
                     0.66,
                     leaf(PanelKind::History),
-                    row(0.5, leaf(PanelKind::Palette), leaf(PanelKind::Plot)),
+                    row(
+                        0.5,
+                        leaf(PanelKind::Palette),
+                        row(0.5, leaf(PanelKind::Plot), leaf(PanelKind::Designs)),
+                    ),
                 ),
             ),
             Self::Plotting => row(
@@ -147,7 +158,11 @@ impl Workspace {
                     row(
                         0.72,
                         leaf(PanelKind::Plot),
-                        col(0.58, leaf(PanelKind::Variables), leaf(PanelKind::History)),
+                        col(
+                            0.58,
+                            leaf(PanelKind::Variables),
+                            row(0.5, leaf(PanelKind::History), leaf(PanelKind::Designs)),
+                        ),
                     ),
                 ),
             ),

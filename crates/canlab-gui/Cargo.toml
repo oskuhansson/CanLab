@@ -19,6 +19,8 @@ canlab-plot = { path = "../canlab-plot" }
 canlab-scene = { path = "../canlab-scene" }
 canlab-ode = { path = "../canlab-ode" }
 canlab-solver = { path = "../canlab-solver" }
+canlab-muon = { path = "../canlab-muon" }
+canlab-optics = { path = "../canlab-optics" }
 # Bevy owns the window, the event loop and (from M5) the 3D view; egui is the
 # interface inside it. `eframe` is gone on purpose: it cannot host a Bevy render
 # graph, and two window/event loops in one process is a fight, not a design.
