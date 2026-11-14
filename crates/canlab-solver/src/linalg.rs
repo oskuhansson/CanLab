@@ -60,7 +60,10 @@ pub enum MatrixError {
     /// The determinant is zero, so there is no inverse.
     Singular,
     /// The eigenvalues are not exact with the methods this crate has.
-    EigenvaluesNotExact,
+    EigenvaluesNotExact {
+        /// The size of the matrix whose eigenvalues were asked for.
+        size: usize,
+    },
 }
 
 impl MatrixError {
@@ -77,11 +80,15 @@ impl MatrixError {
             MatrixError::Singular => {
                 "the determinant is zero, so the matrix has no inverse".to_string()
             }
-            MatrixError::EigenvaluesNotExact => {
+            MatrixError::EigenvaluesNotExact { size: 3 } => {
                 "the eigenvalues are not exact with the methods here: a 3×3 needs a rational root \
                  or a quadratic factor, and a numeric answer would not be exact"
                     .to_string()
             }
+            MatrixError::EigenvaluesNotExact { size } => format!(
+                "the eigenvalues are not exact with the methods here: a {size}×{size} has no \
+                 closed form in this crate, and a numeric answer would not be exact"
+            ),
         }
     }
 }
@@ -314,7 +321,7 @@ pub fn eigenvalues(matrix: &[Vec<Expr>]) -> Result<Vec<Expr>, MatrixError> {
             ];
             cubic_roots(&coefficients)
         }
-        _ => Err(MatrixError::EigenvaluesNotExact),
+        _ => Err(MatrixError::EigenvaluesNotExact { size }),
     }
 }
 
@@ -415,21 +422,21 @@ fn cubic_roots(coefficients: &[Expr; 4]) -> Result<Vec<Expr>, MatrixError> {
         .map(|c| c.as_number().cloned())
         .collect();
     let Some(numeric) = numeric else {
-        return Err(MatrixError::EigenvaluesNotExact);
+        return Err(MatrixError::EigenvaluesNotExact { size: 3 });
     };
     let poly = canlab_poly::univariate::from_coefficients(
         vec![SymbolId::intern("lambda")],
         &numeric,
     );
     let Some(rational) = poly.rational_roots() else {
-        return Err(MatrixError::EigenvaluesNotExact);
+        return Err(MatrixError::EigenvaluesNotExact { size: 3 });
     };
     let mut roots: Vec<Expr> = rational.iter().map(|n| ExprNode::num(n.clone())).collect();
     // Divide out the rational roots and finish the quadratic.
     let mut working = poly.clone();
     for root in &rational {
         let Some(quotient) = working.deflate(root) else {
-            return Err(MatrixError::EigenvaluesNotExact);
+            return Err(MatrixError::EigenvaluesNotExact { size: 3 });
         };
         working = quotient;
     }
@@ -439,18 +446,18 @@ fn cubic_roots(coefficients: &[Expr; 4]) -> Result<Vec<Expr>, MatrixError> {
             // `a + bλ = 0` → `λ = −a/b`.
             let coefficients = working.univariate_coefficients();
             let Some(map) = coefficients else {
-                return Err(MatrixError::EigenvaluesNotExact);
+                return Err(MatrixError::EigenvaluesNotExact { size: 3 });
             };
             let a = map.get(&0).cloned().unwrap_or_else(Number::zero);
             let b = map.get(&1).cloned().unwrap_or_else(Number::zero);
             if b.is_zero() {
-                return Err(MatrixError::EigenvaluesNotExact);
+                return Err(MatrixError::EigenvaluesNotExact { size: 3 });
             }
             roots.push(ExprNode::num(a.neg().div(&b)));
         }
         2 => {
             let Some(map) = working.univariate_coefficients() else {
-                return Err(MatrixError::EigenvaluesNotExact);
+                return Err(MatrixError::EigenvaluesNotExact { size: 3 });
             };
             let a = map.get(&2).cloned().unwrap_or_else(Number::zero);
             let b = map.get(&1).cloned().unwrap_or_else(Number::zero);
@@ -459,7 +466,7 @@ fn cubic_roots(coefficients: &[Expr; 4]) -> Result<Vec<Expr>, MatrixError> {
             let c_expr = ExprNode::num(c);
             roots.extend(quadratic_roots(&a, &b_expr, &c_expr));
         }
-        _ => return Err(MatrixError::EigenvaluesNotExact),
+        _ => return Err(MatrixError::EigenvaluesNotExact { size: 3 }),
     }
     Ok(roots)
 }
@@ -637,6 +644,35 @@ mod tests {
                 .total_cmp(&b.as_number().map(Number::to_f64).unwrap_or(f64::NAN))
         });
         assert_eq!(values, vec![int(2), int(3), int(4)]);
+    }
+
+    #[test]
+    fn an_eigenvalue_refusal_names_the_size_the_caller_asked_for() {
+        // `diag(1,2,3,4)` is not a 3×3, and the refusal used to tell the caller
+        // about a size they had not asked about. The variant carries the size
+        // now, and the message repeats it.
+        let four = m(&[
+            &[1, 0, 0, 0],
+            &[0, 2, 0, 0],
+            &[0, 0, 3, 0],
+            &[0, 0, 0, 4],
+        ]);
+        let error = eigenvalues(&four).expect_err("a 4×4 is not solved exactly");
+        assert_eq!(error, MatrixError::EigenvaluesNotExact { size: 4 });
+        assert!(error.message().contains("4×4"), "{}", error.message());
+        assert!(!error.message().contains("3×3"), "{}", error.message());
+        // And the same for the next size up, so the message is not a special
+        // case for four.
+        let five = m(&[
+            &[1, 0, 0, 0, 0],
+            &[0, 2, 0, 0, 0],
+            &[0, 0, 3, 0, 0],
+            &[0, 0, 0, 4, 0],
+            &[0, 0, 0, 0, 5],
+        ]);
+        let error = eigenvalues(&five).expect_err("a 5×5 is not solved exactly");
+        assert_eq!(error, MatrixError::EigenvaluesNotExact { size: 5 });
+        assert!(error.message().contains("5×5"), "{}", error.message());
     }
 
     #[test]

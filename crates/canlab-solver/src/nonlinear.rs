@@ -52,13 +52,24 @@ pub type Point = Vec<(SymbolId, Expr)>;
 /// the single-variable answer it is the counterpart of.
 pub use crate::solutions::SystemAnswer;
 
-/// How close a point must be to zero in every equation to be reported.
+/// How close two coordinates must be to count as the same point.
 ///
-/// A point from an exact resultant satisfies the equations to rounding; a point
-/// from a numeric root satisfies them to the root's tolerance. One number, in
-/// the same units as the equations' values, and it is stated here rather than
-/// buried in a comparison.
+/// This is a *coordinate* tolerance, not a residual one. It is used to
+/// deduplicate and filter candidate values; a residual is judged against the
+/// equation's own scale by [`POINT_RELATIVE_TOLERANCE`]. An absolute residual
+/// tolerance cannot tell a root of `x/10⁶ = 1` from a point `10⁻³` away: both
+/// residuals are below `10⁻⁶`, even though the point is about `10⁷` rounding
+/// errors off the answer. The relative check is what refuses that point.
 pub const POINT_TOLERANCE: f64 = 1e-6;
+
+/// The relative part of the point check: a residual is small when it is below
+/// this fraction of the equation's own magnitude.
+///
+/// The magnitude is the sum of the absolute values of the expression's terms —
+/// its scale, not the answer's. `x/10⁶ − 1` has scale `2` at `x = 10⁶`, so a
+/// `10⁻³` error in `x` leaves the `10⁻⁹` residual visible against `2·10⁻¹²`
+/// rather than hidden under an absolute `10⁻⁶`.
+pub const POINT_RELATIVE_TOLERANCE: f64 = 1e-12;
 
 /// The nonlinear system solver, as a free function so that the trait method is
 /// a thin wrapper.
@@ -188,12 +199,12 @@ fn two_unknowns(
     // 2. What is left must be two polynomial equations in the two unknowns, or
     //    one equation in one unknown after substitution.
     if unknown.is_empty() {
-        // Every unknown is known: the leftover equations must hold.
-        let holds = remaining.iter().all(|equation| {
-            let value = evaluate_constant(equation);
-            value.is_finite() && value.abs() <= POINT_TOLERANCE
-        });
-        if !holds {
+        // Every unknown is known: every original equation must hold at the
+        // point. Checking all of them, not only the ones still in `remaining`,
+        // is the same answer for the equations that were already solved by
+        // substitution and a stricter one for the values a numeric root
+        // supplied.
+        if !satisfies_all(&known, equations) {
             return Ok(SystemAnswer::None);
         }
         return Ok(SystemAnswer::Points(vec![known]));
@@ -278,11 +289,25 @@ fn by_resultant(
     // and its roots are found numerically from the exact expression.
     let resultant = resultant_expression(&left_poly, &right_poly, first, second)?;
 
-    // The candidates in `second`: every real root of the resultant.
+    // The candidates in `second`: every real root of the resultant. The scan
+    // holds its *residual* to `1e-12`, which is not the same as holding the
+    // root: a flat resultant can be `1e-12` from zero while its root is several
+    // `1e-9` away, and the point's back-substitution then carries that error.
+    // Newton on the resultant, in exact coefficients and `f64` values, turns a
+    // residual-small root into a root-small one.
     let roots = canlab_num::scan_expression(&resultant, second, (-1e3, 1e3), 1e-12).ok()?;
+    let resultant_program = canlab_core::Program::compile(&resultant, &[second]);
+    let derivative = canlab_core::differentiate(&resultant, second);
+    let derivative_program = derivative
+        .as_ref()
+        .and_then(|expression| canlab_core::Program::compile(expression, &[second]));
     let mut points: Vec<Point> = Vec::new();
     for root in roots {
-        let value = root.value;
+        let value = refine_root(
+            resultant_program.as_ref(),
+            derivative_program.as_ref(),
+            root.value,
+        );
         if !value.is_finite() {
             continue;
         }
@@ -293,7 +318,11 @@ fn by_resultant(
             continue;
         };
         for partner in partners {
-            let point = vec![(first, partner), (second, ExprNode::num(Number::float(value)))];
+            let mut point = vec![
+                (first, partner),
+                (second, ExprNode::num(Number::float(value))),
+            ];
+            refine_pair(&mut point, left, right, first, second);
             // A duplicate can arise when two roots round to the same point.
             let duplicate = points.iter().any(|existing| same_point(existing, &point));
             if !duplicate {
@@ -388,6 +417,138 @@ fn resultant_expression(
     })
 }
 
+/// Newton-refine a candidate pair against both original equations.
+///
+/// A resultant root can be a multiple of the true one — the resultant of a
+/// circle and a parabola is the square of the quadratic in `y`, so its residual
+/// is the *square* of the point's error and the scan's `10⁻¹²` residual only
+/// pins the root to about `10⁻⁶`; the measured error was `2.9·10⁻⁹`, and the
+/// second equation carried it as `1.2·10⁻⁸`. The first equation is solved
+/// exactly for the partner, but the second still carries that error. A
+/// two-equation Newton step, with the Jacobian of the original equations, puts
+/// both coordinates back within rounding before the back-substitution check.
+///
+/// A point whose step is not finite is left as it was; the caller's
+/// back-substitution check is still the filter that decides whether to report
+/// it.
+fn refine_pair(point: &mut Point, left: &Expr, right: &Expr, first: SymbolId, second: SymbolId) {
+    let (Some(x0), Some(y0)) = (point_value(point, first), point_value(point, second)) else {
+        return;
+    };
+    let variables = [first, second];
+    let (Some(left_value), Some(right_value)) = (
+        canlab_core::Program::compile(left, &variables),
+        canlab_core::Program::compile(right, &variables),
+    ) else {
+        return;
+    };
+    let partial = |expression: &Expr, variable: SymbolId| {
+        canlab_core::differentiate(expression, variable)
+            .and_then(|derivative| canlab_core::Program::compile(&derivative, &variables))
+    };
+    let (Some(left_first), Some(left_second), Some(right_first), Some(right_second)) = (
+        partial(left, first),
+        partial(left, second),
+        partial(right, first),
+        partial(right, second),
+    ) else {
+        return;
+    };
+    let initial = left_value.eval(&[x0, y0]).abs() + right_value.eval(&[x0, y0]).abs();
+    if !initial.is_finite() {
+        return;
+    }
+    let (mut x, mut y) = (x0, y0);
+    for _ in 0..8 {
+        let f = left_value.eval(&[x, y]);
+        let g = right_value.eval(&[x, y]);
+        if !f.is_finite() || !g.is_finite() {
+            return;
+        }
+        let a = left_first.eval(&[x, y]);
+        let b = left_second.eval(&[x, y]);
+        let c = right_first.eval(&[x, y]);
+        let d = right_second.eval(&[x, y]);
+        let determinant = a * d - b * c;
+        if !determinant.is_finite() || determinant == 0.0 {
+            return;
+        }
+        let dx = (-f * d + b * g) / determinant;
+        let dy = (-a * g + c * f) / determinant;
+        if !dx.is_finite() || !dy.is_finite() {
+            return;
+        }
+        x += dx;
+        y += dy;
+        if dx.abs() + dy.abs() <= 1e-15 * (1.0 + x.abs() + y.abs()) {
+            break;
+        }
+    }
+    // A Newton step that made the pair worse is not an improvement; leave the
+    // candidate as the resultant produced it and let the back-substitution
+    // check refuse it if it is wrong.
+    let final_residual = left_value.eval(&[x, y]).abs() + right_value.eval(&[x, y]).abs();
+    if !final_residual.is_finite() || final_residual > initial {
+        return;
+    }
+    for (variable, value) in point.iter_mut() {
+        if *variable == first {
+            *value = ExprNode::num(Number::float(x));
+        }
+        if *variable == second {
+            *value = ExprNode::num(Number::float(y));
+        }
+    }
+}
+
+/// A point's numeric value for one pinned variable.
+fn point_value(point: &Point, variable: SymbolId) -> Option<f64> {
+    point
+        .iter()
+        .find(|(other, _)| *other == variable)
+        .and_then(|(_, expression)| expression.as_number())
+        .map(Number::to_f64)
+}
+
+/// Newton-refine a root of the resultant, when its derivative is available.
+///
+/// The scan's tolerance is on `|f(value)|`, not on `|value − root|`; those are
+/// only the same size when the derivative is not small. A point built from a
+/// root that is `10⁻⁹` off makes the back-substitution check look like a
+/// tolerance failure, so this pays for a few Newton steps before the partner
+/// coordinate is solved.
+///
+/// The value is read through a [`canlab_core::Program`] rather than by
+/// substituting into the expression: substitution rebuilds the tree through the
+/// canonical constructors, and the resultant is already the canonical tree the
+/// scan compiled.
+fn refine_root(
+    resultant: Option<&canlab_core::Program>,
+    derivative: Option<&canlab_core::Program>,
+    value: f64,
+) -> f64 {
+    let (Some(resultant), Some(derivative)) = (resultant, derivative) else {
+        return value;
+    };
+    let mut value = value;
+    for _ in 0..8 {
+        let value_at = resultant.eval(&[value]);
+        let slope_at = derivative.eval(&[value]);
+        if !value_at.is_finite() || !slope_at.is_finite() || slope_at == 0.0 {
+            break;
+        }
+        let step = value_at / slope_at;
+        if !step.is_finite() {
+            break;
+        }
+        value -= step;
+        if step.abs() <= 1e-15 * value.abs().max(1.0) {
+            break;
+        }
+    }
+    value
+}
+
 /// A polynomial with one variable fixed, as a univariate polynomial.
 fn substitute_poly(poly: &Poly<Number>, var: SymbolId, at: &Number) -> Option<Poly<Number>> {
     let index = poly.vars().iter().position(|symbol| *symbol == var)?;
@@ -453,16 +614,99 @@ fn solve_for(equation: &Expr, var: SymbolId) -> Option<Vec<Expr>> {
     Some(values.into_iter().map(|v| ExprNode::num(Number::float(v))).collect())
 }
 
-/// Whether a point satisfies every equation, to [`POINT_TOLERANCE`].
+/// Whether a point satisfies every equation, to the scale-aware residual check.
 fn satisfies_all(point: &[(SymbolId, Expr)], equations: &[Expr]) -> bool {
+    let variables: Vec<SymbolId> = point.iter().map(|(variable, _)| *variable).collect();
+    let values: Vec<f64> = point
+        .iter()
+        .map(|(_, value)| evaluate_constant(value))
+        .collect();
     equations.iter().all(|equation| {
-        let mut value = equation.clone();
-        for (variable, replacement) in point {
-            value = substitute(&value, *variable, replacement);
-        }
-        let number = evaluate_constant(&value);
-        number.is_finite() && number.abs() <= POINT_TOLERANCE
+        // The compiled program evaluates the original tree, not a substitution
+        // through the canonical constructors: rebuilding `x³` as a canonical
+        // `pow` is a second evaluation of the same expression, and it is not
+        // always the same value.
+        let Some(program) = canlab_core::Program::compile(equation, &variables) else {
+            return false;
+        };
+        residual_is_small(program.eval(&values), magnitude_at(equation, point))
     })
+}
+
+/// Whether `value` is a zero residual for an expression of the given scale.
+fn residual_is_small(value: f64, scale: f64) -> bool {
+    if !value.is_finite() {
+        return false;
+    }
+    let scale = if scale.is_finite() {
+        scale.max(1.0)
+    } else {
+        1.0
+    };
+    value.abs() <= POINT_RELATIVE_TOLERANCE * scale
+}
+
+/// A point's magnitude for an expression: the sum of the absolute values of its
+/// terms, with the point's values substituted.
+///
+/// This is the scale the residual is measured against. It is computed from the
+/// *original* expression and the point, not from the substituted expression:
+/// `substitute` rebuilds through the canonical constructors, which fold
+/// `y − x² + 1` into a single number and leave the residual as its own scale.
+/// For a residual of `10⁻⁹` that makes the relative check a `10⁻¹²` absolute
+/// one, which is neither what the name says nor what a measurement should face.
+fn magnitude_at(expression: &Expr, point: &[(SymbolId, Expr)]) -> f64 {
+    match &**expression {
+        ExprNode::Num(number) => number.to_f64().abs(),
+        ExprNode::Sym(symbol) => match point.iter().find(|(variable, _)| variable == symbol) {
+            Some((_, value)) => evaluate_constant(value).abs(),
+            None => constant_symbol(*symbol),
+        },
+        ExprNode::Add(terms) => terms.iter().map(|term| magnitude_at(term, point)).sum(),
+        ExprNode::Mul(factors) => factors
+            .iter()
+            .map(|factor| magnitude_at(factor, point))
+            .product(),
+        ExprNode::Pow(base, exponent) => {
+            let base = magnitude_at(base, point);
+            let exponent = evaluate_at(exponent, point);
+            if exponent.is_finite() {
+                base.powf(exponent)
+            } else {
+                f64::NAN
+            }
+        }
+        _ => f64::NAN,
+    }
+}
+
+/// An expression's value at a point, for the exponent of a power.
+fn evaluate_at(expression: &Expr, point: &[(SymbolId, Expr)]) -> f64 {
+    match &**expression {
+        ExprNode::Num(number) => number.to_f64(),
+        ExprNode::Sym(symbol) => match point.iter().find(|(variable, _)| variable == symbol) {
+            Some((_, value)) => evaluate_constant(value),
+            None => constant_symbol(*symbol),
+        },
+        ExprNode::Add(terms) => terms.iter().map(|term| evaluate_at(term, point)).sum(),
+        ExprNode::Mul(factors) => factors
+            .iter()
+            .map(|factor| evaluate_at(factor, point))
+            .product(),
+        ExprNode::Pow(base, exponent) => {
+            evaluate_at(base, point).powf(evaluate_at(exponent, point))
+        }
+        _ => f64::NAN,
+    }
+}
+
+/// `π`, `e`, or `NaN` for a symbol that is not one of them.
+fn constant_symbol(symbol: SymbolId) -> f64 {
+    match &*SymbolId::name(symbol) {
+        "pi" => std::f64::consts::PI,
+        "e" => std::f64::consts::E,
+        _ => f64::NAN,
+    }
 }
 
 /// A variable-free expression's value, or `NaN`.
@@ -614,9 +858,13 @@ mod tests {
     }
 
     #[test]
-    fn two_conics_meet_in_more_than_two_points() {
-        // A circle and a parabola: `x² + y² = 5` and `y = x² − 1` meet in up to
-        // four points, and at least two are found and each substitutes to zero.
+    fn two_conics_meet_in_two_points_and_both_are_reported() {
+        // A circle and a parabola: `x² + y² = 5` and `y = x² − 1`. Substituting
+        // gives `y² + y − 4 = 0`, so this pair has exactly two real
+        // intersections, `y = (−1 + √17)/2` and `x = ±√(y + 1)`. The general
+        // conic pair has up to four; *these* two curves have two, which is what
+        // the assertion below says. The first version asserted `>= 2` under a
+        // name that claimed more, so it could not fail when one point was lost.
         let parabola = add([sym("y"), mul([int(-1), pow(sym("x"), int(2))]), int(1)]);
         let equations = [
             add([pow(sym("x"), int(2)), pow(sym("y"), int(2)), int(-5)]),
@@ -624,7 +872,28 @@ mod tests {
         ];
         let answer = solve_nonlinear(&NativeSolver, &equations, &[x(), y()]);
         let points = points(answer.expect("an answer"));
-        assert!(points.len() >= 2, "{points:?}");
+        assert_eq!(points.len(), 2, "{points:?}");
+        let expected_y = (-1.0 + 17.0f64.sqrt()) / 2.0;
+        let expected_x = (expected_y + 1.0).sqrt();
+        let mut found: Vec<(f64, f64)> = points
+            .iter()
+            .map(|point| (value_of(point, x()), value_of(point, y())))
+            .collect();
+        found.sort_by(|a, b| a.0.total_cmp(&b.0));
+        assert!(
+            (found[0].0 + expected_x).abs() < 1e-9,
+            "{found:?} vs x = ±{expected_x}"
+        );
+        assert!(
+            (found[1].0 - expected_x).abs() < 1e-9,
+            "{found:?} vs x = ±{expected_x}"
+        );
+        for (_, y) in &found {
+            assert!(
+                (y - expected_y).abs() < 1e-9,
+                "{found:?} vs y = {expected_y}"
+            );
+        }
         for point in &points {
             assert!(satisfies_all(point, &equations), "{point:?}");
         }
@@ -666,5 +935,32 @@ mod tests {
                 assert!(satisfies_all(point, &equations), "{point:?}");
             }
         }
+    }
+
+    #[test]
+    fn a_point_off_by_a_thousandth_on_a_large_scale_system_is_rejected() {
+        // `x/10⁶ = 1` is the same answer as `x = 10⁶`, written in the units of
+        // the large system. The point `10⁶ + 10⁻³` is `10⁻³` off, but its
+        // residual is only `10⁻⁹`, which the old absolute `10⁻⁶` accepted. The
+        // relative check measures the residual against the equation's own terms.
+        let equation = add([
+            mul([ExprNode::num(Number::ratio(1, 1_000_000)), sym("x")]),
+            int(-1),
+        ]);
+        let equations = [equation];
+        let exact = vec![(x(), ExprNode::num(Number::float(1_000_000.0)))];
+        assert!(
+            satisfies_all(&exact, &equations),
+            "the exact point satisfies the equation"
+        );
+        let off = vec![(x(), ExprNode::num(Number::float(1_000_000.001)))];
+        assert!(
+            !satisfies_all(&off, &equations),
+            "a point 10⁻³ away from a 10⁶ solution must be refused"
+        );
+        // Rounding noise is not the same as an error: a point that is only the
+        // float's own wobble still satisfies the equation.
+        let noise = vec![(x(), ExprNode::num(Number::float(1_000_000.0 + 1e-9)))];
+        assert!(satisfies_all(&noise, &equations));
     }
 }

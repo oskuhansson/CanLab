@@ -3,9 +3,10 @@
 //!
 //! W7.1 printed an `Expr` as Lua and W7.2 compiled that Lua to WGSL. This
 //! module is the plumbing that joins them: [`compile_expression`] does both
-//! steps, [`compile_source`] caches the result under a content hash, and
-//! [`sweep`] checks that the printer and the compiler agree about what they
-//! refuse.
+//! steps and caches the result in a process-wide [`KernelCache`],
+//! [`compile_expression_with`] does the same with a cache the caller owns,
+//! [`compile_source`] caches a caller's Lua under a content hash, and [`sweep`]
+//! checks that the printer and the compiler agree about what they refuse.
 //!
 //! # Why the cache is keyed on the source
 //!
@@ -48,8 +49,8 @@
 //!   and staleness is that hash against the document's current key.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use canlab_core::lua::{self, LuaError};
 use canlab_core::wgsl::{self, Diagnostic, Kernel};
@@ -153,25 +154,52 @@ pub struct Artefact {
     pub locals: Vec<String>,
 }
 
-/// Compile `expression` to Lua, then to WGSL.
+/// Compile `expression` to Lua, then to WGSL, through a process-wide cache.
 ///
 /// The Lua printing is `canlab_core::lua`'s; the WGSL is `canlab_core::wgsl`'s.
 /// This function adds nothing to either beyond the options and the hash, which
 /// is the point: the two modules stay the only answers to "what is this in
 /// Lua" and "what is this in WGSL".
+///
+/// A second call with the same expression, name and variable set is a cache
+/// hit: the Lua is printed again (the cache is keyed on the text the compiler
+/// reads), and the WGSL compile is skipped. The cache lives as long as the
+/// process, which is the lifetime a document's recompiles care about. A caller
+/// that wants to own the cache — a test, or a second document set — calls
+/// [`compile_expression_with`].
 pub fn compile_expression(
     expression: &Expr,
     name: &str,
     variables: &[SymbolId],
 ) -> Result<Artefact, Refusal> {
+    compile_expression_with(default_cache(), expression, name, variables)
+}
+
+/// [`compile_expression`] with the cache the caller supplies.
+///
+/// This is the same compile, with the hit and miss counts visible on `cache`.
+pub fn compile_expression_with(
+    cache: &KernelCache,
+    expression: &Expr,
+    name: &str,
+    variables: &[SymbolId],
+) -> Result<Artefact, Refusal> {
     let lua = lua::to_lua_program(name, expression, variables).map_err(Refusal::Lua)?;
-    let kernel = wgsl::compile(&lua).map_err(Refusal::Wgsl)?;
     let options = Options {
         name: name.to_string(),
         variables: variables.iter().map(|symbol| symbol.as_str()).collect(),
     };
-    let key = join_key(&lua, &options);
-    Ok(artefact_from(&lua, kernel, key))
+    compile_source_with(cache, &lua, &options).result
+}
+
+/// The cache [`compile_expression`] uses.
+///
+/// It is one `KernelCache` for the process. Nothing else touches it, so a
+/// caller cannot be served a kernel from a document it did not compile: a hit
+/// requires the same options and the same Lua text.
+fn default_cache() -> &'static KernelCache {
+    static CACHE: OnceLock<KernelCache> = OnceLock::new();
+    CACHE.get_or_init(KernelCache::new)
 }
 
 /// Compile Lua that a caller wrote, rather than Lua the printer emitted.
@@ -706,109 +734,118 @@ pub fn sweep(seed: u64, count: usize) -> SweepReport {
 
     for _ in 0..count {
         let expression = generate(&mut rng, 3, x, y);
-        report.programs += 1;
-
-        let lua = match lua::to_lua_program("kernel_expression", &expression, &variables) {
-            Ok(lua) => lua,
-            Err(error) => {
-                // The printer refused. That is only a problem if the compiler
-                // would have accepted it — which it cannot be asked, since
-                // there is no text — so the sweep records it as a refusal of
-                // one side and moves on. The refusal's consistency is checked
-                // by the dedicated test that builds each refusing shape.
-                let _ = error;
-                continue;
-            }
-        };
-
-        // The consistency the roadmap asks for: if the printer produced text,
-        // the compiler must either accept it or say why not. It is not allowed
-        // to fail without a diagnostic naming the construct and the line.
-        let source = match wgsl::compile(&lua) {
-            Ok(_) => lua,
-            Err(diagnostic) => {
-                report.wgsl_refusals += 1;
-                report.failures.push(format!(
-                    "printed to Lua and refused by the WGSL compiler: {} ({lua:?})",
-                    diagnostic.message()
-                ));
-                continue;
-            }
-        };
-        let _ = source;
-
-        report.compared += 1;
-        for point in 0..SWEEP_POINTS {
-            // The first points are mild (`x` near 0.5, `y` near 1.5), later ones
-            // reach out to ±4, where `ln` and `sqrt` of a negative argument turn
-            // into the NaN the roadmap says to compare as "is a NaN".
-            let t = point as f64 / SWEEP_POINTS as f64;
-            let args = [0.5 + 6.0 * t, 1.5 - 4.0 * t];
-            let cpu = evaluate_cpu(&expression, &variables, &args);
-            let gpu = evaluate_f32(&expression, &variables, &args);
-            report.points += 1;
-
-            let (cpu, gpu) = match (cpu, gpu) {
-                (Some(cpu), Some(gpu)) => (cpu, gpu),
-                (cpu, gpu) => {
-                    report.failures.push(format!(
-                        "{expression}: the evaluators disagree about whether this is a value \
-                         (cpu {cpu:?}, wgsl {gpu:?})"
-                    ));
-                    continue;
-                }
-            };
-            // The roadmap's NaN rule: "is a NaN", not the bits.
-            if cpu.is_nan() || gpu.is_nan() {
-                if cpu.is_nan() != gpu.is_nan() {
-                    report.failures.push(format!(
-                        "{expression} at x={} y={}: NaN on one side only (cpu {cpu}, wgsl {gpu})",
-                        args[0], args[1]
-                    ));
-                }
-                continue;
-            }
-            if cpu.is_infinite() || gpu.is_infinite() {
-                // An infinity is not a relative difference, so it is not folded
-                // into `worst_relative`. The cases that are not a disagreement:
-                // both sides infinite with the same sign, and the `f32` side
-                // overflowing where the CPU side is merely large.
-                let same_infinity = cpu.is_infinite()
-                    && gpu.is_infinite()
-                    && cpu.signum() == f64::from(gpu.signum());
-                let f32_overflow = gpu.is_infinite() && cpu.is_finite();
-                if same_infinity || f32_overflow {
-                    if f32_overflow {
-                        report.f32_overflowed += 1;
-                    }
-                    continue;
-                }
-                report.failures.push(format!(
-                    "{expression} at x={} y={}: infinite on one side only (cpu {cpu}, wgsl {gpu})",
-                    args[0], args[1]
-                ));
-                continue;
-            }
-            let scale = cpu.abs().max(1.0);
-            let relative = (f64::from(gpu) - cpu).abs() / scale;
-            if relative > report.worst_relative {
-                report.worst_relative = relative;
-                report.worst_at = Some(format!(
-                    "{expression} at x={} y={}: cpu {cpu}, kernel {gpu}",
-                    args[0], args[1]
-                ));
-            }
-            if !relative.is_finite() || relative > SWEEP_TOLERANCE {
-                report.failures.push(format!(
-                    "{expression} at x={} y={}: relative difference {relative:.3e} \
-                     (cpu {cpu}, wgsl {gpu})",
-                    args[0], args[1]
-                ));
-            }
-        }
+        sweep_expression(&expression, &variables, &mut report);
     }
 
     report
+}
+
+/// One program of the sweep: print, compile, and compare each sample point.
+///
+/// The caller owns the generator and the report; this owns the three steps and
+/// the `continue`-on-refusal policy. A test drives it directly with a program
+/// the generator cannot make — the printer accepts a two-argument call and the
+/// compile refuses it — which is the only way to exercise the reporting path.
+fn sweep_expression(expression: &Expr, variables: &[SymbolId], report: &mut SweepReport) {
+    report.programs += 1;
+
+    let lua = match lua::to_lua_program("kernel_expression", expression, variables) {
+        Ok(lua) => lua,
+        Err(_) => {
+            // The printer refused. There is no text to ask the compiler about,
+            // so the two sides cannot be compared; the expression is counted
+            // in `programs` and left out of `compared`. The refusal's own
+            // consistency is checked by the dedicated test for each shape.
+            return;
+        }
+    };
+
+    // The consistency the roadmap asks for: if the printer produced text, the
+    // compiler must either accept it or say why not. It is not allowed to fail
+    // without a diagnostic naming the construct and the line.
+    if let Err(diagnostic) = wgsl::compile(&lua) {
+        report.wgsl_refusals += 1;
+        report.failures.push(format!(
+            "printed to Lua and refused by the WGSL compiler: {} ({lua:?})",
+            diagnostic.message()
+        ));
+        return;
+    }
+
+    report.compared += 1;
+    for point in 0..SWEEP_POINTS {
+        // The first points are mild (`x` near 0.5, `y` near 1.5), later ones
+        // reach out to ±4, where `ln` and `sqrt` of a negative argument turn
+        // into the NaN the roadmap says to compare as "is a NaN".
+        let t = point as f64 / SWEEP_POINTS as f64;
+        let args = [0.5 + 6.0 * t, 1.5 - 4.0 * t];
+        let cpu = evaluate_cpu(expression, variables, &args);
+        let gpu = evaluate_f32(expression, variables, &args);
+        report.points += 1;
+
+        let (cpu, gpu) = match (cpu, gpu) {
+            (Some(cpu), Some(gpu)) => (cpu, gpu),
+            (cpu, gpu) => {
+                report.failures.push(format!(
+                    "{expression}: the evaluators disagree about whether this is a value \
+                     (cpu {cpu:?}, wgsl {gpu:?})"
+                ));
+                continue;
+            }
+        };
+        // The roadmap's NaN rule: "is a NaN", not the bits.
+        if cpu.is_nan() || gpu.is_nan() {
+            if !nan_is_agreement(cpu, f64::from(gpu)) {
+                report.failures.push(format!(
+                    "{expression} at x={} y={}: NaN on one side only (cpu {cpu}, wgsl {gpu})",
+                    args[0], args[1]
+                ));
+            }
+            continue;
+        }
+        if cpu.is_infinite() || gpu.is_infinite() {
+            // An infinity is not a relative difference, so it is not folded
+            // into `worst_relative`. The cases that are not a disagreement:
+            // both sides infinite with the same sign, and the `f32` side
+            // overflowing where the CPU side is merely large.
+            let same_infinity =
+                cpu.is_infinite() && gpu.is_infinite() && cpu.signum() == f64::from(gpu.signum());
+            let f32_overflow = gpu.is_infinite() && cpu.is_finite();
+            if same_infinity || f32_overflow {
+                if f32_overflow {
+                    report.f32_overflowed += 1;
+                }
+                continue;
+            }
+            report.failures.push(format!(
+                "{expression} at x={} y={}: infinite on one side only (cpu {cpu}, wgsl {gpu})",
+                args[0], args[1]
+            ));
+            continue;
+        }
+        let scale = cpu.abs().max(1.0);
+        let relative = (f64::from(gpu) - cpu).abs() / scale;
+        if relative > report.worst_relative {
+            report.worst_relative = relative;
+            report.worst_at = Some(format!(
+                "{expression} at x={} y={}: cpu {cpu}, kernel {gpu}",
+                args[0], args[1]
+            ));
+        }
+        if !relative.is_finite() || relative > SWEEP_TOLERANCE {
+            report.failures.push(format!(
+                "{expression} at x={} y={}: relative difference {relative:.3e} \
+                 (cpu {cpu}, wgsl {gpu})",
+                args[0], args[1]
+            ));
+        }
+    }
+}
+
+/// The roadmap's NaN rule: a NaN is compared as "is a NaN", not as a bit
+/// pattern. Two NaNs agree; a NaN on one side only is a disagreement.
+fn nan_is_agreement(cpu: f64, gpu: f64) -> bool {
+    cpu.is_nan() == gpu.is_nan()
 }
 
 #[cfg(test)]
@@ -920,6 +957,31 @@ mod tests {
         assert_eq!(first.result, second.result);
         // The artefact from a hit is the same text, not a re-print.
         assert_eq!(first.artefact(), second.artefact());
+    }
+
+    #[test]
+    fn compile_expression_uses_the_cache_it_is_given() {
+        // The default path is `compile_expression`, which supplies a
+        // process-wide cache; this drives the same function with a cache whose
+        // counters the test can read. The second call must do no compile.
+        let cache = KernelCache::new();
+        let expression = pow(sym("x"), int(2));
+        let first = compile_expression_with(&cache, &expression, "f", &[x()]).expect("a kernel");
+        assert_eq!(cache.misses(), 1);
+        assert_eq!(cache.hits(), 0);
+        let second = compile_expression_with(&cache, &expression, "f", &[x()]).expect("a kernel");
+        assert_eq!(second, first);
+        assert_eq!(cache.hits(), 1);
+        assert_eq!(cache.misses(), 1);
+        // A different name is part of the key, so it is a miss and not the
+        // previous program's kernel under another name.
+        let renamed = compile_expression_with(&cache, &expression, "g", &[x()]).expect("a kernel");
+        assert_eq!(cache.misses(), 2);
+        assert_ne!(renamed.key, first.key);
+        assert!(renamed.wgsl.contains("pow(x, 2.0)"), "{}", renamed.wgsl);
+        // The convenience function is the same compile through the same key.
+        let through_default = compile_expression(&expression, "f", &[x()]).expect("a kernel");
+        assert_eq!(through_default, first);
     }
 
     #[test]
@@ -1053,12 +1115,26 @@ mod tests {
     fn the_sweep_names_a_skipped_program_instead_of_passing_it() {
         // The sweep's other job: an expression the printer accepts but the
         // compiler refuses is a *reported* failure, not a silent `continue`.
-        // The generator cannot make one, so the check is driven directly: this
-        // is the same call the sweep makes, and it names the construct.
-        let refused = compile_lua("local f = 1\nlocal t = {1}\nreturn f").expect_err("a refusal");
-        assert_eq!(refused.stage(), "wgsl");
-        assert!(refused.message().contains("`a table`"), "{}", refused.message());
-        assert!(refused.message().contains("line 2"), "{}", refused.message());
+        // The generator cannot make one — it only emits unary calls — so the
+        // check drives the same per-program function with the two-argument
+        // `sin` the printer accepts and the compiler refuses.
+        let mut report = sweep(0, 0);
+        let expression = ExprNode::fn_raw(SymbolId::intern("sin"), vec![sym("x"), int(2)]);
+        sweep_expression(&expression, &[x()], &mut report);
+        assert_eq!(report.programs, 1);
+        assert_eq!(report.wgsl_refusals, 1);
+        assert_eq!(report.compared, 0);
+        assert_eq!(report.failures.len(), 1, "{:?}", report.failures);
+        assert!(
+            report.failures[0].contains("printed to Lua and refused by the WGSL compiler"),
+            "{}",
+            report.failures[0]
+        );
+        assert!(
+            report.failures[0].contains("math.sin(2"),
+            "{}",
+            report.failures[0]
+        );
     }
 
     #[test]
@@ -1116,13 +1192,26 @@ mod tests {
     #[test]
     fn a_nan_is_compared_as_a_nan() {
         // The roadmap's rule: a domain error is "is a NaN", not a bit pattern.
+        // This is the rule itself, not a property of whatever the generator
+        // happened to produce at seed 3: two NaNs agree, one NaN is a
+        // disagreement, and `sqrt(x − 10)` is NaN on both sides at every
+        // sampled point.
+        assert!(nan_is_agreement(f64::NAN, f64::NAN));
+        assert!(nan_is_agreement(1.0, 1.0));
+        assert!(!nan_is_agreement(f64::NAN, 1.0));
+        assert!(!nan_is_agreement(1.0, f64::NAN));
+
         let variables = [x()];
-        let root = ExprNode::fn_raw(SymbolId::intern("sqrt"), vec![sym("x")]);
+        let root = ExprNode::fn_raw(SymbolId::intern("sqrt"), vec![add([sym("x"), int(-10)])]);
         let cpu = evaluate_cpu(&root, &variables, &[-1.0]).expect("a value");
         let gpu = evaluate_f32(&root, &variables, &[-1.0]).expect("a value");
         assert!(cpu.is_nan());
         assert!(gpu.is_nan());
-        let report = sweep(3, 50);
-        assert!(report.is_ok(), "{}", report.failures.join("\n"));
+
+        let mut report = sweep(0, 0);
+        sweep_expression(&root, &variables, &mut report);
+        assert_eq!(report.compared, 1);
+        assert_eq!(report.points, SWEEP_POINTS);
+        assert!(report.failures.is_empty(), "{}", report.failures.join("\n"));
     }
 }

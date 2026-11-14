@@ -134,8 +134,15 @@ pub struct Extrema {
     pub maximum: Extremum,
     /// The smallest value and where it is.
     pub minimum: Extremum,
-    /// Every critical point inside the interval, in increasing order — the
-    /// points a sign table is built from, whether or not they are the extrema.
+    /// The critical points inside the interval that the searches certify, in
+    /// increasing order — the points a sign table is built from, whether or not
+    /// they are the extrema.
+    ///
+    /// Not a proof of completeness: the scan's resolution is one of its 1024
+    /// cells, so two zeros inside one cell can be missed, a derivative that is
+    /// zero on a whole interval has no isolated point to report, and points
+    /// closer than a thousandth of the interval (with a `10⁻¹⁵` floor) are
+    /// reported as one. See `critical_points`.
     pub critical_points: Vec<f64>,
 }
 
@@ -191,20 +198,29 @@ pub fn extrema(curve: &Expr, var: SymbolId, a: f64, b: f64) -> Result<Extrema, C
     })
 }
 
-/// Where the derivative vanishes in `(a, b)`, by a sign-change scan, a
-/// magnitude scan for touching zeros, and bisection.
+/// Where the derivative vanishes in `(a, b)`, by a sign-change scan and a
+/// bracketed minimum of `|f'|`.
 ///
 /// Two kinds of zero of `f'` are critical points, and they need two searches:
 ///
 /// * a **crossing** (`x²` at 0) changes sign, and the sign-change scan finds it;
-/// * a **touching** zero (`x³` at 0) does not, and the first version of this
-///   function missed it — the module's own documentation said so. It is found by
-///   a second scan for a *local minimum of `|f'|`* that is small relative to the
-///   derivative's own scale, which is the only evidence a touching zero leaves.
+/// * a **touching** zero (`x³` at 0) does not. It is found on the bracket around
+///   a sampled *local minimum of `|f'|`*, by minimising `|f'|` there rather than
+///   waiting for the sampled value to fall under a threshold. That is the change
+///   that makes a root which lands halfway between two samples findable: its
+///   nearest sampled magnitude can be above the threshold and the zero is still
+///   a minimum of the bracket. A candidate is confirmed by evaluating the
+///   derivative at the minimum; a local minimum of `|f'|` that is not near zero
+///   is a place where the slope is merely small, not a critical point.
 ///
-/// A candidate from either search is confirmed by evaluating the derivative
-/// there: a local minimum of `|f'|` that is not near zero is a place where the
-/// slope is merely small, and it is not a critical point.
+/// What this does not do is prove completeness: the scan has `SAMPLES` cells, so
+/// two zeros inside one cell are one sample's worth of evidence and may be
+/// missed, a derivative that is zero on a whole interval has no isolated
+/// minimum, and the final deduplication reports points closer than
+/// `10⁻³·(b − a)` (with a `10⁻¹⁵` floor) as one. The claim in
+/// [`Extrema::critical_points`] is
+/// correspondingly the points this search certifies, not every point a
+/// symbolic root finder would.
 fn critical_points(derivative: &Expr, var: SymbolId, a: f64, b: f64) -> Vec<f64> {
     const SAMPLES: usize = 1024;
     let step = (b - a) / SAMPLES as f64;
@@ -215,7 +231,12 @@ fn critical_points(derivative: &Expr, var: SymbolId, a: f64, b: f64) -> Vec<f64>
         let value = evaluate(derivative, var, x);
         if previous.is_finite() && value.is_finite() {
             if previous == 0.0 {
-                found.push(x - step);
+                // A zero exactly on a sample. The interval's own ends are not
+                // "inside" it, and `extrema` adds them as endpoints itself.
+                let sample = x - step;
+                if sample > a && sample < b {
+                    found.push(sample);
+                }
             } else if previous * value < 0.0 {
                 let (mut lo, mut hi) = (x - step, x);
                 for _ in 0..80 {
@@ -240,7 +261,12 @@ fn critical_points(derivative: &Expr, var: SymbolId, a: f64, b: f64) -> Vec<f64>
         }
         previous = value;
     }
-    // The touching zeros: a local minimum of `|f'|` that is near zero.
+    // The touching zeros: the minimum of `|f'|` around each sampled local
+    // minimum. The local-minimum test is what keeps the search on the zero and
+    // not on every cell on the way down; the *threshold* is only a check on the
+    // refined minimum, not a gate on whether to look. Without that split, a
+    // multiplicity-two zero halfway between samples has a nearest sampled
+    // magnitude above the threshold and was not looked for at all.
     let scale = {
         let mut largest: f64 = 0.0;
         for index in 0..=SAMPLES {
@@ -258,28 +284,24 @@ fn critical_points(derivative: &Expr, var: SymbolId, a: f64, b: f64) -> Vec<f64>
     for index in 1..=SAMPLES {
         let x = a + step * index as f64;
         let magnitude = evaluate(derivative, var, x).abs();
-        // A *local* minimum: the magnitude must be rising again after this
-        // cell, or the cell is merely on the way down and the next one is
-        // better. Without that test `x⁴` reported the first cell that dipped
-        // under the threshold and then the real minimum as well.
-        let next_magnitude = evaluate(derivative, var, a + step * (index + 1) as f64).abs();
+        // The bracket is the sample on each side of this one. The right end of
+        // the interval has no sample beyond it, so its "next" is `+∞`: a
+        // minimum at `b` is not inside the interval and is filtered below.
+        let (next_magnitude, bracket_end) = if index < SAMPLES {
+            (
+                evaluate(derivative, var, a + step * (index + 1) as f64).abs(),
+                a + step * (index + 1) as f64,
+            )
+        } else {
+            (f64::INFINITY, b)
+        };
         if magnitude.is_finite()
             && previous_magnitude.is_finite()
-            && next_magnitude.is_finite()
             && magnitude < previous_magnitude
             && magnitude <= next_magnitude
-            && magnitude < threshold
         {
-            // The minimum is in this cell. `|f'|` is flat near a touching zero,
-            // so a golden-section search on it stops at its own resolution and
-            // `x⁴` found two points 4·10⁻³ apart. The zero of `f'` itself is
-            // what is wanted, and `f'` is *monotone through it* in this cell, so
-            // a bisection on `f'` converges to the machine's precision.
-            let refined = refine_minimum(derivative, var, previous_x, x);
-            if refined > a
-                && refined < b
-                && evaluate(derivative, var, refined).abs() < threshold
-            {
+            let refined = minimise_magnitude(derivative, var, previous_x, bracket_end);
+            if refined > a && refined < b && evaluate(derivative, var, refined).abs() < threshold {
                 found.push(refined);
             }
         }
@@ -287,39 +309,61 @@ fn critical_points(derivative: &Expr, var: SymbolId, a: f64, b: f64) -> Vec<f64>
         previous_x = x;
     }
     found.sort_by(f64::total_cmp);
-    // The deduplication tolerance is the interval's, not a constant: a touching
-    // zero is found to within the cell it sits in, and `x⁴` on `[−1, 1]` found
-    // three points within 4·10⁻³ of each other because `|f'|` is flat there and
-    // the golden-section search stopped at its own resolution. Two critical
-    // points closer than a thousandth of the interval are one point.
+    // The tolerance is the scan's own resolution, one cell, not a claim that
+    // two distinct roots this close are the same: the search cannot tell them
+    // apart, and reporting one point is the honest version of that. The
+    // sampling step is `(b − a)/1024`, so a thousandth of the interval is one
+    // cell to the precision this scan can speak to; the `10⁻¹⁵` floor keeps a
+    // tiny interval from collapsing more than its own cell.
     let tolerance = 1e-3 * (b - a).abs().max(1e-12);
     found.dedup_by(|latter, former| (*latter - *former).abs() < tolerance);
     found
 }
 
-/// The zero of `f'` in `[lo, hi]`, where `|f'|` has a local minimum.
+/// A point in `[lo, hi]` where `|f'|` is smallest, by golden-section search.
 ///
-/// Bisection on the *signed* derivative, not on its magnitude: through a
-/// touching zero `f'` changes sign of its own slope (it is `3x²` for `x³`), so
-/// the bisection converges to the zero itself, while a search on `|f'|` stops
-/// wherever the flat bottom of the magnitude is.
-fn refine_minimum(derivative: &Expr, var: SymbolId, lo: f64, hi: f64) -> f64 {
-    let (mut lo, mut hi) = (lo, hi);
-    let mut flo = evaluate(derivative, var, lo);
-    for _ in 0..200 {
-        let middle = 0.5 * (lo + hi);
-        let fm = evaluate(derivative, var, middle);
-        if fm == 0.0 || hi - lo < 1e-15 {
-            return middle;
+/// The search is on the magnitude and not on the sign of `f'`: through a
+/// touching zero `f'` does not change sign, so a bisection on the signed
+/// derivative has no crossing to find and walks to the bracket's end. `|f'|`
+/// does have a minimum there, and golden section follows it. A non-finite value
+/// is treated as `+∞` so a pole cannot win the search.
+fn minimise_magnitude(derivative: &Expr, var: SymbolId, lo: f64, hi: f64) -> f64 {
+    const INV_PHI: f64 = 0.618_033_988_749_894_9;
+    let mut lo = lo;
+    let mut hi = hi;
+    let mut left = hi - INV_PHI * (hi - lo);
+    let mut right = lo + INV_PHI * (hi - lo);
+    let mut left_value = magnitude(derivative, var, left);
+    let mut right_value = magnitude(derivative, var, right);
+    for _ in 0..100 {
+        if hi - lo <= 1e-15 * (1.0 + lo.abs().max(hi.abs())) {
+            break;
         }
-        if (flo < 0.0) != (fm < 0.0) {
-            hi = middle;
+        if left_value < right_value {
+            hi = right;
+            right = left;
+            right_value = left_value;
+            left = hi - INV_PHI * (hi - lo);
+            left_value = magnitude(derivative, var, left);
         } else {
-            lo = middle;
-            flo = fm;
+            lo = left;
+            left = right;
+            left_value = right_value;
+            right = lo + INV_PHI * (hi - lo);
+            right_value = magnitude(derivative, var, right);
         }
     }
     0.5 * (lo + hi)
+}
+
+/// `|f'(x)|`, with a non-finite value read as `+∞` for the minimum search.
+fn magnitude(derivative: &Expr, var: SymbolId, x: f64) -> f64 {
+    let value = evaluate(derivative, var, x).abs();
+    if value.is_finite() {
+        value
+    } else {
+        f64::INFINITY
+    }
 }
 
 /// One piece of a sign table: an interval and what the function does on it.
@@ -504,5 +548,43 @@ mod tests {
         assert_eq!(extrema(&f, x(), 1.0, 1.0), Err(CalculusError::BadInterval));
         assert_eq!(extrema(&f, x(), 2.0, 1.0), Err(CalculusError::BadInterval));
         assert_eq!(sign_table(&f, x(), 0.0, f64::INFINITY), Err(CalculusError::BadInterval));
+    }
+
+    #[test]
+    fn a_touching_zero_between_samples_is_still_a_critical_point() {
+        // The root is exactly halfway between two samples: the nearest sampled
+        // `|f'|` is about `9.5e-7` of the derivative's own scale, which is above
+        // the `1e-7` threshold the sampled scan uses. The old guard therefore
+        // missed a genuine even-multiplicity zero. Minimising `|f'|` on the
+        // bracket around the sampled local minimum finds it.
+        let f = curve("(x - 0.50048828125)^3");
+        let extrema = extrema(&f, x(), 0.0, 1.0).expect("extrema");
+        assert_eq!(
+            extrema.critical_points.len(),
+            1,
+            "{:?}",
+            extrema.critical_points
+        );
+        assert!(
+            (extrema.critical_points[0] - 0.50048828125).abs() < 1e-9,
+            "{:?}",
+            extrema.critical_points
+        );
+    }
+
+    #[test]
+    fn two_critical_points_within_one_cell_are_reported_as_one() {
+        // `f' = 2(x − 0.5)(x − 0.5001)(2x − 1.0001)` has three roots, all within
+        // `1.1·10⁻⁴` of each other, inside one 1/1024 cell. The scan cannot
+        // separate them, and the documented tolerance reports one point; this
+        // pins the limitation rather than pretending the answer is complete.
+        let f = curve("(x - 0.5)^2 (x - 0.5001)^2");
+        let extrema = extrema(&f, x(), 0.0, 1.0).expect("extrema");
+        assert_eq!(
+            extrema.critical_points.len(),
+            1,
+            "{:?}",
+            extrema.critical_points
+        );
     }
 }

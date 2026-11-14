@@ -58,9 +58,9 @@ impl CountError {
 /// `0! = 1`, which is the empty product and not a special case the code needs
 /// to know about beyond the loop not running.
 pub fn factorial(n: u32) -> Number {
-    // The largest `n` whose factorial fits in an `i128`. Beyond it the product
-    // is computed as a float, which is what `Number`'s checked arithmetic does
-    // anyway; the constant exists so the intent is visible.
+    // `33!` is the largest factorial that fits in an `i128`; beyond it the
+    // product becomes a `Float` through `Number`'s checked arithmetic, and the
+    // returned type is the visible signal that the answer stopped being exact.
     let mut result = Number::int(1);
     for value in 1..=n {
         result = result.mul(&Number::int(value as i128));
@@ -151,7 +151,8 @@ mod tests {
     #[test]
     fn the_factorials_are_exact_through_the_roadmaps_bound() {
         // `10! = 3628800`, `20! = 2432902008176640000` — the "20-element draw"
-        // the roadmap names — and `34!` is the last one `i128` holds.
+        // the roadmap names — and `33!` is the last one `i128` holds; `34!` is
+        // the first that does not.
         assert_eq!(factorial(0), Number::int(1));
         assert_eq!(factorial(1), Number::int(1));
         assert_eq!(factorial(10), Number::int(3_628_800));

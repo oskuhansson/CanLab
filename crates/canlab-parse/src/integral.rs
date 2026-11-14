@@ -352,9 +352,10 @@ fn closed_form_negative_power(
     // is `1/2`, and returning `Float(0.5)` with a `6.75·10^-13` bound was the
     // bug that made an exact answer look approximate. The `Rounded` path stays
     // for a coefficient or a limit that is not exact.
-    // `exact_power_span` takes the *integrand's* power and applies the `+1`
-    // itself; passing `raised` here would apply it twice, which is what the
-    // first version of this branch did and why the exact case never fired.
+    // `exact_power_span` takes the **antiderivative's** exponent, so the call
+    // passes `raised = power + 1` and the span is `b^{n+1} − a^{n+1}`; the
+    // scale above divides by the same `raised`. Passing the integrand's power
+    // would be the off-by-one the function's own doc records.
     if let (Some(coefficient), Some(lower), Some(upper)) = (rational, lower, upper)
         && let Some(span) = exact_power_span(lower, upper, raised)
     {

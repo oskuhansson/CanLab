@@ -1740,7 +1740,20 @@ mod tests {
         assert!(error.contains("differential"), "{error}");
         let error = value(r"\area_0^1 x").expect_err("one curve");
         assert!(error.contains("two curves"), "{error}");
+        // `\vol_0^1 x dy` is a curve in `x` swept about `y`: the curve is in
+        // the wrong variable for the differential, and the reason is the
+        // parameter one, not a generic "cannot read". The old assertion
+        // accepted either `parameter` or `curve`, so it could not tell this
+        // refusal from the `\vol`-specific one below.
         let error = value(r"\vol_0^1 x dy").expect_err("a curve in x swept about y");
-        assert!(error.contains("parameter") || error.contains("curve"), "{error}");
+        assert!(error.contains("`x` is a parameter here"), "{error}");
+        // The `\vol`-specific refusal is a curve with no variable of its own.
+        // It is a different reason, so the test names it rather than accepting
+        // any message containing "curve".
+        let error = value(r"\vol_0^1 5 dx").expect_err("a constant curve");
+        assert!(
+            error.contains("needs a curve that depends on the variable"),
+            "{error}"
+        );
     }
 }
