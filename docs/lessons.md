@@ -611,6 +611,14 @@ came out.
 **The area.** "`\area_0^3 x , 3` → 4.5, true 6." `∫_0^3 |x − 3| dx = 4.5`. The
 "true 6" was not any integral of that pair of curves.
 
+**The histogram edge.** "`bin_of`'s closing-edge branch is unreachable, because
+`round_to_millionth` guarantees `offset − index < 10⁻⁶`." It is reachable:
+`index == bins` also holds for a time up to one bin *past* the closing edge —
+`10.0001` with ten 1 ps bins floors to `10` — so the `(offset − index).abs() <
+10⁻⁹` test is exactly what separates the edge from the overflow, and an existing
+test fails if the branch is removed. The owner checked and left it alone, which
+is the right response to a finding: verify, then act or refuse.
+
 But the *same* review found three real bugs in the same modules, one of them a
 wrong number across a pole that I had introduced an hour earlier. So the lesson
 is not "distrust the reviewer" — it is that **a finding is a claim and every
