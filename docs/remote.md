@@ -113,3 +113,40 @@ interpret.
 
 Options: `-Force` copies even when the local file looks current, `-Wait` keeps the
 terminal attached to the app's output instead of detaching it.
+## The DSH session on the server
+
+`scripts/server/dsh-setup.sh` runs the existing DSH profile (`web`, launched as
+`ori dsh`) as a systemd **user** unit on the tailnet address, with lingering
+enabled so it survives logout and reboot. `ori dsh` rejects `--profile`: the
+wrapper already fixes the profile, and passing it again fails with "select a
+profile only once".
+
+The web app issues its own `?token=` in the URL it prints, so a tailnet-only bind
+still means "carry the token". The token is rotated on restart; find the current
+one with:
+
+```bash
+journalctl --user -u dsh-web.service -n 50 --no-pager | grep -o 'token=[A-Za-z0-9_-]*' | tail -1
+```
+
+### The mermaid plugin
+
+`@local/dsh-mermaid` lives in the workspace (`dsh-mermaid/`) and is installed into
+the `web` profile as a `link:` dependency in `dsh.profile.bundles`. Two things
+that are easy to get wrong:
+
+1. **The runtime has to be new enough.** dsh 0.2.1-rc.2 refused the plugin
+   (`requirements {"@deepseek-ai/dsh-tools":">=0.2.1-rc.5"}`); the server was
+   upgraded with `npm install -g --prefix ~/.local @deepseek-ai/dsh@0.2.1-rc.5`.
+2. **A `link:` plugin cannot resolve its peer.** The plugin is loaded from its real
+   path, so a bare `import "@deepseek-ai/dsh-tools"` walks up from the workspace
+   and fails — the plugin then registers nothing, silently, because its own import
+   is wrapped in `try/catch`. A symlink inside the plugin fixes it:
+
+   ```bash
+   mkdir -p dsh-mermaid/node_modules/@deepseek-ai
+   ln -sfn ~/.local/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-tools \
+           dsh-mermaid/node_modules/@deepseek-ai/dsh-tools
+   ```
+
+   Verified with `node -e 'import("@deepseek-ai/dsh-tools").then(m => console.log(typeof m.defineTool))'`.
