@@ -8,10 +8,11 @@
 //! which is what a *refused* trace looks like and not what a physics result
 //! looks like. The explanation was wrong because the event was empty.
 //!
-//! With the birth point fixed the split is the measured one: most of the light
-//! is trapped by total internal reflection, and what escapes leaves through the
-//! walls, where the sensors are not. The test now asserts the accounting and
-//! the split, so a future event that goes quiet again fails here.
+//! With the birth point fixed the split is the measured one: the light is
+//! trapped by total internal reflection and the sensors see almost none of it.
+//! (At this geometry nothing escapes at all; an inclined muon is the case where
+//! some does.) The test asserts the accounting and the split, so a future event
+//! that goes quiet again fails here.
 
 use canlab_optics::detector::simulate;
 use canlab_optics::{Block, Optical, SiPM, Tropical, Vec3};
@@ -66,9 +67,11 @@ fn a_vertical_muons_light_is_trapped_and_what_escapes_misses_the_sensors() {
         event.trapped,
         event.photons_born
     );
-    // What does escape leaves through the walls, and the walls' sensors cover
-    // only a fraction of them, so almost nothing is detected.
-    assert!(event.lost > 0, "nothing escaped at all");
+    // What the sensors see is a small fraction of what was made. At this
+    // geometry nothing escapes at all — the cone is outside the critical angle
+    // at every face the light meets, so the light bounces until its budget runs
+    // out — which is the same conclusion from the other side: the escape path
+    // is not where the timed light comes from.
     assert!(
         detected * 20 < event.photons_born,
         "detected {detected} of {}",

@@ -171,11 +171,12 @@ impl DetectorScene {
     }
 
     /// When a photon was emitted, picoseconds after the muon reached the block.
+    ///
+    /// The transport computes it, because the transport knows where the block
+    /// clipped the track; recomputing it here from a separately sampled entry
+    /// would be a second answer to the same question.
     pub fn birth_ps(&self, photon: &PhotonRecord) -> f64 {
-        let Some(birth) = photon.path.first().copied() else {
-            return 0.0;
-        };
-        birth.sub(self.inside_start).dot(self.heading).max(0.0) / C_MM_PER_PS
+        photon.birth_ps
     }
 
     /// Where the muon is at a clock time.

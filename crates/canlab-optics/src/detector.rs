@@ -155,6 +155,12 @@ pub enum EventError {
     NoPhotons,
 }
 
+/// The speed of light, millimetres per picosecond.
+///
+/// A muon at `beta` travels at `beta · C_MM_PER_PS`, and that is what turns a
+/// birth point into an emission time.
+const C_MM_PER_PS: f64 = 0.299_792_458;
+
 /// One photon's path, for the visualiser.
 ///
 /// The event loop does not build these — a `Vec` per photon is an allocation
@@ -167,8 +173,14 @@ pub struct PhotonRecord {
     pub fate: Fate,
     /// The face it escaped through, if it did.
     pub face: Option<Face>,
-    /// The flight time, picoseconds.
+    /// The flight time from the birth, picoseconds.
     pub time_ps: f64,
+    /// When it was emitted, picoseconds after the muon reached the block.
+    ///
+    /// The arrival a timer records is this plus `time_ps`. The flight time alone
+    /// is *not* the arrival: the photon was emitted when the muon passed its
+    /// birth point, which is tens of picoseconds into the crossing.
+    pub birth_ps: f64,
 }
 
 /// Simulate one muon crossing the block and return what the four sensors see.
@@ -340,12 +352,14 @@ fn simulate_inner(
             event.missed += 1;
             continue;
         };
+        let birth_ps = birth.sub(inside).dot(heading) / (beta * C_MM_PER_PS);
         if let Some(records) = records.as_deref_mut() {
             records.push(PhotonRecord {
                 path: std::mem::take(&mut path),
                 fate: traced.fate,
                 face: traced.face,
                 time_ps: traced.time_ps,
+                birth_ps,
             });
         }
         match traced.fate {
@@ -383,8 +397,8 @@ fn simulate_inner(
         // by the Box-Muller transform — exact enough for a 100 ps sigma and
         // cheaper than an inverse CDF.
         let jitter = box_muller(random) * sensor.jitter_ps;
-        event.true_ps[sensor_index].push(traced.time_ps);
-        event.arrivals_ps[sensor_index].push(traced.time_ps + jitter);
+        event.true_ps[sensor_index].push(birth_ps + traced.time_ps);
+        event.arrivals_ps[sensor_index].push(birth_ps + traced.time_ps + jitter);
     }
     for times in &mut event.arrivals_ps {
         times.sort_by(f64::total_cmp);

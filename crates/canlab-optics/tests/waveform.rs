@@ -148,8 +148,8 @@ fn the_jitter_is_in_the_timestamp_and_not_in_the_truth() {
     // index and a standard deviation from a dozen draws has a 20 % error. The
     // jitter is the same for every photon, so pooling events is exactly right.
     let (block, optical, sensors) = setup(1.49);
-    let mut differences = Vec::new();
     let mut truths = Vec::new();
+    let mut stamped = Vec::new();
     for seed in 0..20 {
         let mut stream = Stream(0xC0FF_EE00_1234_5678u64.wrapping_add(seed * 2_654_435_761));
         let event = simulate(
@@ -164,32 +164,38 @@ fn the_jitter_is_in_the_timestamp_and_not_in_the_truth() {
         )
         .expect("a crossing");
         for sensor in 0..4 {
-            for (truth, stamped) in event.true_ps[sensor].iter().zip(&event.arrivals_ps[sensor]) {
-                differences.push(stamped - truth);
-                truths.push(*truth);
-            }
+            truths.extend(event.true_ps[sensor].iter().copied());
+            stamped.extend(event.arrivals_ps[sensor].iter().copied());
         }
     }
-    assert!(differences.len() > 100, "too few to measure: {}", differences.len());
-    let mean = differences.iter().sum::<f64>() / differences.len() as f64;
-    let variance = differences.iter().map(|d| (d - mean) * (d - mean)).sum::<f64>()
-        / (differences.len() - 1) as f64;
-    let sigma = variance.sqrt();
-    // The jitter is zero-mean, and its standard deviation is the sensor's 100 ps
-    // to within the sampling error of a couple of hundred draws (about 5 %).
-    assert!(mean.abs() < 20.0, "the jitter has a bias of {mean} ps");
+    assert!(truths.len() > 100, "too few to measure: {}", truths.len());
+    // The stamped times are the truths plus a zero-mean 100 ps draw, so their
+    // variance is the truth's plus 100². Comparing the *pairs* would be wrong:
+    // the two lists are sorted independently, so the i-th stamped time is not
+    // the i-th truth, and the paired difference is not the jitter.
+    let truth_sigma = sigma(&truths);
+    let stamped_sigma = sigma(&stamped);
     assert!(
-        (85.0..115.0).contains(&sigma),
-        "the jitter's own standard deviation is {sigma} ps, not the 100 ps it was given"
-    );
-    // The geometric spread — the truth — is smaller than the jitter of one
-    // photon, which is why this detector needs many photons to time anything.
-    truths.sort_by(f64::total_cmp);
-    let truth_spread = truths.last().copied().unwrap_or(0.0) - truths.first().copied().unwrap_or(0.0);
-    assert!(
-        truth_spread > 0.0,
+        truth_sigma > 0.0,
         "the transport's own times have no spread at all, which cannot be right"
     );
+    let expected = truth_sigma * truth_sigma + 100.0 * 100.0;
+    let measured = stamped_sigma * stamped_sigma;
+    assert!(
+        (measured - expected).abs() < 0.25 * expected,
+        "the stamped variance is {measured} against the truth's {truth_sigma}² plus 100²"
+    );
+}
+
+/// The standard deviation of a set.
+fn sigma(values: &[f64]) -> f64 {
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let variance = values
+        .iter()
+        .map(|value| (value - mean) * (value - mean))
+        .sum::<f64>()
+        / (values.len() - 1) as f64;
+    variance.sqrt()
 }
 
 #[test]

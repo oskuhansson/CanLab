@@ -147,15 +147,16 @@ the same six-point polygon and the transport never asks which.
 
 | Block | Mass | Horizontal area | Median | Within 30° |
 |---|---|---|---|---|
-| 20 mm tent, 10 mm | 36 g | 400 mm² | 28.5° | 52 % |
-| 24 mm tent, 20 mm | 103 g | 960 mm² | 25.2° | 60 % |
-| 28 mm hexagon, 20 mm | 48 g | 2 036 mm² | 26.4° | 59 % |
-| **28 mm hexagon, 30 mm** | **73 g** | **2 036 mm²** | **21.6°** | **66 %** |
-| 28 mm hexagon, 40 mm | 97 g | 2 036 mm² | 22.3° | 66 % |
+| 20 mm tent, 10 mm | 36 g | 400 mm² | 27.5° | 56 % |
+| 24 mm tent, 20 mm | 103 g | 960 mm² | 26.1° | 58 % |
+| 28 mm hexagon, 20 mm | 48 g | 2 036 mm² | 27.5° | 56 % |
+| **28 mm hexagon, 30 mm** | **73 g** | **2 036 mm²** | **25.5°** | **60 %** |
+| 28 mm hexagon, 40 mm | 97 g | 2 036 mm² | 25.1° | 61 % |
 
 The 30 mm depth is the knee: the chord a vertical muon crosses *is* the thickness,
-so 30 mm makes 630 photons where 10 mm makes 210, and 40 mm adds mass without
-adding accuracy.
+so 30 mm makes 630 photons where 10 mm makes 210. The 40 mm block is 0.4° better
+and 24 g heavier, which is inside the training noise — the 30 mm is the one to
+build.
 
 ---
 
@@ -302,13 +303,13 @@ end-to-end.
 |---|---|---|
 | Linear fit, `t = t₀ + (r·d)/v` | 119.5° | the model is wrong: the light does not leave from a point |
 | Cherenkov model, **true** track point | 81.1° | the model is right, but four timestamps cannot determine the track position |
-| **Network (16 features)** | **28.5°** | learns `p(direction \| features)`, marginalising over the track position |
+| **Network (16 features)** | **27.2°** | learns `p(direction \| features)`, marginalising over the track position |
 
 The network is not doing better physics. It is doing something the analytic
 inversion cannot: the track position is a **latent variable**, and the network
 absorbs it into the conditional distribution. The photon counts depend on the path
 length, and the path length depends on where the track is, so the counts are worth
-**1.8°** on their own.
+**2.6°** on their own.
 
 The 16 features are: four first arrival times, four **second** arrival times (the
 stop a multi-hit TDC records and a single-threshold readout throws away), four
@@ -320,17 +321,24 @@ Through the realistic readout, on the corrected photon count:
 
 | Block | Median | 68th | Within 30° | Within 60° |
 |---|---|---|---|---|
-| 20 mm tent, 10 mm | 28.7° | 37.9° | 52 % | 93 % |
-| 24 mm tent, 20 mm | 25.2° | 34.2° | 60 % | 95 % |
-| 28 mm hexagon, 30 mm | 21.6° | 30.9° | 66 % | 96 % |
+| 20 mm tent, 10 mm | 27.5° | 36.0° | 56 % | 94 % |
+| 24 mm tent, 20 mm | 26.1° | 35.2° | 58 % | 95 % |
+| 28 mm hexagon, 30 mm | 25.5° | 34.0° | 60 % | 95 % |
 
-The mission's criterion is 30°. The hexagon reaches it for two events in three,
+The mission's criterion is 30°. The hexagon reaches it for three events in five,
 which is **borderline rather than a pass** — the mission wants most events inside
-30°, not two thirds.
+30°, not three fifths.
+
+These numbers are lower than the study first reported (the hexagon was 21.6° and
+66 %), and the difference is a fix, not a regression: the timestamps used to be
+the photon's **flight time** alone, without the time the muon took to reach the
+point that emitted it. A timer records the arrival, which is emission plus
+flight, and the emission time varies by up to 100 ps along the track — the same
+order as the jitter. The absolute arrival is the honest number.
 
 ### 7.3 The photon count the transport measures
 
-The design block fires **2.49 of its four sensors** on average over the measured
+The design block fires **2.53 of its four sensors** on average over the measured
 sky (`timing_realistic`), and **2.02** for a muon along its long axis
 (`direction_study`). A horizontal muon through the 40 mm width yields **3.25
 photoelectrons** across the four sensors. Those are the numbers that decide the
@@ -413,10 +421,10 @@ is how the table in §3.2 was produced.
 4. **The adhesive's cure is unproven on this geometry.** NOA 68 cures at 365 nm,
    and PMMA absorbs there; it has to be cured from the bond line's edge with a
    395–405 nm LED, which needs a trial on scrap acrylic.
-5. **The network's 21.6° is a simulation result.** The sim-to-real gap is
+5. **The network's 25.5° is a simulation result.** The sim-to-real gap is
    unmeasured, and the domain randomisation only covers the parameters that were
    varied.
-6. **The 30° criterion is met for two events in three**, not for most. Whether
+6. **The 30° criterion is met for three events in five**, not for most. Whether
    that is enough is a mission decision, not a simulation one.
 
 ---
@@ -424,5 +432,5 @@ is how the table in §3.2 was produced.
 ## 11. The one-line summary
 
 A 73 g hexagon of acrylic, four 1 mm² SiPMs and four timestamps recover a muon's
-direction to **21.6° median, 66 % within 30°**, for **218 €** — which is the best
+direction to **25.5° median, 60 % within 30°**, for **218 €** — which is the best
 this approach gives, and it is borderline against the mission's criterion.
