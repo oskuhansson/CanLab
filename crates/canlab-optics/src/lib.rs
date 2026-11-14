@@ -36,6 +36,7 @@ pub mod block;
 pub mod cherenkov;
 pub mod detector;
 pub mod fresnel;
+pub mod kernel;
 pub mod interval;
 pub mod outline;
 pub mod source;

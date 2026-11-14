@@ -176,7 +176,18 @@ fn tokenize(source: &str) -> Result<Vec<(Token, usize)>, Diagnostic> {
             c if c.is_whitespace() => {
                 chars.next();
             }
-            '-' if source[chars.clone().take(2).collect::<String>().len()..].starts_with("--") => {
+            // A comment is `--` to the end of the line, and the guard must look
+            // at the **next two characters** rather than at the source from a
+            // fixed index. The first version tested `source[2..].starts_with("--")`,
+            // which is true only when a comment begins at byte 2, so no comment
+            // was ever recognised and a `--` line was read as two minus signs
+            // followed by names. The kernel's own comments found it.
+            '-' if {
+                let mut look = chars.clone();
+                look.next();
+                look.next() == Some('-')
+            } =>
+            {
                 // A comment: to the end of the line.
                 while let Some(&next) = chars.peek() {
                     if next == '\n' {
@@ -852,6 +863,20 @@ impl Compiler {
                 "<" | ">" | "<=" | ">=" | "==" | "~=" | "and" | "or"
             )
         {
+            // `and`/`or` recurse into `condition`, not into `expr`: their
+            // operands are conditions too, and taking the value form would emit
+            // `select(0.0, 1.0, x > 1.0) != 0.0` for a plain comparison — valid,
+            // but it does the comparison twice and reads as if the value form
+            // were involved.
+            if matches!(*operator, "and" | "or") {
+                let a = self.condition(left)?;
+                let b = self.condition(right)?;
+                return Ok(if *operator == "and" {
+                    format!("({a} && {b})")
+                } else {
+                    format!("({a} || {b})")
+                });
+            }
             let a = self.expr(left)?;
             let b = self.expr(right)?;
             return Ok(match *operator {
@@ -860,9 +885,7 @@ impl Compiler {
                 "<=" => format!("({a} <= {b})"),
                 ">=" => format!("({a} >= {b})"),
                 "==" => format!("({a} == {b})"),
-                "~=" => format!("({a} != {b})"),
-                "and" => format!("({a} != 0.0 && {b} != 0.0)"),
-                _ => format!("({a} != 0.0 || {b} != 0.0)"),
+                _ => format!("({a} != {b})"),
             });
         }
         if let Expr::Unary("not", operand) = expression {
@@ -1496,6 +1519,30 @@ mod tests {
         let error = interpret("for i = 0, 10, 0 do\nend\nreturn 0", &[], 0, Precision::F64)
             .expect_err("a refusal");
         assert!(error.message().contains("never advance"), "{}", error.message());
+    }
+
+    #[test]
+    fn a_comment_is_skipped_and_not_read_as_two_minus_signs() {
+        // The guard used to test `source[2..].starts_with("--")`, which is true
+        // only when a comment begins at byte 2, so no comment was recognised and
+        // `-- text` became `- - text`. A kernel with a comment at the top was
+        // refused as "a field access".
+        let kernel = compile("-- a comment\nreturn 1 + 2 -- trailing").expect("a kernel");
+        assert!(kernel.wgsl.contains("return (1.0 + 2.0);"), "{}", kernel.wgsl);
+        // A comment at the very start, and one on the last line with no newline.
+        assert_eq!(
+            interpret("-- only a comment\nreturn 4", &[], 0, Precision::F64).expect("a value"),
+            4.0
+        );
+        // `-` is still subtraction and still unary minus.
+        assert_eq!(
+            interpret("return 5 - 2", &[], 0, Precision::F64).expect("a value"),
+            3.0
+        );
+        assert_eq!(
+            interpret("return -2", &[], 0, Precision::F64).expect("a value"),
+            -2.0
+        );
     }
 
     #[test]
