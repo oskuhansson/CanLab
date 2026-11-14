@@ -3320,13 +3320,11 @@ pub fn designs(app: &mut CasApp, ui: &mut Ui) {
                 for (index, (label, ..)) in DESIGNS.iter().enumerate() {
                     if ui.selectable_label(index == selected, *label).clicked() {
                         app.selected_design = index;
-                        app.detector = None;
                     }
                 }
             });
         if ui.button("new event").clicked() {
             app.detector_seed = app.detector_seed.wrapping_add(1);
-            app.detector = None;
         }
         if ui.button("restart").clicked() {
             if let Some(scene) = app.detector.as_mut() {
@@ -3335,9 +3333,36 @@ pub fn designs(app: &mut CasApp, ui: &mut Ui) {
         }
     });
 
-    // The scene, built on first use.
-    if app.detector.is_none() {
-        app.detector = crate::detector::DetectorScene::new(design, app.detector_seed);
+    // The scene, rebuilt when the design or the seed changes. The view's
+    // settings — speed, zoom, camera, toggles — are the reader's, not the
+    // event's, so they survive a new event. Rebuilding them from the defaults
+    // is what made the speed reset every time the reader asked for another
+    // muon.
+    let stale = app
+        .detector
+        .as_ref()
+        .is_none_or(|scene| scene.seed != app.detector_seed || scene.design != design);
+    if stale {
+        let settings = app.detector.as_ref().map(|scene| {
+            (
+                scene.speed_ps_per_s,
+                scene.zoom,
+                scene.azimuth,
+                scene.elevation,
+                scene.show_photons,
+                scene.show_cone,
+            )
+        });
+        let mut scene = crate::detector::DetectorScene::new(design, app.detector_seed);
+        if let (Some(scene), Some(settings)) = (scene.as_mut(), settings) {
+            scene.speed_ps_per_s = settings.0;
+            scene.zoom = settings.1;
+            scene.azimuth = settings.2;
+            scene.elevation = settings.3;
+            scene.show_photons = settings.4;
+            scene.show_cone = settings.5;
+        }
+        app.detector = scene;
     }
     let Some(scene) = app.detector.as_mut() else {
         ui.label("this design has no photon transport to draw");

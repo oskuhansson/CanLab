@@ -61,6 +61,10 @@ pub struct DetectorScene {
     pub azimuth: f64,
     /// The camera's elevation, radians.
     pub elevation: f64,
+    /// How far the camera is pulled in or pushed out, as a multiplier on the
+    /// distance that frames the block. `1.0` is the framing the block was fitted
+    /// to.
+    pub zoom: f64,
     /// Whether to draw the photons.
     pub show_photons: bool,
     /// Whether to draw the cone.
@@ -122,6 +126,7 @@ impl DetectorScene {
             seed,
             azimuth: 0.9,
             elevation: 0.35,
+            zoom: 1.0,
             show_photons: true,
             show_cone: true,
             detected,
@@ -208,19 +213,31 @@ fn inside_segment(block: &Block, entry: Vec3, heading: Vec3) -> Option<(Vec3, Ve
     Some((start, exit.point))
 }
 
-/// The scene's camera, framed on the block.
+/// The scene's camera, framed on the **block**.
+///
+/// The target is the block's centre, not a point on the track: the track is
+/// where the event happens, but the block is what the reader is looking at, and
+/// an orbit around a point on the track swings the shape around a corner.
 pub fn camera(scene: &DetectorScene, aspect: f64) -> Camera {
-    let centre = scene.inside_start.add(scene.inside_end).scale(0.5);
-    let radius = scene.inside_start.sub(scene.inside_end).length().max(10.0);
-    Camera {
-        target: canlab_scene::Vec3::new(centre.x, centre.y, centre.z),
-        distance: radius * 3.2,
+    let camera = Camera {
         azimuth: scene.azimuth,
         elevation: scene.elevation,
         field_of_view: 0.85,
         aspect,
         near: 0.5,
         far: 2_000.0,
+        ..Camera::default()
+    };
+    let mut points = Vec::new();
+    for top in [true, false] {
+        for corner in corners(scene, top) {
+            points.push(scene_point(corner));
+        }
+    }
+    let fitted = camera.fit(&points);
+    Camera {
+        distance: fitted.distance * scene.zoom,
+        ..fitted
     }
 }
 
@@ -252,6 +269,12 @@ pub fn draw(scene: &mut DetectorScene, ui: &mut egui::Ui, rect: egui::Rect) -> e
         let delta = response.drag_delta();
         scene.azimuth -= f64::from(delta.x) * 0.01;
         scene.elevation = (scene.elevation + f64::from(delta.y) * 0.01).clamp(-1.5, 1.5);
+    }
+    if response.hovered() {
+        let scroll = f64::from(ui.input(|input| input.smooth_scroll_delta.y));
+        if scroll != 0.0 {
+            scene.zoom = (scene.zoom * (1.0 - scroll * 0.0015)).clamp(0.3, 4.0);
+        }
     }
     let painter = ui.painter_at(rect);
     let camera = camera(scene, f64::from(rect.width() / rect.height().max(1.0)));
@@ -306,7 +329,22 @@ pub fn draw(scene: &mut DetectorScene, ui: &mut egui::Ui, rect: egui::Rect) -> e
     }
     polygons.sort_by(|a, b| b.0.total_cmp(&a.0));
     for (_, points) in &polygons {
-        painter.add(egui::Shape::convex_polygon(points.clone(), glass, edge));
+        painter.add(egui::Shape::convex_polygon(points.clone(), glass, Stroke::NONE));
+    }
+    // The edges, once each. A stroke on every face draws each shared edge
+    // twice, and the double-drawn line shimmers as the camera turns — the
+    // "flickering lines" a reader sees are one edge painted on top of itself.
+    for index in 0..top.len() {
+        let next = (index + 1) % top.len();
+        for (a, b) in [
+            (top[index], top[next]),
+            (bottom[index], bottom[next]),
+            (top[index], bottom[index]),
+        ] {
+            if let (Some(from), Some(to)) = (to_screen(a), to_screen(b)) {
+                painter.line_segment([from, to], edge);
+            }
+        }
     }
 
     // The photons, up to where the clock has them.
@@ -323,7 +361,10 @@ pub fn draw(scene: &mut DetectorScene, ui: &mut egui::Ui, rect: egui::Rect) -> e
             }
             let distance = (scene.time_ps - birth) * C_MM_PER_PS / scene.design.index;
             let mut travelled = 0.0;
-            let mut previous: Option<Pos2> = None;
+            // From the birth, not from the first bounce: a polyline drawn from
+            // `windows(2)` alone skips the segment that starts at the birth, and
+            // every photon then appears to come into existence at a face.
+            let mut previous = to_screen(photon.path[0]);
             for pair in photon.path.windows(2) {
                 let segment = pair[1].sub(pair[0]).length();
                 let take = (distance - travelled).clamp(0.0, segment);
@@ -333,6 +374,8 @@ pub fn draw(scene: &mut DetectorScene, ui: &mut egui::Ui, rect: egui::Rect) -> e
                         painter.line_segment([from, at], photon_colour);
                     }
                     previous = Some(at);
+                } else {
+                    previous = None;
                 }
                 travelled += segment;
                 if travelled >= distance {
@@ -383,7 +426,7 @@ pub fn draw(scene: &mut DetectorScene, ui: &mut egui::Ui, rect: egui::Rect) -> e
                 if let Some(at) = to_screen(end) {
                     painter.line_segment(
                         [apex, at],
-                        Stroke::new(1.0, Color32::from_rgb(96, 178, 255).gamma_multiply(0.35)),
+                        Stroke::new(1.4, Color32::from_rgb(120, 240, 255).gamma_multiply(0.8)),
                     );
                 }
             }
@@ -422,4 +465,61 @@ fn basis(heading: Vec3) -> (Vec3, Vec3) {
     let right = heading.cross(reference).normalized().unwrap_or(Vec3::new(1.0, 0.0, 0.0));
     let up = right.cross(heading).normalized().unwrap_or(Vec3::new(0.0, 1.0, 0.0));
     (right, up)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use canlab_muon::timing_study::Shape;
+
+    fn hexagon() -> TimingDesign {
+        TimingDesign {
+            name: "hexagon",
+            scale_mm: 28.0,
+            thickness_mm: 30.0,
+            index: 1.49,
+            pde: 0.35,
+            shape: Shape::Hexagon,
+        }
+    }
+
+    #[test]
+    fn the_photons_are_born_along_the_track() {
+        // The bug this prevents: a photon drawn from a face instead of from the
+        // track looks like a photon that came into existence at the edge.
+        let scene = DetectorScene::new(hexagon(), 1).expect("a scene");
+        let chord = scene.inside_start.sub(scene.inside_end).length();
+        let mut low = f64::INFINITY;
+        let mut high = f64::NEG_INFINITY;
+        for photon in &scene.photons {
+            let birth = photon.path.first().expect("a birth point");
+            let along = birth.sub(scene.inside_start).dot(scene.heading);
+            low = low.min(along);
+            high = high.max(along);
+        }
+        assert!(low < 1.0, "the first photon is born {low} mm into a {chord} mm chord");
+        assert!(
+            high > chord - 1.0,
+            "the last photon is born {high} mm into a {chord} mm chord"
+        );
+    }
+
+    #[test]
+    fn the_camera_looks_at_the_block() {
+        // The bug this prevents: the orbit target was the track's midpoint,
+        // which is a point on the track and not the block's centre, so the
+        // camera swung around a corner of the shape.
+        let scene = DetectorScene::new(hexagon(), 1).expect("a scene");
+        let camera = camera(&scene, 1.5);
+        let centre = scene.block.face_centre(canlab_optics::Face::Top);
+        assert!((camera.target.x - centre.x).abs() < 1e-9);
+        assert!((camera.target.y - centre.y).abs() < 1e-9);
+        assert!(camera.target.z.abs() < 1e-9);
+        // And the block fits: every corner is inside the frustum.
+        for top in [true, false] {
+            for corner in corners(&scene, top) {
+                assert!(camera.contains(scene_point(corner)), "{corner:?} is off screen");
+            }
+        }
+    }
 }
