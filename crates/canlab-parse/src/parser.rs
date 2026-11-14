@@ -1011,6 +1011,12 @@ impl Parser {
                 format!("unexpected `\\{name}`; expected an expression"),
                 pos,
             )),
+            // `\binom{n}{k}` is `C(n, k)`: two braced arguments, in that order.
+            "binom" => {
+                let n = self.parse_prefix()?;
+                let k = self.parse_prefix()?;
+                Ok(ExprNode::fn_raw(SymbolId::intern("binom"), vec![n, k]))
+            }
             _ if is_function(name) => self.parse_function(name, pos),
             _ if is_greek(name) => Ok(ExprNode::sym(SymbolId::intern(name))),
             // An accent is a decoration of an expression and the tree has no

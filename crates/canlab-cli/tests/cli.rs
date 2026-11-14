@@ -260,6 +260,22 @@ fn solve_all_reports_a_decline_with_its_reason() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn a_binomial_coefficient_round_trips_and_has_a_value() {
+    // W11.1: `\binom{n}{k}` appears in every combinatorics problem.
+    let (ok, stdout, stderr) = canlab(&["tex", r"\binom{5}{2}"]);
+    assert!(ok, "stderr: {stderr}");
+    assert_eq!(stdout.trim(), r"\binom{5}{2}", "it did not round-trip");
+    // And it is a value: `C(5,2) = 10`.
+    let (ok, stdout, stderr) = canlab(&["eval", r"\binom{5}{2}"]);
+    assert!(ok, "stderr: {stderr}");
+    assert!(stdout.contains(r"\binom{5}{2}"), "{stdout}");
+    // A symbolic one prints and does not pretend to a value.
+    let (ok, stdout, _) = canlab(&["tex", r"\binom{n}{k}"]);
+    assert!(ok);
+    assert_eq!(stdout.trim(), r"\binom{n}{k}");
+}
+
+#[test]
 fn a_subscript_is_part_of_the_name_and_two_names_stay_two() {
     // W11.3: `v_1` and `v_2` are two variables, not `v` twice. Dropping the
     // subscript made them the same symbol, which is a quiet wrong answer.

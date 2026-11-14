@@ -40,6 +40,8 @@ pub enum Op {
     Exp,
     Sqrt,
     Abs,
+    /// `C(n, k)`, the binomial coefficient: two arguments.
+    Binom,
     Asin,
     Acos,
     Atan,
@@ -171,6 +173,12 @@ impl Program {
                     stack[sp] = a.powf(b);
                     sp += 1;
                 }
+                Op::Binom => {
+                    let k = pop(stack, &mut sp);
+                    let n = pop(stack, &mut sp);
+                    stack[sp] = binomial(n, k);
+                    sp += 1;
+                }
                 unary => {
                     let a = pop(stack, &mut sp);
                     stack[sp] = apply(unary, a);
@@ -248,7 +256,7 @@ fn required_stack(ops: &[Op]) -> usize {
             Op::Const(_) | Op::Var(_) => (0, 1),
             Op::Neg => (1, 1),
             Op::Add(n) | Op::Mul(n) => (n as usize, 1),
-            Op::Sub | Op::Div | Op::Pow => (2, 1),
+            Op::Sub | Op::Div | Op::Pow | Op::Binom => (2, 1),
             Op::Sin
             | Op::Cos
             | Op::Tan
@@ -333,11 +341,23 @@ fn emit(expr: &Expr, vars: &[SymbolId], ops: &mut Vec<Op>) -> Option<()> {
             ops.push(Op::Pow);
         }
         ExprNode::Fn(name, args) => {
+            let fname = name.as_str();
+            // `binom` is the one function with two arguments. Everything else in
+            // the table takes one, and a two-argument call to one of them is not
+            // this compiler's to guess at.
+            if fname == "binom" {
+                if args.len() != 2 {
+                    return None;
+                }
+                emit(&args[0], vars, ops)?;
+                emit(&args[1], vars, ops)?;
+                ops.push(Op::Binom);
+                return Some(());
+            }
             if args.len() != 1 {
                 return None;
             }
             emit(&args[0], vars, ops)?;
-            let fname = name.as_str();
             let op = match fname.as_str() {
                 "sin" => Op::Sin,
                 "cos" => Op::Cos,
@@ -360,6 +380,25 @@ fn emit(expr: &Expr, vars: &[SymbolId], ops: &mut Vec<Op>) -> Option<()> {
         ExprNode::Hold(_) => return None,
     }
     Some(())
+}
+
+/// `C(n, k)` for real arguments, which is `n!/(k!(n−k)!)` when both are whole.
+///
+/// A non-integer or a negative argument is `NaN`: the binomial coefficient is
+/// defined for whole `n` and `k`, and a float that pretends otherwise is the
+/// wrong answer this project refuses.
+fn binomial(n: f64, k: f64) -> f64 {
+    if !(n >= 0.0) || !(k >= 0.0) || n.fract() != 0.0 || k.fract() != 0.0 || k > n {
+        return f64::NAN;
+    }
+    let k = k.min(n - k);
+    let mut result = 1.0f64;
+    let mut index = 0.0f64;
+    while index < k {
+        result = result * (n - index) / (index + 1.0);
+        index += 1.0;
+    }
+    result.round()
 }
 
 #[cfg(test)]

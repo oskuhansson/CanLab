@@ -442,6 +442,15 @@ fn write_function(name: SymbolId, args: &[Expr], out: &mut String) {
     // a call: `\left|x\right|` is how an exam writes it, and it is what the
     // parser reads back. Printing `\operatorname{abs}(x)` would be correct and
     // would not round-trip.
+    // `binom` is a delimiter pair with two arguments, not a call.
+    if function == "binom" && args.len() == 2 {
+        out.push_str("\\binom{");
+        write_node(&args[0], out, PREC_ADD);
+        out.push_str("}{");
+        write_node(&args[1], out, PREC_ADD);
+        out.push('}');
+        return;
+    }
     if function == "abs" && args.len() == 1 {
         out.push_str("\\left|");
         write_node(&args[0], out, PREC_ADD);

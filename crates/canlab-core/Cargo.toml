@@ -7,3 +7,4 @@ description = "Expression tree, exact numbers, normalization and compiled evalua
 
 # No dependencies, by design: this crate must build offline and in isolation.
 [dependencies]
+
