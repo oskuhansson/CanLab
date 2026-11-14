@@ -1255,6 +1255,66 @@ mod tests {
         assert!(!runs[2].1, "operators and digits stay upright");
     }
 
+    /// A measure whose every glyph is `0.6·size` wide, so the arithmetic is
+    /// checkable by hand.
+    struct Fixed;
+    impl super::Measure for Fixed {
+        fn measure(&self, text: &str, size: f32) -> Metrics {
+            Metrics {
+                width: 0.6 * size * text.chars().count() as f32,
+                ascent: 0.8 * size,
+                descent: 0.2 * size,
+            }
+        }
+    }
+
+    #[test]
+    fn the_caret_inside_a_bracket_is_just_after_the_opening_half() {
+        // Reported as "the typing indicator is shifted too far right, so text
+        // looks like it goes too far left". The caret rects are the thing to
+        // measure, and they are right: the inside caret sits immediately after
+        // `(`, and the after-the-pair caret immediately after `)`.
+        use canlab_input::MathField;
+        let field = MathField::from_latex("\\left(\\right)").expect("an empty pair");
+        let list = super::layout_field(&field, &Fixed, &Style::default());
+        assert_eq!(list.carets.len(), 3, "before, inside, after");
+        assert_eq!(list.carets.len(), field.positions().len());
+        let (before, inside, after) = (
+            list.carets[0].x,
+            list.carets[1].x,
+            list.carets[2].x,
+        );
+        assert_eq!(before, 0.0);
+        assert!(
+            inside > before && after > inside,
+            "the carets are not in order: {before}, {inside}, {after}"
+        );
+        // Typing a character moves the inside caret by that character's width,
+        // leaves the before-the-pair caret alone, and leaves the after-the-pair
+        // caret alone — which is the invariant a reader sees: text grows between
+        // the brackets and nothing outside them moves.
+        let typed = MathField::from_latex("\\left(x\\right)").expect("a pair with x");
+        let list = super::layout_field(&typed, &Fixed, &Style::default());
+        assert_eq!(list.carets.len(), 4);
+        let glyph = 0.6 * Style::default().base_size;
+        assert!((list.carets[0].x - before).abs() < 0.01, "the left edge moved");
+        assert!(
+            (list.carets[1].x - inside).abs() < 0.01,
+            "the inside caret moved from {inside} to {}",
+            list.carets[1].x
+        );
+        assert!(
+            (list.carets[2].x - (inside + glyph)).abs() < 0.01,
+            "the caret after the text is at {}, and the text is {glyph} wide from {inside}",
+            list.carets[2].x
+        );
+        assert!(
+            (list.carets[3].x - after).abs() < 0.01,
+            "the closing bracket moved from {after} to {}",
+            list.carets[3].x
+        );
+    }
+
     #[test]
     fn style_script_size_never_underflows_the_minimum() {
         let style = Style::default();
