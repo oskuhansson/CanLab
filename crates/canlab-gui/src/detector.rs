@@ -45,6 +45,15 @@ pub struct DetectorScene {
     pub inside_end: Vec3,
     /// Every photon's polyline.
     pub photons: Vec<PhotonRecord>,
+    /// The photons' indices in a stable random order.
+    ///
+    /// The drawing shows the first `photon_limit` of these. A stride would show
+    /// every *n*-th photon, which is a biased sample of the cone: the photons
+    /// are born in order along the track, so every *n*-th is every *n*-th
+    /// millimetre of the track. A shuffle is a random sample of the emission.
+    pub order: Vec<usize>,
+    /// How many photons the drawing shows.
+    pub photon_limit: usize,
     /// The event's arrivals, for the timestamps and the sensor flashes.
     pub event: Event,
     /// The true heading, as the two horizontal components.
@@ -109,6 +118,14 @@ impl DetectorScene {
             .iter()
             .filter(|photon| photon.face.is_some_and(|face| sensors.iter().any(|s| s.face == face)))
             .count();
+        // A stable shuffle, so the subset is random but does not change from
+        // frame to frame — a subset that re-drew every frame would flicker.
+        let mut order: Vec<usize> = (0..photons.len()).collect();
+        for index in (1..order.len()).rev() {
+            let swap = (rng.uniform() * (index + 1) as f64) as usize;
+            order.swap(index, swap.min(index));
+        }
+        let photon_limit = photons.len().min(120);
         Some(DetectorScene {
             design,
             block,
@@ -118,6 +135,8 @@ impl DetectorScene {
             inside_start,
             inside_end,
             photons,
+            order,
+            photon_limit,
             event,
             truth: [heading.x, heading.y],
             time_ps: 0.0,
@@ -141,6 +160,14 @@ impl DetectorScene {
             .map(|photon| self.birth_ps(photon) + photon.time_ps)
             .fold(0.0f64, f64::max);
         (last + 20.0).max(60.0)
+    }
+
+    /// The photons the drawing shows: a random subset of the emission.
+    pub fn visible(&self) -> impl Iterator<Item = &PhotonRecord> {
+        self.order
+            .iter()
+            .take(self.photon_limit.min(self.order.len()))
+            .map(|index| &self.photons[*index])
     }
 
     /// When a photon was emitted, picoseconds after the muon reached the block.
@@ -349,12 +376,12 @@ pub fn draw(scene: &mut DetectorScene, ui: &mut egui::Ui, rect: egui::Rect) -> e
 
     // The photons, up to where the clock has them.
     if scene.show_photons {
-        // A few hundred photons is a few thousand line segments, and egui
-        // tessellates every one of them. Every `stride`-th photon is a picture
-        // of the cone and the paths without the frame cost of all of them.
-        let stride = (scene.photons.len() / 220).max(1);
+        // A random subset, not every *n*-th: the photons are born in order
+        // along the track, so a stride samples the track's positions rather
+        // than the emission. The subset is fixed per scene, so it does not
+        // flicker as the clock runs.
         let photon_colour = Stroke::new(1.3, Color32::from_rgb(126, 198, 255));
-        for photon in scene.photons.iter().step_by(stride) {
+        for photon in scene.visible() {
             let birth = scene.birth_ps(photon);
             if scene.time_ps < birth {
                 continue;
@@ -502,6 +529,26 @@ mod tests {
             high > chord - 1.0,
             "the last photon is born {high} mm into a {chord} mm chord"
         );
+    }
+
+    #[test]
+    fn the_visible_photons_are_a_random_subset() {
+        // The bug this prevents: a stride shows every *n*-th photon, and the
+        // photons are born in order along the track, so every *n*-th is every
+        // *n*-th millimetre of the track — a sample of positions, not of the
+        // emission. The order must be a permutation and the subset must not be
+        // the first ones.
+        let scene = DetectorScene::new(hexagon(), 1).expect("a scene");
+        let mut sorted = scene.order.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, (0..scene.photons.len()).collect::<Vec<_>>());
+        assert_eq!(scene.visible().count(), scene.photon_limit);
+        let first: Vec<usize> = scene.order.iter().take(scene.photon_limit).copied().collect();
+        let identity: Vec<usize> = (0..scene.photon_limit).collect();
+        assert_ne!(first, identity, "the subset is the first photons, not a sample");
+        // And the limit is the drawing's, not the scene's: every photon is
+        // still in `photons`, so the timestamps are unaffected.
+        assert_eq!(scene.photons.len(), sorted.len());
     }
 
     #[test]

@@ -3351,6 +3351,7 @@ pub fn designs(app: &mut CasApp, ui: &mut Ui) {
                 scene.elevation,
                 scene.show_photons,
                 scene.show_cone,
+                scene.photon_limit,
             )
         });
         let mut scene = crate::detector::DetectorScene::new(design, app.detector_seed);
@@ -3361,6 +3362,9 @@ pub fn designs(app: &mut CasApp, ui: &mut Ui) {
             scene.elevation = settings.3;
             scene.show_photons = settings.4;
             scene.show_cone = settings.5;
+            // The count is the reader's, but a scene can have fewer photons
+            // than the last one did; the slider's range is this scene's total.
+            scene.photon_limit = settings.6.min(scene.photons.len());
         }
         app.detector = scene;
     }
@@ -3395,6 +3399,13 @@ pub fn designs(app: &mut CasApp, ui: &mut Ui) {
         );
         ui.checkbox(&mut scene.show_photons, "photons");
         ui.checkbox(&mut scene.show_cone, "cone");
+        if scene.show_photons {
+            let total = scene.photons.len();
+            ui.add(
+                egui::Slider::new(&mut scene.photon_limit, 0..=total.max(1))
+                    .text(format!("of {total}")),
+            );
+        }
         ui.label(format!("t = {:.0} ps", scene.time_ps));
         ui.label(format!(
             "seed {} · {} photons reached a sensor",
