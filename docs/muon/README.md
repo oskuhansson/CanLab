@@ -153,6 +153,7 @@ flowchart TB
 
 | File | What it holds |
 |---|---|
+| [overview.md](overview.md) | **The current design on one page**: the signal chain, the numbers, the network, and what is uncertain |
 | [physics.md](physics.md) | The physics in detail: every equation, every constant, and the worked budgets |
 | [simulation.md](simulation.md) | The simulation in detail: every module, every draw, and what is not modelled |
 | [designs.md](designs.md) | The five designs, their numbers, and the trade each one makes |

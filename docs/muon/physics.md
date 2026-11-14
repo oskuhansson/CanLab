@@ -28,9 +28,45 @@ ground, arriving at about **1 per cm² per minute**.
 | Angular distribution | `I(θ) ∝ cos²θ` |
 | Energy loss in plastic | 1.95 MeV per (g/cm²) |
 
-The `cos²θ` distribution is what makes the coincidence acceptance calculation
-possible: the muon is more likely to come from near the vertical, so a two-plane
-tracker keeps more crossings than a uniform-in-θ flux would give.
+### The angular distribution, and why `cos²θ` is a fiction
+
+The flux follows `I(θ) = I₀ cosⁿ θ`, and the measurements put `n` between **1.7 and
+2.2** — not exactly 2:
+
+| Where | Altitude | Momentum cut | n | I₀ (m⁻²s⁻¹sr⁻¹) |
+|---|---|---|---|---|
+| Mumbai, 19°N | sea level | > 255 MeV/c | 2.10 ± 0.05 | 66.7 ± 1.5 |
+| Monastir, 36°N | 38 m | > 330 MeV/c | 1.82 ± 0.11 | 68.8 ± 1.9 |
+| Monastir, 36°N | 38 m | > 910 MeV/c | 1.72 ± 0.10 | 56.7 ± 1.6 |
+| Sakarya, 40°N (Geant4) | 230 m | > 1 GeV | 1.95 ± 0.08 | — |
+| Riggi et al. | 3100 m | > 200 MeV/c | 1.83 ± 0.13 | 83 ± 8 |
+
+The exponent is a **momentum** effect: low-energy muons decay in the extra
+atmosphere an inclined path crosses, so they are suppressed at large θ (large `n`);
+high-energy muons do not decay and the distribution flattens towards `1/cos θ`
+(`n → 1`). A detector with no momentum measurement sees the integrated
+distribution, which is why `n ≈ 2` is the usual working value.
+
+The inverse CDF is `cos θ = (1 − u)^{1/(n+1)}` — one `powf`, no rejection.
+
+### Altitude
+
+Two effects, and they are very different sizes:
+
+- **The flux rises** by `e^{H/L(p)}` with `L(p) = 4900 + 750p` metres. At 1 km that
+  is **+13.5 %** for a 4 GeV muon and **+19.4 %** for a 1 GeV one. The measured
+  jump from sea level to 600 m is +36 % in the integrated vertical flux.
+- **The distribution flattens** because the vertical depth is smaller, so the
+  decay suppression of inclined muons is weaker. The measured trend is `n = 2.0`
+  at sea level, **1.95 at 1 km** and 1.83 at 3.1 km — a **3 % change at 1 km**.
+
+So the altitude matters mostly as a **rate**, not as a shape. A network trained at
+one altitude sees almost the same angular distribution at another, which is worth
+saying because the mission's science is a rate comparison.
+
+`canlab_muon::muon::MuonFlux` carries both: `at_altitude`, `at_zenith`,
+`integrated`, `sample_zenith` and `fraction_above`, with the depth
+`X = 1030 e^{−h/8400}` g/cm².
 
 ---
 

@@ -421,6 +421,16 @@ impl Design {
         };
         let block = canlab_optics::Block::new(outline);
         let optical = canlab_optics::Optical::block_in_air(1.49, 10_000.0);
+        // The transport's default sensor, and the microcell count is why.
+        //
+        // `detector::simulate` clamps the **born** photon count to the smallest
+        // microcell count among the sensors. That is a crude saturation model,
+        // and for this design it is the wrong place to apply it: a 40 mm crossing
+        // makes ~840 photons, of which only ~19 reach a sensor, so a 504-cell part
+        // can count every one of them. Clamping the born count to 504 would throw
+        // away 40 % of the light that the sensor never sees. The default 40 000
+        // cells is used so the clamp does not bite, and the saturation question is
+        // answered by the design table's own `saturates` column instead.
         let sensors: [canlab_optics::SiPM; 4] =
             canlab_optics::SENSOR_FACES.map(canlab_optics::SiPM::typical);
         let mut state = 0x2545_f491_4f6c_dd1du64;

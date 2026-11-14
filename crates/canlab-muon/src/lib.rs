@@ -39,9 +39,12 @@ pub mod designs;
 pub mod domain;
 pub mod net;
 pub mod mission;
+pub mod muon;
 pub mod scintillator;
 pub mod tracker;
 pub mod timing;
+pub mod vmf;
+pub mod timing_study;
 
 mod solve;
 
@@ -53,6 +56,9 @@ pub use scintillator::{Scintillator, SiPMChoice};
 pub use domain::Domain;
 pub use net::{Network, Sample};
 pub use tracker::{Event, LightModel, Rng, Tracker};
+pub use timing_study::{TimingDesign, TimingOutcome, TimingRun};
+pub use muon::MuonFlux;
+pub use vmf::{VmfNetwork, VmfSample};
 pub use can::{tent_extent_mm, tent_mass_g, tent_volume_mm3, Can, CanError};
 pub use timing::{
     reconstruct, speed_mm_per_ps, tangent_basis, timing_signal_ps, FitError, Observation,

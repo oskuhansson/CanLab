@@ -155,6 +155,93 @@ it is the thing to try on scrap acrylic before committing.
 
 ---
 
+## Reading many SiPMs on few channels
+
+The Cherenkov timing design needs four timestamps from four sensors, and four
+channels of picosecond timing is the expensive part. Three techniques put more
+sensors on fewer channels, and they are not equivalent: two of them throw the
+timing away.
+
+| Technique | Ratio | Timing kept? | Measured cost |
+|---|---|---|---|
+| **Series connection** | n → 1 | No — the sum, earliest photon wins | Capacitance ÷ n, gain ÷ n, bias × n |
+| **Delay-line multiplexing** | 16 → 1 | **Yes**, +30 ps FWHM | Splitters, combiners, cable lengths |
+| **Resistive charge division** | 16 → 4 | No — position only | Resistor ladder, 300 Ω–10 kΩ |
+
+### Series connection
+
+`n` SiPMs in series reduce the total capacitance by `n` and the gain by `n`, and
+need `n` times the bias. The MEG II pTC uses **six series-connected SiPMs per
+side** of a 120 × 40 × 5 mm scintillator tile, sees 50–100 photoelectrons per
+side, and reaches **70–90 ps** timing resolution with a two-sided readout
+([arXiv:2005.05027](https://arxiv.org/abs/2005.05027)).
+
+The series connection is what a **counter** wants: it sums the light and gives one
+timestamp per side. It cannot give four timestamps, because the four sensors' pulses
+are one pulse.
+
+### Delay-line multiplexing
+
+Each SiPM goes to a preamplifier, then a 1:2 splitter. One branch goes to a combiner
+directly; the other goes through a **different cable length per channel** to a second
+combiner. The *time difference between the two outputs* identifies which SiPM fired,
+and the pulse's own arrival time is preserved.
+
+Vinke et al. multiplex **16 SiPMs into one channel** this way and measure the
+coincidence timing resolution degrading from **243 to 272 ps FWHM** — about 30 ps,
+or 13 ps in quadrature ([PMC4386692](https://pmc.ncbi.nlm.nih.gov/articles/PMC4386692/)).
+The delay is 2 ns per channel, which is three pulse widths: the pulses do not
+overlap.
+
+This is the technique that matters here. Four SiPMs on **one** delay-line channel
+give four timestamps from one digitizer, at the cost of four comparators and a
+length of PCB trace.
+
+### Resistive charge division
+
+A resistor ladder combines 16 SiPMs into 4 outputs, and the position comes from the
+normalised charge ratios. A recent characterisation of a 16→4 network finds the
+position recoverable in an intermediate amplitude range and **not** the timing: the
+authors say the timing would be taken "through a separate parallel signal path"
+([MDPI Sensors](https://www.mdpi.com/1424-8220/26/20/6531)).
+
+So charge division is a **tracker** technique, not a timing one. For the tracker's
+4 × 4 pixel array it would cut 16 channels to 4 and the cost by a factor of four.
+
+### What it costs
+
+| Item | Four separate channels | One delay-line channel |
+|---|---|---|
+| Comparators | 4 × MAX40026 ≈ 20 € | 4 × MAX40026 ≈ 20 € |
+| Timing channels | 4 TDC channels | **1** multi-hit TDC channel |
+| Delay lines | — | PCB traces, free |
+| Splitters/combiners | — | ~10 € (or PCB couplers) |
+| **Added timing jitter** | — | **~13 ps σ**, in quadrature |
+
+The splitter/combiner parts are the same class as the ones in the published setup
+(Mini-Circuits SBTC-2-10+ and JEPS-16-1W); a PCB coupler would be cheaper and is
+what a CanSat board should use.
+
+### Why it does not rescue the timing design on its own
+
+The simulation found that four timestamps give a **120°** error with the linear
+model and **81°** with the correct Cherenkov model *when the track position is
+known*. The gap is not the channel count: it is that the correct arrival time
+depends on **where along the track the photon was emitted**, and four timestamps
+cannot determine both the direction and the track position.
+
+More timestamps would. The correct model has five unknowns — two angles, the start
+time, and the track's two transverse coordinates — so **six or more timestamps**
+make it identifiable, and the bound of 81° then applies instead of the linear
+model's 120°.
+
+That is where multiplexing earns its place: **eight SiPMs on two delay-line
+channels** give eight timestamps for the price of two, and the exact model becomes
+fittable. Whether 81° is worth having is a separate question — the face-centre
+placement is poor, and the block's corners give 16°.
+
+---
+
 ## The jitter budget
 
 | Part | ps | Random | Source |

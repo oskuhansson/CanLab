@@ -218,8 +218,22 @@ Optical adhesive fixes that — it fills the scratches — and it fixes somethin
 larger that the roughness discussion hides. At a PMMA/air face only 13 % of the
 light escapes; an adhesive with an index above PMMA's makes the interface go from
 lower to higher index, so there is **no critical angle at all** and every photon
-that reaches the bonded face crosses it. That is a factor of **7.3** on the
-sensor's face, against the 10–20 % the roughness is worth.
+that reaches the bonded face crosses it.
+
+The escape-cone arithmetic says that is a factor of 7.3, and the transport says it
+is **1.9**. The difference is that the trapped light was not lost — it bounced to
+another face and escaped there. The measured table:
+
+| Block | Adhesive | Detected | Gain |
+|---|---|---|---|
+| PMMA, n = 1.49 | none | 19.19 | — |
+| PMMA, n = 1.49 | NOA 68 | **37.05** | **1.9×** |
+| High-index, n = 1.84 | none | 7.50 | — |
+| High-index, n = 1.84 | NOA 68 | **32.66** | **4.4×** |
+
+The adhesive helps the high-index block *more* — a 4.4× gain against PMMA's 1.9× —
+because a block that traps more has more to gain from opening one face. It closes
+the 2.6× material gap to 1.1×, and PMMA still wins, and is cheaper and lighter.
 
 The choice is **Norland NOA 68** (cured n = 1.54, formulated for acrylic adhesion,
 €32.70 for a one-ounce bottle). All the candidates remove the critical angle and

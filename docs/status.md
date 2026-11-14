@@ -109,7 +109,7 @@ ignored because this machine is not the one they were rendered on (see below).
 | `canlab-num` | 45 |
 | `canlab-corpus` | 79 |
 | `canlab-gpu` | 6 |
-| `canlab-muon` | 78 |
+| `canlab-muon` | 83 |
 
 Each row is `cargo test -p <crate>`, which **includes that crate's doc-tests**, so
 there is no separate doc-test row: adding one would count them twice. The rows sum to

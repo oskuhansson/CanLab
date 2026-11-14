@@ -97,6 +97,21 @@ pub struct Optical {
     /// says single digits, and the difference decides whether the detector can
     /// be timed at all — so it is a parameter here, not a footnote.
     pub sensor_coverage: f64,
+    /// The refractive index of the optical adhesive on the sensor faces, if any.
+    ///
+    /// Optical adhesive is not a polish substitute: it changes the **critical
+    /// angle** at the face it bonds, because total internal reflection depends on
+    /// the ratio of the two indices. A PMMA block (n = 1.49) bonded with an
+    /// adhesive of n = 1.54 has *no* critical angle at that face — light goes
+    /// from lower to higher index and every photon crosses it.
+    ///
+    /// A high-index block (n = 1.84) bonded with the same adhesive does **not**
+    /// lose its critical angle: it moves from `asin(1/1.84) = 32.9°` to
+    /// `asin(1.54/1.84) = 56.8°`, which widens the escape cone from 8 % of the
+    /// solid angle to 23 %. That is a factor of 2.8, not infinity, and it is why
+    /// the index of the block and the index of the adhesive have to be compared
+    /// rather than assumed.
+    pub glue_index: Option<f64>,
 }
 
 impl Optical {
@@ -109,6 +124,24 @@ impl Optical {
             absorption_mm,
             max_bounces: 64,
             sensor_coverage: 0.15,
+            glue_index: None,
+        }
+    }
+
+    /// The same block with the sensor faces bonded with an adhesive of `index`.
+    pub fn block_bonded(index: f64, absorption_mm: f64, glue_index: f64) -> Optical {
+        Optical { glue_index: Some(glue_index), ..Optical::block_in_air(index, absorption_mm) }
+    }
+
+    /// The index outside a face: the adhesive on a sensor face, air elsewhere.
+    ///
+    /// Only the faces a sensor sits on are bonded. A block glued on every face
+    /// would leak light through the 85 % of each face the sensor does not cover,
+    /// which is worse than trapping it.
+    pub fn outside_index(&self, face: Face) -> f64 {
+        match self.glue_index {
+            Some(glue) if crate::block::SENSOR_FACES.contains(&face) => glue,
+            _ => self.index_outside,
         }
     }
 }
@@ -221,7 +254,7 @@ impl Transport {
             let outcome = fresnel::interface(
                 heading,
                 next.normal,
-                self.optical.index_outside,
+                self.optical.outside_index(next.face),
                 self.optical.index,
                 polarisation,
             )?;

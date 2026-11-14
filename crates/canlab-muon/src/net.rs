@@ -35,15 +35,15 @@ use crate::tracker::Rng;
 
 /// A dense layer: weights in row-major `[out][in]` order.
 #[derive(Debug, Clone)]
-struct Layer {
-    weights: Vec<f64>,
-    biases: Vec<f64>,
-    inputs: usize,
-    outputs: usize,
+pub(crate) struct Layer {
+    pub(crate) weights: Vec<f64>,
+    pub(crate) biases: Vec<f64>,
+    pub(crate) inputs: usize,
+    pub(crate) outputs: usize,
 }
 
 impl Layer {
-    fn new(inputs: usize, outputs: usize, rng: &mut Rng) -> Layer {
+    pub(crate) fn new(inputs: usize, outputs: usize, rng: &mut Rng) -> Layer {
         // He initialisation: a normal with a standard deviation of sqrt(2/fan_in),
         // which keeps the variance of the activations from collapsing through a
         // ReLU stack.
@@ -52,7 +52,7 @@ impl Layer {
         Layer { weights, biases: vec![0.0; outputs], inputs, outputs }
     }
 
-    fn forward(&self, input: &[f64], output: &mut [f64]) {
+    pub(crate) fn forward(&self, input: &[f64], output: &mut [f64]) {
         #[allow(clippy::needless_range_loop)]
         for unit in 0..self.outputs {
             let row = &self.weights[unit * self.inputs..(unit + 1) * self.inputs];
@@ -257,13 +257,13 @@ impl Network {
 }
 
 /// A layer's accumulated gradients.
-struct LayerGradient {
-    weights: Vec<f64>,
-    biases: Vec<f64>,
+pub(crate) struct LayerGradient {
+    pub(crate) weights: Vec<f64>,
+    pub(crate) biases: Vec<f64>,
 }
 
 impl LayerGradient {
-    fn new(layer: &Layer) -> LayerGradient {
+    pub(crate) fn new(layer: &Layer) -> LayerGradient {
         LayerGradient {
             weights: vec![0.0; layer.weights.len()],
             biases: vec![0.0; layer.biases.len()],
@@ -272,15 +272,15 @@ impl LayerGradient {
 }
 
 /// Adam's state for one layer: a first and a second moment for every parameter.
-struct LayerState {
-    weight_moment: Vec<f64>,
-    weight_velocity: Vec<f64>,
-    bias_moment: Vec<f64>,
-    bias_velocity: Vec<f64>,
+pub(crate) struct LayerState {
+    pub(crate) weight_moment: Vec<f64>,
+    pub(crate) weight_velocity: Vec<f64>,
+    pub(crate) bias_moment: Vec<f64>,
+    pub(crate) bias_velocity: Vec<f64>,
 }
 
 impl LayerState {
-    fn new(layer: &Layer) -> LayerState {
+    pub(crate) fn new(layer: &Layer) -> LayerState {
         LayerState {
             weight_moment: vec![0.0; layer.weights.len()],
             weight_velocity: vec![0.0; layer.weights.len()],
