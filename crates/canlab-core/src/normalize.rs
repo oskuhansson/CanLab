@@ -29,6 +29,12 @@ pub fn normalize(expr: &Expr) -> Expr {
                 body: normalize(body),
                 var: *var,
             }),
+            // The body is normalised and the accent is kept: `\vec{x + y}` and
+            // `\vec{y + x}` are the same decoration of the same expression.
+            Hold::Accent { kind, body } => ExprNode::hold(Hold::Accent {
+                kind: *kind,
+                body: normalize(body),
+            }),
         },
     }
 }

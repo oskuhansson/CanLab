@@ -471,6 +471,13 @@ fn write_hold(hold: &Hold, out: &mut String) {
             out.push_str("\\, d");
             write_symbol(*var, out);
         }
+        Hold::Accent { kind, body } => {
+            out.push('\\');
+            out.push_str(kind.command());
+            out.push('{');
+            write_node(body, out, PREC_ADD);
+            out.push('}');
+        }
     }
 }
 

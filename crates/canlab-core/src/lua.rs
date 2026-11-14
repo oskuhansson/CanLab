@@ -183,6 +183,9 @@ fn write(expression: &Expr, variables: &[SymbolId], out: &mut String) -> Result<
         ExprNode::Hold(hold) => {
             let what = match &**hold {
                 crate::expr::Hold::Integral { .. } => "an unevaluated integral",
+                // An accent is a decoration of a name, and a kernel computes
+                // numbers; there is nothing to emit for `\vec{v}`.
+                crate::expr::Hold::Accent { .. } => "an accent",
             };
             Err(LuaError::Hold(what.to_string()))
         }

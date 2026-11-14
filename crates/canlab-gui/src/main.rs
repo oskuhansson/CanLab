@@ -1843,6 +1843,7 @@ fn free_symbols(expr: &Expr, out: &mut Vec<SymbolId>) {
         }
         ExprNode::Hold(hold) => match &**hold {
             Hold::Integral { body, .. } => free_symbols(body, out),
+            Hold::Accent { body, .. } => free_symbols(body, out),
         },
     }
 }

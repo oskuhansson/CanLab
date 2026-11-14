@@ -28,7 +28,7 @@ pub mod diff;
 pub mod dimension;
 pub use diff::{differentiate, differentiate_n};
 pub use eval::{INLINE_STACK, Op, Program};
-pub use expr::{Expr, ExprNode, FuncId, Hold, int, ratio, sym};
+pub use expr::{Accent, Expr, ExprNode, FuncId, Hold, int, ratio, sym};
 pub use normalize::{add, mul, normalize, pow};
 pub use number::Number;
 pub use relation::{Comparator, Relation};

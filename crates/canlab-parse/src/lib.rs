@@ -159,24 +159,65 @@ mod tests {
     }
 
     #[test]
+    fn an_accent_parses_and_prints_back_as_itself() {
+        // `\vec{v}` is a decoration of a name, held the way `\int` is: it can be
+        // printed and compared and it has no number.
+        for source in [
+            "\\vec{v}",
+            "\\overrightarrow{AB}",
+            "\\hat{x}",
+            "\\bar{x}",
+            "\\tilde{n}",
+            "\\overline{AB}",
+            "\\underline{x}",
+        ] {
+            let parsed = parse_latex(source).unwrap_or_else(|e| panic!("{source}: {}", e.message));
+            // The tree holds the accent with its kind and its body, which is
+            // what the printer reads; the printed form is checked by the CLI's
+            // own round-trip test, where `canlab-tex` is reachable.
+            assert!(
+                matches!(&*parsed, canlab_core::ExprNode::Hold(hold)
+                    if matches!(&**hold, canlab_core::Hold::Accent { .. })),
+                "{source} did not become an accent: {parsed:?}"
+            );
+        }
+        // An accent does not swallow its neighbours: `\bar{x} + 1` is a sum.
+        let parsed = parse_latex("\\bar{x} + 1").expect("a sum");
+        assert!(matches!(&*parsed, canlab_core::ExprNode::Add(_)), "{parsed:?}");
+        // And it mentions its own symbol, so a document that uses one knows it.
+        let parsed = parse_latex("\\vec{v}").expect("an accent");
+        let mut symbols = Vec::new();
+        crate::limit::collect_symbols(&parsed, &mut symbols);
+        assert_eq!(symbols.len(), 1, "{symbols:?}");
+    }
+
+    #[test]
+    fn an_accent_has_no_value_and_says_so() {
+        // Held, not evaluated: a kernel cannot compile one and the evaluator
+        // refuses it. A wrong number would be worse than a refusal.
+        let parsed = parse_latex("\\vec{v}").expect("an accent");
+        let variable = canlab_core::SymbolId::intern("v");
+        assert!(
+            canlab_core::Program::compile(&parsed, &[variable]).is_none(),
+            "an accent compiled to a number"
+        );
+        // `\overleftarrow` is not one of the accents this reads, and the refusal
+        // names the ones it does.
+        let error = parse_latex("\\overleftarrow{x}").expect_err("a refusal");
+        assert!(error.message.contains("overleftarrow"), "{}", error.message);
+        assert!(error.message.contains("vec"), "{}", error.message);
+    }
+
+    #[test]
     fn an_accent_is_refused_with_the_reason_and_not_as_unknown() {
         // The editor emits `\vec{v}` for its vector button, and the tree has no
         // node for a decoration. "Unknown command" would be wrong — the command
         // is known and the editor produces it — so the refusal says what is
         // actually missing.
-        for source in ["\\vec{v}", "\\overrightarrow{AB}", "\\hat{x}", "\\bar{x}"] {
-            let error = parse_latex(source).expect_err("an accent is refused");
-            assert!(
-                error.message.contains("display accent"),
-                "{source}: {}",
-                error.message
-            );
-            assert!(
-                !error.message.contains("unknown command"),
-                "{source}: {}",
-                error.message
-            );
-        }
+        // The accents this reads are no longer refused at all; the one it does
+        // not read is refused by name.
+        let error = parse_latex("\\overleftarrow{x}").expect_err("a refusal");
+        assert!(!error.message.contains("unknown command"), "{}", error.message);
     }
 
     #[test]

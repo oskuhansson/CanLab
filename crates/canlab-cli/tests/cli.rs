@@ -257,6 +257,24 @@ fn solve_all_reports_a_decline_with_its_reason() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn a_vector_accent_round_trips_through_the_parser_and_the_printer() {
+    // `canlab-tex` is reachable here and not in `canlab-parse`'s own tests, so
+    // this is where the round trip is checked end to end.
+    // Single symbols, because `\overrightarrow{AB}` is two symbols multiplied
+    // and the printer separates them — `\overrightarrow{A B}` — which is correct
+    // and not a round trip.
+    for source in [r"\vec{v}", r"\hat{x}", r"\bar{x}", r"\tilde{n}", r"\overline{x}"] {
+        let (ok, stdout, stderr) = canlab(&["tex", source]);
+        assert!(ok, "{source}: {stderr}");
+        assert_eq!(stdout.trim(), source, "the accent did not round-trip");
+    }
+    // And the two-symbol form keeps both symbols under the arrow.
+    let (ok, stdout, _) = canlab(&["tex", r"\overrightarrow{AB}"]);
+    assert!(ok);
+    assert!(stdout.trim().starts_with(r"\overrightarrow{"), "{stdout}");
+}
+
+#[test]
 fn ode_draws_a_closed_orbit_for_the_harmonic_oscillator() {
     // `x' = y, y' = -x` from `(1, 0)` is a circle, and one turn of it must come
     // back to where it started. The SVG is the check: one polyline, and its last

@@ -32,6 +32,61 @@ pub enum ExprNode {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Hold {
     Integral { body: Expr, var: SymbolId },
+    /// An accent: `\vec{v}`, `\hat{x}`, `\bar{z}`.
+    ///
+    /// A decoration, not a value. It belongs here and not in [`ExprNode`] for
+    /// the same reason the integral does: it can be printed and compared, and it
+    /// has no number. `\vec{v}` is a *name for a vector*, and what that vector
+    /// is comes from the document that defines it.
+    Accent { kind: Accent, body: Expr },
+}
+
+/// Which accent a [`Hold::Accent`] draws.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum Accent {
+    /// `\vec` — the short arrow.
+    Vector,
+    /// `\overrightarrow` — the long arrow.
+    LongVector,
+    /// `\hat` — a circumflex.
+    Hat,
+    /// `\bar` — a macron.
+    Bar,
+    /// `\tilde` — a tilde.
+    Tilde,
+    /// `\overline` — a rule above.
+    Overline,
+    /// `\underline` — a rule below.
+    Underline,
+}
+
+impl Accent {
+    /// The LaTeX command, without the backslash.
+    pub fn command(self) -> &'static str {
+        match self {
+            Accent::Vector => "vec",
+            Accent::LongVector => "overrightarrow",
+            Accent::Hat => "hat",
+            Accent::Bar => "bar",
+            Accent::Tilde => "tilde",
+            Accent::Overline => "overline",
+            Accent::Underline => "underline",
+        }
+    }
+
+    /// The accent a command names, if it names one.
+    pub fn from_command(name: &str) -> Option<Accent> {
+        Some(match name {
+            "vec" => Accent::Vector,
+            "overrightarrow" => Accent::LongVector,
+            "hat" | "widehat" => Accent::Hat,
+            "bar" => Accent::Bar,
+            "tilde" | "widetilde" => Accent::Tilde,
+            "overline" => Accent::Overline,
+            "underline" => Accent::Underline,
+            _ => return None,
+        })
+    }
 }
 
 impl ExprNode {
@@ -210,6 +265,11 @@ fn write_node(node: &ExprNode, f: &mut fmt::Formatter<'_>, min_prec: u8) -> fmt:
                 write!(f, "Integral(")?;
                 write_node(body, f, PREC_ADD)?;
                 write!(f, ", {var})")?;
+            }
+            Hold::Accent { kind, body } => {
+                write!(f, "Accent({}, ", kind.command())?;
+                write_node(body, f, PREC_ADD)?;
+                write!(f, ")")?;
             }
         },
     }

@@ -556,6 +556,13 @@ fn write_expr(e: &Expr, out: &mut String) {
                 out.push_str(&quote(&var.as_str()));
                 out.push_str("}}");
             }
+            Hold::Accent { kind, body } => {
+                out.push_str("{\"Accent\":{\"kind\":");
+                out.push_str(&quote(kind.command()));
+                out.push_str(",\"body\":");
+                write_expr(body, out);
+                out.push_str("}}");
+            }
         },
     }
 }

@@ -54,6 +54,9 @@ fn collect(expression: &Expr, out: &mut BTreeSet<SymbolId>) {
                 collect(body, out);
                 out.insert(*var);
             }
+            // An accent's body is an expression, so its symbols are the
+            // document's symbols: `\vec{v}` mentions `v`.
+            canlab_core::Hold::Accent { body, .. } => collect(body, out),
         },
     }
 }

@@ -822,6 +822,17 @@ pub(crate) fn collect_symbols(expression: &Expr, out: &mut Vec<SymbolId>) {
                 collect_symbols(argument, out);
             }
         }
+        // A held construct still mentions its symbols: `\vec{v}` mentions `v`,
+        // and a document that uses one has to know that. The first version
+        // skipped every `Hold`, so a vector's name was invisible to the caller —
+        // caught by the accent test.
+        ExprNode::Hold(hold) => match &**hold {
+            canlab_core::Hold::Integral { body, var } => {
+                collect_symbols(body, out);
+                out.push(*var);
+            }
+            canlab_core::Hold::Accent { body, .. } => collect_symbols(body, out),
+        },
         _ => {}
     }
 }

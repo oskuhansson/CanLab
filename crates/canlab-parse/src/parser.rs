@@ -980,12 +980,18 @@ impl Parser {
             // node for one, so `\vec{v}` cannot be read. Saying "unknown
             // command" would be wrong — the command is known and the editor
             // emits it — so the refusal names the actual reason.
-            "vec" | "overrightarrow" | "overleftarrow" | "bar" | "overline" | "underline"
-            | "hat" | "widehat" | "tilde" | "widetilde" => Err(ParseError::new(
-                format!(
-                    "`\\{name}` is a display accent, and the expression tree has no node for one; \
-                     the letter inside it is read as itself"
-                ),
+            // An accent is a decoration, not a value: it is held, printed and
+            // compared, and it has no number — the same treatment `\int` gets.
+            _ if canlab_core::Accent::from_command(name).is_some() => {
+                let kind = canlab_core::Accent::from_command(name).expect("checked");
+                // The argument is one atom: `\vec{v}` is the letter, and
+                // `\vec{v} + w` is the letter plus `w`.
+                let body = self.parse_prefix()?;
+                Ok(ExprNode::hold(canlab_core::Hold::Accent { kind, body }))
+            }
+            "overleftarrow" => Err(ParseError::new(
+                "`\\overleftarrow` is a display accent this does not read; \
+                 `\\vec` and `\\overrightarrow` are the ones it does",
                 pos,
             )),
             _ => Err(ParseError::new(format!("unknown command `\\{name}`"), pos)),
