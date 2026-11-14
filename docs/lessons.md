@@ -418,4 +418,180 @@ the same each time: a picture, a number, a sentence or a screen that is wrong
 without being broken. The lesson is the *thought* — the neighbour, the refusal,
 the default, the screen — not the code that followed it.
 
+## A study that measured nothing and told a story
 
+**What happened.** The first run of the muon sweep (`muon_study`) printed a
+complete table: a vertical muon got zero detected photons at every geometry,
+zero of the four sensors were timed, and 96–98 % of the light was "trapped". It
+was read as a physics result about geometry and led to a test file, a doc
+comment and a design conclusion. The event's own accounting line —
+`born 391 detected 0 lost 0 absorbed 0 trapped 0 (accounted 0)` — says the truth
+that the percentages hid: not one photon was ever followed.
+
+**Why the code did it.** Four independent mistakes, each of which made the event
+quieter rather than broken:
+
+* `Block::contains` asked for a strictly negative signed distance, so a point on
+  a face was outside the block; a muon whose path began on an end face had its
+  whole path rejected.
+* The same tolerance made `contains` false for a point a nanometre *inside* a
+  face, so even a clipped path's birth points were refused.
+* Clipping a path that starts inside the block walked *forward* for the end and
+  found the start, collapsing the stretch to zero.
+* The bottom face's plane was at `z = +thickness/2`, so a downward photon had no
+  exit and was reported as absorbed.
+
+**Why no test caught it.** Every test asked whether the function *returned*
+something. `simulate` returned an `Event` with a photon count and
+`Ok`; the count was large and the fate was "absorbed", and neither is a failure
+to a test that does not ask for the accounting identity. The study printed
+percentages of a total, and a percentage of zero is a number.
+
+**What changed.** `simulate` refuses an event whose clip is empty, and
+`every_photon_of_a_crossing_is_accounted_for` asserts
+`detected + lost + absorbed + trapped + missed == photons_born` on a vertical, a
+horizontal and a long crossing. `muon_study`'s header records that the first
+table was wrong and why. The general rule, learned twice now: **a count of zero
+is a deliverable answer, so a test must assert a count, not a shape** — and a
+study that reports percentages must also report the total they are percentages
+of, in the same line, so a zero total cannot pass for a zero rate.
+
+## A tree that had already forgotten what was typed
+
+**What happened.** Reading `\int_0^1 x^2 dx` with the expression the parser had
+built gave `x³` as the integrand, and integrating `x³` from 0 to 2 gave **20**
+where the answer is **8/3**. The first version integrated *with respect to `d`*,
+because it took the last factor of `d·x` as the differential. Every one of these
+is a refusal-shaped bug that returned a number instead.
+
+**Why the code did it.** An `Expr` product is canonical: `normalize::mul` puts
+its factors in a `BTreeMap` keyed by the factor's own ordering and merges
+identical bases into powers. `x · x² · d` *is* `x³ · d` once it has been built,
+and there is no tree in which the `x` that `dx` named is still a separate factor
+to find. The reader was looking for information in a structure that had already
+thrown it away.
+
+**Why no test caught it.** The tests asked whether an integral returned a
+number. `20` is a number. The first test that asked for `8/3` and `8` — values
+from the exam, not from the code — failed immediately.
+
+**What changed.** The differential is cut out of the **token stream** before the
+integrand is parsed; the tokens are the last place the input still looks like
+what the writer typed. The lesson is not "test integrals": it is that
+**canonicalisation is a lossy step, and anything read back out of a canonical
+form must be something the canonical form is *designed* to keep.** If a syntax
+needs to know what was written, it has to look before normalization runs.
+
+## The frame test that was never written
+
+**What happened.** Five snapshot tests were skipped off Windows with a written
+reason: the reference frames were rendered on Windows, and on a machine without
+Segoe UI Symbol the frames differ in `θ`, `∅`, `≠`, `≅`, `∥` and `⋯`. The reason
+was correct. It was also the only thing standing between the project and a test
+that would have said whether those glyphs *drew* — and nothing checked that.
+
+**Why the gap survived.** The skip was written as a report about fonts, and a
+report about fonts is not a test about fonts. The sentence "the test that would
+let them run everywhere is still unwritten" sat in a comment for a session, and
+comments do not fail.
+
+**What changed.** Two tests, both asking the font system instead of comparing
+pixels: one about every non-ASCII character the app's printer produces, one about
+the strings a real frame prints. Writing the second found `→` — printed by a
+result panel and absent from the font at body size — which no hand-written glyph
+list would have included. The font fallback gained Linux paths, so the fallback
+does something on the machine that builds the frames.
+
+**The rule.** A skipped test is a decision, and a decision needs a test behind
+it that still runs. "This cannot be checked here" is only honest when something
+*is* checked here, and the thing to check is usually not the same test in a
+different place — it is a different question with the same subject.
+
+## An answer that depended on what else the program had read
+
+**What happened.** `canlab solve-all '\tan x'` printed `\pi k` in one run and
+`k \pi` in another. The corpus row `tan-one-family` expects `\pi k`, and it
+started failing; three tests in `canlab-solver::trig` passed alone and failed in
+the suite. Nothing in the trig code had changed.
+
+**Why the code did it.** `normalize::mul` sorts a product's factors in a
+`BTreeMap` keyed by `Expr`, and `Expr`'s ordering ends at `SymbolId`, which
+derived `Ord` from its slot — the order names happened to be interned in. The
+interner is process-global, so the printed form of `2πk` was a function of which
+expressions the process had seen first. `Ord` was a fact about the process's
+history, and the printer read it as a fact about the mathematics.
+
+**Why no test caught it.** No test had ever interned a name it cared about in a
+new order; the suite's own ordering happened to be the flattering one. The bug
+was found by *writing a test that interned `k` before `pi`* — a state nobody had
+produced before.
+
+**What changed.** `SymbolId` orders by name. Then the two families had to be
+printed deliberately rather than by accident: a period is `2k \pi` when it has
+a numeric coefficient and `\pi k` when it has none, and `period_latex` now says
+so instead of delegating that decision to the product's sort. A symbol's
+identity is its name; a display form is a decision, not a consequence of a sort.
+
+## A limit that answered a different question
+
+**What happened.** `\lim_{x\to 0} (1−cos x)/x²` printed `0`. The true limit is
+`½`. The same session produced `\lim_{x\to\infty} 3x²/2x² = 0`, which is also
+wrong, and both were *numbers* — not refusals, not errors.
+
+**Why the code did it.** Three separate ordering mistakes, each invisible on its
+own:
+
+* Substitution ran first and did not ask whether the expression was defined at
+  the point. `1 − cos 0` is `0`, and a numerator that vanishes looks like an
+  answer.
+* The quotient splitter assumed the reciprocal was the *last* factor of the
+  canonical product. It is sorted, so `(3x²+1)/(2x²−5)` arrives with the
+  reciprocal first, and the splitter returned the denominator as the numerator.
+* The `(1−cos u)/u²` matcher looked for a bare `cos u`, but the canonical form
+  keeps the coefficient: `1 − cos x` is `1 + (−1)·cos x`.
+
+**Why no test caught it.** The first version of the test asked for
+`sin x/x = 1`, which the *standard-limit* matcher answers by a different route,
+and it passed. The two cases that were broken were added later, and each failed
+the first time it ran.
+
+**What changed.** Substitution is gated on the denominator not vanishing;
+`split_quotient` collects factors on both sides of the reciprocal; a function
+term may carry a numeric coefficient. The lesson is the one this project keeps
+re-learning: **a canonical form is a contract about what is kept, and every
+reader has to be written against that contract and not against the shape the
+author had in mind.** The author's shape was the one they typed.
+
+## The integral that answered with the wrong sign
+
+`\int_1^2 \frac{1}{x^2} dx` is `1/2`. It answered `-1/2`, then `1`, then
+`Float(2.0)` on three successive attempts, and every one of those was caught by a
+test I wrote *after* the first wrong answer rather than by the suite that already
+existed — because no test asserted this integral at all. `\int_1^2 x^{-2} dx`
+was in the module's own doc comment as the example of exactness, and nothing
+checked it.
+
+Four separate errors stacked in one function:
+
+1. `exact_power_span` refused `power <= 0`, so every reciprocal went to the
+   numeric path and an exact `1/2` came back as `Float(0.5)` with a bound. The
+   bound was the tell — an exact answer wearing an error bar.
+2. `\frac{1}{x^2}` parses to `(x^2)^{-1}`, and the canonicaliser deliberately
+   does not flatten that to `x^{-2}` (because `(x²)^{-1/2}` is `1/|x|`). The
+   integral had to do the flattening itself, where the interval is known to
+   exclude zero.
+3. The span was computed as `b^n − a^n` where the antiderivative is
+   `x^{n+1}/(n+1)`, so the `+1` was applied twice — once by the caller and once
+   by the span function. Three callers used three different conventions.
+4. For a negative exponent the span multiplied out `b^m` and `a^m` and never
+   inverted them.
+
+The lesson is the one this file keeps repeating in new clothes: **a doc comment
+that names an example is not a test**. `\int_1^2 x^{-2} dx` appeared in the
+header of `exact_power_span` as the case the function existed for, and the
+function was wrong about it in four ways at once. When a comment says "for
+example, `X`", the test suite should contain `X`.
+
+The reviewer found this by reading the doc comment against the code, not by
+running anything. That is the second time a doc-vs-code mismatch has been the
+thing that surfaced a wrong number.

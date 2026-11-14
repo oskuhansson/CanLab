@@ -1,10 +1,9 @@
-# A definite integral that is correct and fails today, for the same reason as
-# the format's example: W3.1 owns `\int_a^b`. The row records the gap honestly
-# instead of pretending the capability exists.
+# A definite integral, end to end: the field holds it as one statement, the
+# parser evaluates it, and the answer is checked against the exam's.
 id = "2024-kevat-N-1-2"
 subject = "math"
 capability = "calc.definite-integral"
 source = "https://svenska-content.ylestatic.fi/abimix/2024/var/N_sv/ — 2024, uppgift 1.2"
 document = '\int_{0}^{2} 3x^2 dx'
 expect.exact = "8"
-note = "∫₀² 3x² dx = 8. Needs W3.1; the field refuses the integral with `\\int has no expression form` until then, so the row fails rather than claiming coverage."
+note = "∫₀² 3x² dx = 8. The field holds a finished calculus statement as one node and hands it to `canlab-parse`, which evaluates it; this row passes through the whole pipeline." 

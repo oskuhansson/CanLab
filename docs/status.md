@@ -6,35 +6,89 @@ something; where something is not verified, it says so.
 
 ## The plan
 
-Ticked in `docs/roadmap-v2-plan.md`: **W0** (Bevy stack, headless snapshots,
-evaluator perf, bench, corpus runner), **W2.1** (the answer type, including
-`Union` and `Approximation`), **W2.1b** (every kind renders in the panel),
-**W2.2–W2.7**.
+Everything in `docs/roadmap-v2-plan.md` through **W3** is written and green, plus
+**W14** (the CanSat light transport) and the snapshot-portability test that
+`docs/lessons.md` had been asking for. The table below is what landed in the
+last sessions, each row with the evidence behind it; the roadmap's own rows
+carry the same claims in more detail.
 
-Open, with their design decisions already written down:
-
-| Item | Note | Next step |
+| Item | Where | What it does |
 |---|---|---|
-| W2.8 nonlinear systems | `docs/w2.8-nonlinear.md`, and the code in `stash@{0}` | **Half-built and stashed, not merged.** `SystemAnswer { None, All, Points, Family }` and `solve_nonlinear` exist and type-check; the search finds the right resultants for circle ∩ line and circle ∩ circle, and five of its eleven tests still fail. Do not un-stash expecting green. |
-| W3 calculus | plan row | The two failing corpus rows (`2024-kevat-N-1-2`, `2025-kevat-M-1-5`) are definite integrals waiting for this. They fail honestly. |
-| W2.1 leftover | `json.rs` | The union JSON decoder is deliberately absent; encoding without decoding is documented. |
-| Snapshot portability | `docs/lessons.md` lesson 10 | A test that no rendered glyph is tofu. The gate in `snapshot.rs` is the evidence that it is needed; the test itself is still unwritten. |
-| **W14 CanSat light transport** | plan section W14, and below | `canlab-optics` now does a full single-photon trace (`block`, `fresnel`, `transport`), with a fixture the simulation is checked against. **Missing:** the muon source that births photons along the cone, the SiPM model, and the event histogram. The C++/Rust simulation that consumes the fixture is specified in `can-sat/sim/muon/README.md` but not written. |
+| W2.1 + leftover | `crates/canlab-solver/src/solutions.rs`, `json.rs` | The answer type with `Union`, `Approximation` and `Rejected`; every kind round-trips through JSON, unions are depth-bounded, a residual must be finite. |
+| W2.4 rejected roots | `solutions.rs`, `native.rs` | `log₂x + log₂(x−2) = 3` answers `{4}` **and** names `−2` as rejected with the reason. `to_latex` prints the set; `rejections_latex` prints the working. |
+| W2.8 nonlinear systems | `crates/canlab-solver/src/nonlinear.rs` | `SystemAnswer { None, All, Points }` and `solve_nonlinear`: circle ∩ line, circle ∩ circle (`±√15/2`), circle ∩ parabola, `None` for a miss, a decline for three unknowns. Every point checked against all equations. The panel renders one line per point. |
+| W3.1 definite integrals | `crates/canlab-parse/src/integral.rs` | `\int_0^2 3x^2 dx = 8` exactly, `e^{-x²}` numerically, a pole refused. The field holds a finished calculus statement as one `Node::Raw` and hands it to the parser, so the two corpus rows pass. |
+| W3.2 limits | `crates/canlab-parse/src/limit.rs` | `sin x/x → 1`, `(1−cos x)/x² → ½`, `0/0` by cancellation, `∞/∞` by degree, one-sided `∓∞`, a jump reported as "does not exist" with both sides. |
+| W3.3 tangents and extrema | `crates/canlab-parse/src/calculus.rs`, `canlab sign` | `tangent`, `normal`, `extrema` including endpoints, `sign_table` with a touching zero of `f'` found, and the table shaded in the SVG. |
+| W3.4 volumes and areas | `crates/canlab-parse/src/figure.rs` | `\vol` (discs and shells) and `\area` split at crossings: a sphere gives `32π/3`, a cone `2π/3`, swapping the curves does not change the area. |
+| W8.3 surface nets | `crates/canlab-scene/src/implicit.rs` | `mesh_implicit` for `f(x,y,z) = 0`, with analytic normals from the gradient. A sphere's vertices are within one cell of the surface; an empty region is an empty mesh, not an error. **Not closed where the surface meets the grid boundary** — stated, not hidden. |
+| W8.1 the scene crate | `crates/canlab-scene` | A pure orbit camera, perspective projection, frustum test, `fit` and a painter's-algorithm sort — no GPU, no window, no dependencies. A point behind the camera has no projection rather than a mirrored one. |
+| W7.3 compile plumbing | `crates/canlab-solver/src/kernel.rs`, `canlab compile` | `compile_expression`, `compile_lua`, `Artefact`, `Refusal` (naming the stage), an in-memory `KernelCache` whose key is a digest **and** the exact source, and a 200-program `sweep`. `canlab compile` prints the Lua and the WGSL; `canlab compile-sweep` reports the numbers. **Nothing executes WGSL or Lua**, and the sweep says so on its own output. |
+| W7.2 Lua subset → WGSL | `crates/canlab-core/src/wgsl.rs` | A tokenizer, a parser for the subset and a WGSL emitter. Seven constructs outside the subset are refused with the construct named and the line. **The differential test is not run** — it needs the W7.3 plumbing to execute a kernel. |
+| W7.1 Expr → Lua | `crates/canlab-core/src/lua.rs` | The printer, with named refusals for a `Hold`, an unsupported function and a free symbol. The emitted text agrees with `Program::eval` to `1e-10` through an independent evaluator in the test. **`mlua` is not available** (no network, no vendored Lua), so the roadmap's `mlua` check is unrun. |
+| W15.2 dimension checks | `crates/canlab-core/src/dimension.rs` | `dimensions`, `check_equality`, `unit_of` and `solve_with_units`. `N = kg·m/s²` is consistent, `3 m + 2 s` is refused naming both dimensions, and a solved velocity carries `m/s`. A unit is a symbol whose name parses as one, which is stated. |
+| W15.3 significant figures | `crates/canlab-core/src/sigfig.rs` | `Precision` and `Measured` with the school rules: a product takes the fewer figures, a sum the fewer decimal places, an exact count limits nothing. `1.2 × 3.45 = 4.1`, `1.2 + 3.45 = 4.7`. Rounding is half-up because that is what an exam marks. |
+| W15.1 units | `crates/canlab-core/src/quantity.rs` | `Unit` (exponents plus a scale) and `Quantity` with unit algebra, SI prefixes and conversion. `kg·m/s²` reduces to `N`; `m + s` is refused naming both dimensions; `1 km + 500 m = 1.5 km` exactly. |
+| W6.4 physics scenarios | `crates/canlab-ode/tests/scenarios.rs` | Air (drag against `tanh`), sound (speed of sound and Doppler), water (wave equation against d'Alembert and its energy). A companion test runs the wrong drag sign and asserts the check fails. |
+| W6.3 ODE plotting | `crates/canlab-ode/src/plot.rs` | `trace_curve`, `phase_curve` and `component_curve` as `canlab_plot::Curve`. A blow-up is split into segments by a median-step threshold; a non-finite point ends a segment. |
+| W6.2 ODE front end | `crates/canlab-ode/src/system.rs` | `OdeSystem`, `rk4_system`, `dopri_system` and `parse_system` for `y' = …` / `y(0) = …` lines. `y' = y` reproduces `eᵗ`, three unknowns trace a circle, and `y' = 1 + y'` is refused. The CLI and GUI do not call it yet. |
+| W6.1 ODE crate | `crates/canlab-ode` | Euler, RK4, Dormand–Prince 5(4) with dense Hermite output, symplectic Euler, velocity Verlet, `Trace` and `first_event`. Orders measured, not claimed; the oscillator's energy is conserved to `1e-6` with Verlet. |
+| W5.3 statistics | `crates/canlab-num/src/stats.rs` | `mean`, `median`, both variances, both standard deviations, and `least_squares` with its correlation. `y = 2x + 1` is recovered exactly; the one-pass variance agrees with the two-pass form on exact data. |
+| W5.2 distributions | `crates/canlab-num/src/distribution.rs` | `erf`, `normal_cdf`, `normal_quantile`, and a `Binomial` with pmf/cdf/moments/quantile. `Φ(0) = 0.5` exactly, `Φ⁻¹(0.975) = 1.96`, the binomial sums to 1, and `P(X ≤ k) ≥ 0.9` for `n = 20, p = ½` is `k = 13`. |
+| W5.1 combinatorics | `crates/canlab-solver/src/combinatorics.rs` | `factorial`, `binomial`, `permutations` exact through `33!`; Pascal's identity and the symmetry checked; `C(60,30)` exact by the product formula. |
+| W4.1 the value type | `crates/canlab-solver/src/value.rs` | `Value { Scalar, Vector, Matrix, Complex }` with arithmetic, LaTeX printing and a parser path for `[[1,2],[3,4]]` and `(1,2,3)`. Every kind round-trips through its own LaTeX; broadcasting is refused. |
+| W4.2 linear algebra | `crates/canlab-solver/src/linalg.rs` | `determinant`, `rank`, `inverse`, `eigenvalues` (2×2 and 3×3, exact where exact) and `solve_linear` on the existing elimination. `A·A⁻¹ = I` exactly for 200 integer matrices. |
+| W4.3 vector geometry | `crates/canlab-solver/src/geometry.rs` | `dot`, `cross`, `norm`, `angle`, `projection`, point-to-line and point-to-plane distances, and two-plane intersection. Exact throughout: `(1,2,2)` has norm `3`, `(1,0,0)` and `(1,1,0)` are at `π/4`, and `1/√2` is recognised as `π/4` rather than left as `arccos`. |
+| W4.4 complex numbers | `crates/canlab-solver/src/complex.rs` | `Complex { re, im }` as exact `Expr` pairs: `(1+i)⁴ = −4`, `z·z̄ = \|z\|²`, `arg` exact on the axes and diagonals, `roots_of_unity`. The solver answers `x² + 1 = 0` with `{i, −i}` and `x² + 2x + 5 = 0` with `{−1 ± 2i}`. |
+| W14 CanSat light transport | `crates/canlab-optics` | Transport, SiPM model, Cherenkov source, closed-form validation, and a picosecond time base whose histogram recovers a known delay exactly. `muon_study --waveform` prints a table, a text histogram and an SVG. |
+| Snapshot portability | `crates/canlab-gui/src/snapshot.rs` | Two tests ask the font system whether every character the app prints has a glyph; the frame test found `→` missing and the Linux font paths absent. |
+
+**What is not done**, stated rather than implied:
+
+- **W4–W15 are built and tested, but none of them is wired to a user.** The
+  value type, combinatorics, distributions, statistics, the ODE crate, units,
+  significant figures, the Lua and WGSL printers and the 3D scene all have
+  tests; the CLI and the GUI expose almost none of it. `canlab compile` is the
+  one exception. This line used to say "W4 onwards … are untouched", which
+  contradicted the table above it — the table was right and the line was stale.
+- **Nothing executes WGSL or Lua.** `mlua` is not a dependency (no network, no
+  vendored Lua), so the W7.1 `mlua` check is unrun, and the W7.3 sweep compares
+  the CPU's `f64` against an `f32` *replay* of the emitter's arithmetic. There is
+  no measured CPU/GPU difference anywhere in this tree.
+- **The 3D scene has no viewport.** `canlab-scene` computes a camera and a mesh;
+  the GUI draws neither.
+- **Surface nets at the grid boundary are not closed.** An interior grid is a
+  proper surface net; where the surface reaches the box's own face a few quads
+  share only a corner, so a sphere touching its box can look pinched. It is
+  drawn, finite and within one cell of the surface, but not closed.
+- **The kernel cache is in memory only**, not under `%LOCALAPPDATA%`.
+- The SiPM model has no dark counts and no per-wavelength PDE curve; both need a
+  real part number before they are worth inventing.
+- The nonlinear solver's resultant is built exactly but its roots are found
+  numerically.
+- The sign table is rendered by `canlab sign`, not inside the GUI.
 
 ## Test counts, last run
 
-`cargo test --offline -j 2` on the committed tree: **943 passed, 0 failed, 5
+`cargo test --offline -j 2` on the working tree: **1212 passed, 0 failed, 5
 ignored.** The five ignored are the snapshot frames, and they are ignored
 because this machine is not the one they were rendered on (see below).
 
 | Suite | Count |
 |---|---|
-| `canlab-solver` | 145 |
-| `canlab-gui` | 120 + 5 ignored |
+| `canlab-solver` | 158 |
+| `canlab-gui` | 123 + 5 ignored |
 | `canlab-cli` | 5 + 13 + 10 |
-| `canlab-optics` (new) | 22 + 14 + 9 |
+| `canlab-core` | 50 + 1 + 6 + 10 |
+| `canlab-parse` | 95 |
+| `canlab-optics` | 75 + 14 + 9 + 5 + 4 + 3 + 1 + 1 |
+| `canlab-input` | 10 + 3 + 2 + 23 + 8 + 102 + 4 + 4 |
+| `canlab-plot` | 54 + 9 |
 | `canlab-poly` | 16 + 10 |
-| Corpus | 10 of 10 rows the runner selects |
+| `canlab-tex` | 43 |
+| `canlab-num` | 31 |
+| `canlab-corpus` | 79 |
+| Corpus | 15 of 15 rows |
 
 ## What changed this session, and why
 
@@ -64,9 +118,12 @@ the frames are pixel-identical *except* in the glyphs Windows has and DejaVu doe
 not (`θ`, `∅`, `≠`, `≅`, `∥`, `⋯`). `snapshot.rs` records that, the tests carry
 `#[cfg_attr(not(windows), ignore = ...)]`, and `scripts/remote.ps1 snapshots`
 passes `--include-ignored` so the Linux build server still renders them. The
-test that would let them run everywhere is story 10 of `docs/lessons.md`.
+test that story 10 of `docs/lessons.md` asked for now exists — two glyph-coverage
+tests in `snapshot.rs` — and it found a missing `→` and the absent Linux font
+paths; the pixel snapshots still skip off Windows because DejaVu's outlines are
+not Segoe's, which is a difference in shape and not in coverage.
 
-**`canlab-optics`, the start of W14.** Four modules, 44 tests:
+**`canlab-optics`, the start of W14.** Seven modules, 112 tests:
 
 - `vec3` — reflection, plane intersection, unit directions, and the
   starting-plane tolerance that stops a bouncing photon hitting its own wall
@@ -89,6 +146,65 @@ test that would let them run everywhere is story 10 of `docs/lessons.md`.
   sign errors and two never-exit bugs were caught that way, and the fixture in
   `can-sat/sim/muon/events.json` is what stops the C++ simulation from drifting
   from them.
+
+**W14.1's verification, and the seven bugs it raised.** A new test file,
+`crates/canlab-optics/tests/transport_validation.rs`, checks the *composition*
+against numbers from outside the crate: a million sampled Fresnel splits must
+conserve energy, a bounced photon's path must be longer than its chord while its
+time is the chord's, transmission must bracket `e^{−d/ℓ}`, the cone's blue and
+red ends must arrive picoseconds apart, and every photon of a crossing must be
+accounted for exactly once. Writing it found:
+
+1. **The vertical-muon study was measuring an empty event.** `Block::contains`
+   asked for a strictly negative signed distance, so a muon whose path began on
+   an end face had its whole path rejected and the event reported zero photons.
+   `contains` now counts the surface (within `SURFACE_MM`); `strictly_contains`
+   is the material test, and the transport is the one that wants it.
+2. **A `contains` that rejected "inside by a nanometre".** The same tolerance
+   made `contains` false for a point just inside a face, so
+   `Transport::trace` refused the birth points of a crossing entirely.
+3. **The clip collapsed an entering muon's path to nothing.** Walking the path
+   forward to find its end is only right when the start is outside; a muon that
+   enters the block and leaves it exited at the first sample, i.e. at once.
+4. **The bottom face was at `z = +thickness/2`.** The `−z` plane's offset is
+   `+half`, not `−half`. Every downward photon found no exit and was reported as
+   absorbed, which is where the first study's "trapped 96 %" came from.
+5. **A photon bounced on one square nanometre of the same face.** After a
+   reflection the photon is nudged back inside and the next exit is the face it
+   just left, at the nudge's distance. `Block::exit_where` takes a face filter,
+   the transport excludes the face it just reflected off, and the reflection
+   nudge is 0.01 mm (four orders above the surface tolerance) along the face
+   normal and not along the new heading.
+6. **A reflection at normal incidence landed outside the block.** The old nudge
+   was a nanometre along the new heading; at normal incidence that heading
+   points straight back out.
+7. **`survival` and a constant draw of 1.0.** Absorption is `draw > exp(−d/ℓ)`,
+   so a test that passes a constant 1.0 absorbs the photon at its first step.
+   `NO_REFLECTION` is 1.0 and works only with `>`; the two are one decision and
+   the comment says so.
+
+**W14.3, the time base.** `crates/canlab-optics/src/timebase.rs` — `TimeBase`
+(1 ps bins over a nanosecond by default, and any window that is not a `NaN`),
+`Histogram` (every time counted as binned, underflow, overflow or not-a-number,
+so the bin counts can be checked against the photon total), `Waveforms` (the
+four sensors and their sum) and `Histogram::curve` (a `canlab_plot::Curve`, so
+the waveform is drawn by the plot crate rather than by a second renderer).
+`tests/waveform.rs` checks it on *simulated* photons: the bins of twenty events
+sum to the photons they detected, a known delay added to the timestamps is
+recovered as exactly that many bins (including a negative one, which needs a
+window that starts early), and the jitter's own standard deviation is 100 ps
+where the sensor says 100 ps. `muon_study --waveform` prints one event as a
+table, a text histogram and an SVG.
+
+The bin index is `floor((t − start)/w)` after rounding the offset to a
+millionth, because `0.3/0.1` is `2.9999999999999996` and a time on a bin edge
+would otherwise land a bin low — the bug that a delayed-waveform test exists to
+find, found in the module's own first test.
+
+The study table in `muon_study` now says what the detector does — an across
+muon reaches a sensor about half the time, a vertical one less often, and the
+loss is dominated by the sensors covering 15 % of their faces — where before it
+said "zero photons, zero detected, 96 % trapped" at every geometry.
 
 ## The build server
 
@@ -113,9 +229,17 @@ On Linux, which is where this session ran:
 
 ```sh
 cargo test --offline -j 2                       # whole workspace, ~80 s
-cargo test -p canlab-optics --offline           # the new crate, <1 s
+cargo test -p canlab-optics --offline           # the optics crate, <1 s
 cargo run -p canlab-cli --offline -- solve-all 'x^4 - x - 1'
+cargo run -p canlab-cli --offline -- corpus run # 15 of 15 rows
+cargo run -p canlab-cli --offline -- eval '\int_0^2 3x^2 dx'   # 8
+cargo run -p canlab-cli --offline -- sign 'x^3 - 3x^2 + 1' --xmin -1 --xmax 3
+cargo run -p canlab-optics --offline --bin muon_study -- --waveform
 ```
+
+The calculus statements (`\int`, `\lim`, `\vol`, `\area`) are read by
+`canlab-parse`, and the field holds a *finished* one as a single `Node::Raw` and
+hands it over — so the corpus goes through the same grammar the CLI does.
 
 On Windows, the project's original loop still applies:
 
@@ -154,17 +278,26 @@ A stub that returns `None` is indistinguishable from a correct refusal to every
 caller, so it hides until the tests that matter are written. Write the refusal
 test first.
 
-## The one thing waiting on a person
+## The stash
 
-Two stashes, both deliberately left:
+`stash@{0}` holds the old, half-built W2.8 from a previous session. **It is
+superseded**: W2.8 is written, tested and merged on its own terms in
+`crates/canlab-solver/src/nonlinear.rs`, and the stash's failure modes are
+answered there rather than patched:
 
-- `stash@{0}` — W2.8 nonlinear systems, mid-flight: the types, the search, the
-  resultant construction and the summarised failure modes (see below). It is not
-  green and should not be merged until it is.
-- A second stash, from the previous session, holds an LLM-agent panel built
-  without being asked: 512 lines, a 14-command protocol, a sixth panel and a
-  layout restructure. The protocol is worth keeping; the layout change should be
-  a decision, not a side effect.
+- The constant-value filter that decided a quadratic with a negative
+  discriminant: the new path never substitutes a constant into a candidate
+  before the polynomial test, because the resultant is built from polynomials
+  and its roots are found by `canlab-num`.
+- The independent acquisition of the two coordinates: the partner coordinate is
+  found by solving the *first* equation with the candidate substituted, and the
+  point is then checked against **every** original equation.
+- `nested_root_roots` for `Δ ≤ 0`: replaced by the quadratic formula in
+  `solve_for`, which returns no partner for a negative discriminant instead of
+  one.
+
+The stash can be dropped. Nothing was un-stashed to do this.
+
 
 ## W2.8's failure modes, for whoever picks it up
 
