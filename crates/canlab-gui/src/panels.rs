@@ -1558,6 +1558,24 @@ fn view_toggle(app: &mut CasApp, ui: &mut Ui, rect: Rect) {
     {
         app.view_3d = !app.view_3d;
     }
+    // Fit, beside the toggle. A reader who has zoomed into a corner needs a way
+    // back to the whole surface that does not involve guessing how far to
+    // scroll; `framing_camera` already computes the framing, so this resets to
+    // it rather than re-deriving anything.
+    if app.view_3d {
+        let fit = egui::Rect::from_min_size(
+            position + egui::vec2(40.0, 0.0),
+            egui::vec2(34.0, 20.0),
+        );
+        if ui
+            .put(fit, egui::Button::new(RichText::new("fit").size(11.0)))
+            .on_hover_text("frame the whole surface: orbit, right-drag to pan, scroll to zoom")
+            .clicked()
+        {
+            app.surface_zoom = 1.0;
+            app.surface_pan = (0.0, 0.0);
+        }
+    }
 }
 
 /// The plot's caption: what is drawn, on which axes, at which parameter values.
@@ -2870,6 +2888,60 @@ mod surface_tests {
         drag(&ctx, &mut app, egui::PointerButton::Secondary);
         assert_eq!(app.surface_angles, angles, "a right-drag orbited");
         assert_ne!(app.surface_pan, pan, "a right-drag did not pan");
+    }
+
+    #[test]
+    fn the_fit_button_returns_the_whole_surface() {
+        // A reader who has zoomed into a corner needs a way back that does not
+        // involve guessing how far to scroll.
+        let mut app = app_with("0.2*(x^2 + y^2)");
+        app.view_3d = true;
+        app.surface_zoom = 3.0;
+        app.surface_pan = (2.0, -1.0);
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(400.0, 400.0),
+            )),
+            ..Default::default()
+        };
+        // The toggle and the fit button are both drawn by `view_toggle`; a click
+        // needs the pointer over the fit button's rect and a press/release.
+        let fit = egui::pos2(8.0 + 40.0 + 17.0, 8.0 + 10.0);
+        let mut output = ctx.run_ui(raw.clone(), |ui| {
+            view_toggle(&mut app, ui, egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(400.0, 400.0),
+            ))
+        });
+        output.textures_delta.clear();
+        for pressed in [true, false] {
+            let mut events = vec![egui::Event::PointerMoved(fit)];
+            events.push(egui::Event::PointerButton {
+                pos: fit,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            });
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 400.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(raw, |ui| {
+                view_toggle(&mut app, ui, egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 400.0),
+                ))
+            });
+            output.textures_delta.clear();
+        }
+        assert_eq!(app.surface_zoom, 1.0, "fit did not reset the zoom");
+        assert_eq!(app.surface_pan, (0.0, 0.0), "fit did not reset the pan");
     }
 
     #[test]
