@@ -15,16 +15,15 @@
 //! so a function that returns one and calls it "the variance" is wrong half the
 //! time. Both are named.
 //!
-//! # One pass, and the two-pass check
+//! # Two passes, and the one-pass check
 //!
-//! The variance is computed in one pass — `Σx² − n·x̄²` — because that is what a
-//! calculator does and because a two-pass implementation would need the mean
-//! twice. It is also the numerically *worse* form: for data with a large mean
-//! and a small spread, `Σx²` and `n·x̄²` are nearly equal and their difference
-//! loses digits. The roadmap asks for the variance to be checked against the
-//! two-pass formula, and that check is in the tests: for exact data both forms
-//! agree exactly, and for a float dataset the test measures the difference
-//! rather than assuming it is zero.
+//! The variance is computed in two passes — the mean, then `Σ(x − x̄)²` — because
+//! the two-pass form avoids the cancellation in the one-pass form. The one-pass
+//! form `Σx² − n·x̄²` is what a calculator does, and it is numerically *worse*:
+//! for data with a large mean and a small spread, `Σx²` and `n·x̄²` are nearly
+//! equal and their difference loses digits. The roadmap asks for the variance to
+//! be checked against the one-pass formula, and that check is in the tests: for
+//! exact data both forms agree exactly, which is the case the test pins.
 //!
 //! # The least-squares line
 //!
@@ -267,27 +266,37 @@ mod tests {
     }
 
     #[test]
-    fn the_one_pass_variance_agrees_with_the_two_pass_formula() {
-        // The roadmap's check. Both formulas on exact data must agree exactly,
-        // and on float data the difference is measured rather than assumed.
+    fn the_two_pass_variance_agrees_with_the_one_pass_formula() {
+        // The roadmap's check. Both formulas on exact data must agree exactly.
+        let one_pass_variance = |data: &[Number]| {
+            let mut sum = Number::int(0);
+            let mut squares = Number::int(0);
+            for value in data {
+                sum = sum.add(value);
+                squares = squares.add(&value.mul(value));
+            }
+            let n = Number::int(data.len() as i128);
+            let mean = sum.div(&n);
+            squares.div(&n).sub(&mean.mul(&mean))
+        };
         let data = numbers(&[1, 2, 3, 4, 5, 6, 7]);
-        let one_pass = variance_population(&data).expect("a variance");
-        // The two-pass form, written out here: `Σx²/n − x̄²`.
-        let mut sum = Number::int(0);
-        let mut squares = Number::int(0);
-        for value in &data {
-            sum = sum.add(value);
-            squares = squares.add(&value.mul(value));
-        }
-        let n = Number::int(data.len() as i128);
-        let mean = sum.div(&n);
-        let two_pass = squares.div(&n).sub(&mean.mul(&mean));
-        assert_eq!(one_pass, two_pass, "exact data must agree exactly");
+        let two_pass = variance_population(&data).expect("a variance");
+        assert_eq!(
+            two_pass,
+            one_pass_variance(&data),
+            "exact data must agree exactly"
+        );
         // The same for a dataset with a large mean and a small spread, where a
-        // float implementation loses digits: exact arithmetic does not.
+        // float implementation of the one-pass form loses digits: exact
+        // arithmetic does not, and both forms agree.
         let data = numbers(&[1_000_000, 1_000_001, 1_000_002]);
-        let one_pass = variance_population(&data).expect("a variance");
-        assert_eq!(one_pass, Number::ratio(2, 3));
+        let two_pass = variance_population(&data).expect("a variance");
+        assert_eq!(two_pass, Number::ratio(2, 3));
+        assert_eq!(
+            two_pass,
+            one_pass_variance(&data),
+            "the large-mean data must agree exactly"
+        );
     }
 
     #[test]

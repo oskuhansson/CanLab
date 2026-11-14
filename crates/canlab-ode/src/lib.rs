@@ -20,8 +20,9 @@
 //! * **Symplectic Euler** and **velocity Verlet** — for Hamiltonian systems,
 //!   where the question is not "is the trajectory accurate" but "does the energy
 //!   stay bounded". A non-symplectic method's energy drifts linearly; a
-//!   symplectic one's oscillates. The test measures that difference, because it
-//!   is the whole reason these two methods are in the crate.
+//!   symplectic one's oscillates. The test measures that difference against RK4
+//!   on the same oscillator, because it is the whole reason these two methods
+//!   are in the crate.
 //!
 //! # Why the order is measured and not claimed
 //!
@@ -41,6 +42,7 @@
 
 use canlab_core::expr::Expr;
 
+pub mod acoustics;
 pub mod plot;
 pub mod system;
 
@@ -742,17 +744,25 @@ mod tests {
     #[test]
     fn the_energy_stays_bounded_where_a_non_symplectic_method_drifts() {
         // The reason both integrators are here. Symplectic Euler's energy
-        // oscillates; RK4's drifts. The test measures that the symplectic one's
-        // energy has *no trend*, which is the property that matters.
+        // oscillates; RK4's drifts. The test measures that difference: the
+        // symplectic method's largest deviation from the initial energy is the
+        // same in the first half of the run and the second, and RK4's is not.
+        //
+        // The step is `0.2` and the span `2000`, not the `0.01` and `200` of the
+        // first version. At `h = 0.01` over 200 time units RK4's energy decays
+        // by `2.8·10⁻¹⁰`, which is a trend but too close to the rounding to
+        // call one. At `h = 0.2` over 2000 time units RK4's largest deviation
+        // from `½` grows from `2.2·10⁻³` in the first half to `4.4·10⁻³` in the
+        // second — a factor of two, the linear drift — while symplectic Euler's
+        // stays at `5.6·10⁻²` in both halves. `hω = 0.2` is inside both
+        // methods' stability limits.
         let omega = 1.0;
-        // The force is a plain `fn` so that the closure is `Copy` and can be
-        // passed to two integrators; a `move` closure over `omega` is consumed
-        // by the first call, and the first version of this test used one and
-        // then measured the *second* call's garbage.
+        // `ω = 1`, so the force is `−q`; a plain `fn` keeps it a value rather
+        // than a closure that captures `omega`.
         fn force(q: f64) -> f64 {
             -q
         }
-        let states = symplectic_euler(force, 1.0, 0.0, 200.0, 0.01).expect("a trace");
+        let states = symplectic_euler(force, 1.0, 0.0, 2000.0, 0.2).expect("a trace");
         let initial = oscillator_energy(states[0].0, states[0].1, omega);
         let half = states.len() / 2;
         let early: f64 = states[..half]
@@ -765,8 +775,37 @@ mod tests {
             .fold(0.0, f64::max);
         // The two halves have the same maximum deviation: no drift.
         assert!(
-            (early - late).abs() < 1e-3,
-            "early {early}, late {late}: the energy is drifting"
+            (early - late).abs() < 1e-6 * early,
+            "symplectic Euler's energy is drifting: early {early}, late {late}"
+        );
+
+        // RK4 on the same oscillator, with the same step and span. The scalar
+        // `rk4` carries one state; the oscillator's `q` and `p` need the system
+        // form, which is the same fourth-order Runge–Kutta.
+        let system = crate::system::parse_system(&[
+            "q' = p".to_string(),
+            "p' = -q".to_string(),
+            "q(0) = 1".to_string(),
+            "p(0) = 0".to_string(),
+        ])
+        .expect("a system");
+        let trace = crate::system::rk4_system(&system, 0.0, 2000.0, 0.2).expect("a trace");
+        let initial = oscillator_energy(trace.points[0].y[0], trace.points[0].y[1], omega);
+        let half = trace.points.len() / 2;
+        let early: f64 = trace.points[..half]
+            .iter()
+            .map(|point| (oscillator_energy(point.y[0], point.y[1], omega) - initial).abs())
+            .fold(0.0, f64::max);
+        let late: f64 = trace.points[half..]
+            .iter()
+            .map(|point| (oscillator_energy(point.y[0], point.y[1], omega) - initial).abs())
+            .fold(0.0, f64::max);
+        // The second half's largest deviation is twice the first's: the energy
+        // is drifting, and a factor of two over the two halves is the linear
+        // trend the module doc claims.
+        assert!(
+            late > 1.5 * early,
+            "RK4's energy is not drifting: early {early}, late {late}"
         );
     }
 

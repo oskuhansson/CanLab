@@ -12,7 +12,9 @@
 //!   the terminal velocity it approaches. A sign error in the drag, or a missing
 //!   `m`, moves the answer far outside the tolerance.
 //! * **sound** — the speed of sound from the temperature, and the Doppler shift
-//!   of a moving source. Both are one-line formulas with a known value.
+//!   of a moving source. Both are one-line formulas in
+//!   [`canlab_ode::acoustics`], so the test fails when the crate's physics is
+//!   wrong and not when the test's own copy of the formula is.
 //! * **water** — the 1D wave equation, checked against d'Alembert's solution and
 //!   for energy conservation over `10⁴` steps.
 //!
@@ -27,6 +29,7 @@
 
 #[cfg(test)]
 mod tests {
+    use canlab_ode::acoustics::{doppler_observed, doppler_receding, speed_of_sound};
     use canlab_ode::{rk4, Trace};
 
     /// A projectile with quadratic drag: `v' = −g − (k/m)·v·|v|`.
@@ -105,12 +108,11 @@ mod tests {
     fn the_speed_of_sound_follows_the_temperature() {
         // `c = 331.3·√(1 + T/273.15)` m/s. At `T = 20 °C` that is `343.2 m/s`,
         // the number a textbook quotes.
-        let speed = |t: f64| 331.3 * (1.0 + t / 273.15).sqrt();
-        assert!((speed(0.0) - 331.3).abs() < 1e-9);
-        assert!((speed(20.0) - 343.2).abs() < 0.05, "{}", speed(20.0));
+        assert!((speed_of_sound(0.0) - 331.3).abs() < 1e-9);
+        assert!((speed_of_sound(20.0) - 343.2).abs() < 0.05, "{}", speed_of_sound(20.0));
         // And it rises with temperature: 10 K warmer is about 6 m/s faster.
-        assert!(speed(30.0) > speed(20.0));
-        let difference = speed(30.0) - speed(20.0);
+        assert!(speed_of_sound(30.0) > speed_of_sound(20.0));
+        let difference = speed_of_sound(30.0) - speed_of_sound(20.0);
         assert!((difference - 5.9).abs() < 0.2, "{difference}");
     }
 
@@ -119,12 +121,11 @@ mod tests {
         // A source moving towards a stationary observer: `f' = f·c/(c − v)`.
         // At `f = 440 Hz`, `c = 343 m/s`, `v = 34.3 m/s` (a tenth of the speed
         // of sound), `f' = 440·10/9 = 488.9 Hz`.
-        let observed = |f: f64, c: f64, v: f64| f * c / (c - v);
-        let shifted = observed(440.0f64, 343.0f64, 34.3f64);
+        let shifted = doppler_observed(440.0f64, 343.0f64, 34.3f64);
         assert!((shifted - 488.89).abs() < 0.01, "{shifted}");
         // Away from the observer it is lower, and the two are not symmetric:
         // `f·c/(c+v)` is `440·10/11 = 400 Hz`, not `440 − (488.9 − 440)`.
-        let receding: f64 = 440.0 * 343.0 / (343.0 + 34.3);
+        let receding = doppler_receding(440.0f64, 343.0f64, 34.3f64);
         assert!((receding - 400.0).abs() < 0.01, "{receding}");
         assert!(
             (shifted - 440.0).abs() > (receding - 440.0).abs(),

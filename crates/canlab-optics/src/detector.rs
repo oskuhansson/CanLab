@@ -3,10 +3,11 @@
 //! This is the piece the neural network will be trained on and the piece the
 //! design question is about. It has two halves:
 //!
-//! * [`SiPM`] — one sensor: a set of faces, a photon-detection efficiency, a
-//!   dark-count rate, a recovery time, and the timing resolution that comes from
-//!   the avalanche statistics. A photon that reaches one of its faces at a time
-//!   either produces a photoelectron or does not.
+//! * [`SiPM`] — one sensor: the face it reads, a photon-detection efficiency at
+//!   the band's centre, the timing jitter of one avalanche, and a microcell
+//!   count that bounds how many photons it can report in one event. A photon
+//!   that reaches one of its faces at a time either produces a photoelectron or
+//!   does not.
 //! * [`simulate`] — a muon, its Cherenkov cone, and the transport of every
 //!   photon to a sensor or to a loss. The result is one *event*: the arrival
 //!   times at each sensor. That is exactly the input a network that recovers the
@@ -34,13 +35,21 @@
 //! * **Afterpulsing and crosstalk.** Both add late or extra timestamps at the
 //!   per-mille level; they are the right thing to add once a real part number is
 //!   chosen, and the wrong thing to invent now.
+//! * **Dark counts and a per-wavelength PDE curve.** A real part has a
+//!   dark-count rate and a PDE that varies across the band; both need a real
+//!   part number, and the single mid-band `pde` is what the model has until one
+//!   is chosen. Dark counts would add photons the model does not have, so this
+//!   is the one omission that is not optimistic about the count.
 //! * **Saturation.** A sensor with `N` microcells cannot report more than `N`
-//!   photons in one event; the model reports `min(count, microcells)`, which is
-//!   the saturation that matters for a timing study and is a single line.
+//!   photons in one event; the model clamps the event's count to the smallest
+//!   microcell count among the four sensors, which is the saturation that
+//!   matters for a timing study and is a single line.
 //!
-//! Each omission is a place the model is *optimistic* about the number of
-//! photons and *neutral* about their time, and the documentation says so rather
-//! than letting a result imply more than it shows.
+//! The omissions are not all in the same direction: gain and pulse height do not
+//! change an arrival time, afterpulsing and crosstalk would add late or extra
+//! timestamps, saturation caps the count, and dark counts would add photons the
+//! model does not have. The documentation says so rather than letting a result
+//! imply more than it shows.
 
 use crate::block::Face;
 use crate::source::{self, Photon};
@@ -108,7 +117,8 @@ pub struct Event {
     pub trapped: usize,
     /// Photons absorbed in the block.
     pub absorbed: usize,
-    /// How many photons the muon produced, before any loss.
+    /// How many photons the event started with: the Poisson count the muon
+    /// produced, clamped to the microcell count, before any transport loss.
     pub photons_born: usize,
     /// Photons that were born but could not be traced: their sample was empty,
     /// or the birth point was outside the block. Every photon is counted
@@ -190,6 +200,19 @@ pub fn simulate(
     // The loop stops after the draw that crossed the line; that draw is the
     // Poisson variate.
     let count = count.saturating_sub(1);
+    // Saturation: a sensor with `N` microcells cannot report more than `N`
+    // photons in one event. The four sensors share the light, so the event's
+    // count is clamped to the smallest cell count among them. With the typical
+    // 40 000 cells and a few hundred photons this changes nothing; with a
+    // scarce sensor it is the limit the module documents. The clamp is before
+    // the trace loop, not after it, so `photons_born` and the fates still
+    // account for every photon exactly once.
+    let microcells = sensors
+        .iter()
+        .map(|sensor| sensor.microcells)
+        .min()
+        .unwrap_or(usize::MAX);
+    let count = count.min(microcells);
 
     let transport = Transport::new(*block, *optical);
     let mut event = Event {
@@ -214,10 +237,11 @@ pub fn simulate(
     // A photon is born in the material, not on its surface. The clip's start is
     // the crossing, where the signed distance is zero and the transport — which
     // asks whether a photon is *strictly* inside — refuses the trace. One
-    // micrometre in from the entry is inside the block, a thousandth of a
-    // micrometre below the block's own surface tolerance, and 10⁻⁴ of the
-    // block's thickness: it moves no photon's time by more than a femtosecond
-    // and it is what makes the first photon of a crossing exist at all.
+    // micrometre in from the entry is inside the block: it is a thousand times
+    // the block's own surface tolerance of a nanometre, not below it, and 10⁻⁴
+    // of the block's thickness. It moves no photon's time by more than a
+    // femtosecond and it is what makes the first photon of a crossing exist at
+    // all.
     let birth_start = inside + heading.scale(BIRTH_INSET_MM);
     let birth_span = (inside_length - BIRTH_INSET_MM).max(0.0);
     for photon_index in 0..count {
@@ -443,6 +467,42 @@ mod tests {
         // loses most of them, but "most" is not "all".
         assert!(detected > 0, "{event:?}");
         assert!(detected <= event.photons_born);
+    }
+
+    #[test]
+    fn a_photon_count_above_the_microcell_count_is_reported_as_the_microcell_count() {
+        // Saturation. The same muon that makes hundreds of photons with the
+        // typical 40 000 cells makes exactly `microcells` when the cells are
+        // scarce, and every photon it reports still has a fate.
+        let (block, optical, mut sensors) = setup();
+        for sensor in &mut sensors {
+            sensor.microcells = 3;
+        }
+        let expected = source::expected_photons(10.0, 1.0, optical.index).expect("a mean");
+        assert!(expected > 3.0, "the muon makes {expected} photons on average");
+        let mut uniform = Uniform(42);
+        let mut random = || uniform.next();
+        let event = simulate(
+            &block,
+            &optical,
+            &sensors,
+            Vec3::ZERO,
+            Vec3::new(1.0, 0.0, 0.0),
+            10.0,
+            1.0,
+            &mut random,
+        )
+        .expect("a muon at beta 1");
+        assert_eq!(
+            event.photons_born, 3,
+            "the count was not clamped to the microcells"
+        );
+        let accounted = event.arrivals_ps.iter().map(Vec::len).sum::<usize>()
+            + event.lost
+            + event.trapped
+            + event.absorbed
+            + event.missed;
+        assert_eq!(accounted, event.photons_born, "a clamped photon was lost");
     }
 
     #[test]
