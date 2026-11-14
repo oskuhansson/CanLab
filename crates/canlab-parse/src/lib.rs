@@ -159,6 +159,27 @@ mod tests {
     }
 
     #[test]
+    fn an_accent_is_refused_with_the_reason_and_not_as_unknown() {
+        // The editor emits `\vec{v}` for its vector button, and the tree has no
+        // node for a decoration. "Unknown command" would be wrong — the command
+        // is known and the editor produces it — so the refusal says what is
+        // actually missing.
+        for source in ["\\vec{v}", "\\overrightarrow{AB}", "\\hat{x}", "\\bar{x}"] {
+            let error = parse_latex(source).expect_err("an accent is refused");
+            assert!(
+                error.message.contains("display accent"),
+                "{source}: {}",
+                error.message
+            );
+            assert!(
+                !error.message.contains("unknown command"),
+                "{source}: {}",
+                error.message
+            );
+        }
+    }
+
+    #[test]
     fn an_approximate_integral_keeps_its_bound() {
         // The bug this entry exists for: `parse_latex` collapses a numeric
         // integral to a bare float, so the bound is gone by the time anyone

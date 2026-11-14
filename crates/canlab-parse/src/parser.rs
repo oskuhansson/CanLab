@@ -976,6 +976,18 @@ impl Parser {
             )),
             _ if is_function(name) => self.parse_function(name, pos),
             _ if is_greek(name) => Ok(ExprNode::sym(SymbolId::intern(name))),
+            // An accent is a decoration of an expression and the tree has no
+            // node for one, so `\vec{v}` cannot be read. Saying "unknown
+            // command" would be wrong — the command is known and the editor
+            // emits it — so the refusal names the actual reason.
+            "vec" | "overrightarrow" | "overleftarrow" | "bar" | "overline" | "underline"
+            | "hat" | "widehat" | "tilde" | "widetilde" => Err(ParseError::new(
+                format!(
+                    "`\\{name}` is a display accent, and the expression tree has no node for one; \
+                     the letter inside it is read as itself"
+                ),
+                pos,
+            )),
             _ => Err(ParseError::new(format!("unknown command `\\{name}`"), pos)),
         }
     }
