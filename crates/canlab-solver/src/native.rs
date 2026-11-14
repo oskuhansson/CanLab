@@ -512,7 +512,10 @@ impl Solver for NativeSolver {
         &self,
         equations: &[Expr],
         vars: &[SymbolId],
-    ) -> Result<crate::nonlinear::SystemAnswer, SolverError> {
+    ) -> Result<crate::solutions::SystemAnswer, SolverError> {
+        // The elimination answers with a `Result`: a system it cannot reduce is
+        // `NotImplemented`, which is a decline and not an empty answer — "I
+        // cannot do this" and "there is no solution" are different statements.
         crate::nonlinear::solve_nonlinear(self, equations, vars)
     }
 

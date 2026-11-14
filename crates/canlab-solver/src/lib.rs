@@ -66,7 +66,7 @@ pub mod sympy;
 pub use json::{decode, decode_array, decode_solutions, encode, encode_solutions};
 pub use mock::MockSolver;
 pub use native::NativeSolver;
-pub use solutions::{Bound, Solutions};
+pub use solutions::{Bound, Point, Solutions, SystemAnswer};
 pub use system::{solve_system, substitute, variables_of};
 pub use session::Session;
 pub use sympy::{Discovery, Interpreter, SympyWorker, discover, discovery, probe};
@@ -224,7 +224,7 @@ pub trait Solver: Send + Sync {
         &self,
         _equations: &[Expr],
         _vars: &[SymbolId],
-    ) -> Result<crate::nonlinear::SystemAnswer, SolverError> {
+    ) -> Result<SystemAnswer, SolverError> {
         Err(SolverError::NotImplemented)
     }
 }

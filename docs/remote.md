@@ -88,3 +88,28 @@ it, and each is recorded in `scripts/remote.ps1` where it bit:
 Still missing: a preflight that compares the workspace's `rust-version` with the
 server's `rustc` (the first cross-build failed on 1.96.0 vs a required 1.97.1),
 and printing a failed command's log before throwing.
+## Getting a build to your screen
+
+`scripts/canlab.ps1` is the short path from the server's artefacts to a running
+app, so nobody has to remember a target path:
+
+```powershell
+.\scripts\canlab.ps1 status    # server build (commit, time, size) and your copy
+.\scripts\canlab.ps1 get       # copy the newest build here, never start it
+.\scripts\canlab.ps1 run       # fetch if stale, then start it  (the default)
+.\scripts\canlab.ps1 build     # rebuild on the server from the pushed commit, then fetch
+```
+
+It searches the three places a build can be (`~/canlab-target`, the tarball
+checkout's `target`, and the workspace checkout's `target`) and takes the newest,
+so it does not depend on which route produced the executable. Alongside the
+executable it writes `target/remote/canlab-gui.build.json` recording the commit,
+the build time and where it came from, which is what makes "the app on screen is
+commit X" answerable later.
+
+`status` also says when the build is **behind** the checkout: a build older than
+the commit it came from is worth rebuilding, and that is a sentence, not a hash to
+interpret.
+
+Options: `-Force` copies even when the local file looks current, `-Wait` keeps the
+terminal attached to the app's output instead of detaching it.

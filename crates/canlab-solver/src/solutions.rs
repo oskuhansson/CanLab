@@ -139,6 +139,36 @@ impl Rejection {
     }
 }
 
+/// One point of a system's answer set: every unknown pinned at once.
+pub type Point = Vec<(SymbolId, Expr)>;
+
+/// What a **system** of equations answers.
+///
+/// Deliberately not a [`Solutions`]: that type describes the values of one
+/// variable. A nonlinear system meeting in two places is two *assignments*, and
+/// saying it as a set of numbers for `x` would lose which `y` goes with which
+/// `x` — the mistake a single assignment list makes when it reports one point.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SystemAnswer {
+    /// The equations contradict each other.
+    None,
+    /// Every value satisfies them (a degenerate system).
+    All,
+    /// The set of points where all the equations hold at once.
+    Points(Vec<Point>),
+}
+
+impl SystemAnswer {
+    /// `true` when the system has no solution.
+    pub fn is_empty(&self) -> bool {
+        match self {
+            SystemAnswer::None => true,
+            SystemAnswer::All => false,
+            SystemAnswer::Points(points) => points.is_empty(),
+        }
+    }
+}
+
 impl Solutions {
     /// `true` when no value of the variable solves the equation.
     ///

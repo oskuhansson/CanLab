@@ -47,37 +47,10 @@ use crate::{NativeSolver, Solver, SolverError};
 /// One point of a system's answer set: every unknown pinned at once.
 pub type Point = Vec<(SymbolId, Expr)>;
 
-/// What a system's answer is.
-///
-/// `None` and `All` are the same two words the single-variable answer uses, and
-/// `Points` is what a system with several solutions has. An empty `Points` is
-/// not a value: "no point satisfies the system" is [`SystemAnswer::None`], and
-/// the two are told apart by the type rather than by a length.
-#[derive(Debug, Clone, PartialEq)]
-pub enum SystemAnswer {
-    /// No point satisfies every equation.
-    None,
-    /// Every point satisfies every equation — the system is an identity.
-    All,
-    /// These points, and only these. Never empty.
-    Points(Vec<Point>),
-}
-
-impl SystemAnswer {
-    /// How many points the answer has; `0` for `None`, `None` for `All`.
-    pub fn count(&self) -> Option<usize> {
-        match self {
-            SystemAnswer::None => Some(0),
-            SystemAnswer::All => None,
-            SystemAnswer::Points(points) => Some(points.len()),
-        }
-    }
-
-    /// `true` for [`SystemAnswer::None`].
-    pub fn is_empty(&self) -> bool {
-        matches!(self, SystemAnswer::None)
-    }
-}
+/// Re-exported so that a caller reaching for the system answer through this
+/// module still finds it; the type itself lives in [`crate::solutions`], beside
+/// the single-variable answer it is the counterpart of.
+pub use crate::solutions::SystemAnswer;
 
 /// How close a point must be to zero in every equation to be reported.
 ///
@@ -638,7 +611,6 @@ mod tests {
         let answer = solve_nonlinear(&NativeSolver, &equations, &[x(), y()]).expect("an answer");
         assert_eq!(answer, SystemAnswer::None);
         assert!(answer.is_empty());
-        assert_eq!(answer.count(), Some(0));
     }
 
     #[test]
