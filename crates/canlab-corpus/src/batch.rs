@@ -468,9 +468,22 @@ mod tests {
 
     #[cfg(not(windows))]
     fn hanging() -> ExecCommand {
+        // `exec`, so that the shell **replaces** itself with `sleep` instead of
+        // forking it. Without it `sh -c "sleep 60"` forks: killing `sh` leaves
+        // `sleep` holding the stdout pipe open, and `reader.join()` then blocks
+        // for the rest of the sleep — so the test took 60 seconds and passed for
+        // the wrong reason. Measured: without `exec` the suite takes 60.00 s,
+        // with it 0.2 s.
+        //
+        // This is the same grandchild problem the Windows variant's comment
+        // describes, and it is a real limitation of `run_batch` and not only of
+        // this test: the deadline kills the direct child, and a grandchild that
+        // inherited the pipe keeps the reader waiting. A worker that forks would
+        // hang the batch past its deadline. Fixing that needs a process group,
+        // which is not in this change.
         ExecCommand {
             program: PathBuf::from("sh"),
-            args: vec![String::from("-c"), String::from("sleep 60")],
+            args: vec![String::from("-c"), String::from("exec sleep 60")],
         }
     }
 

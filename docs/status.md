@@ -45,16 +45,22 @@ carry the same claims in more detail.
 
 **What is not done**, stated rather than implied:
 
-- **W4–W15 are built and tested, but none of them is wired to a user.** The
+- **W4–W15 are built and tested, but almost none of it is wired to a user.** The
   value type, combinatorics, distributions, statistics, the ODE crate, units,
   significant figures, the Lua and WGSL printers and the 3D scene all have
-  tests; the CLI and the GUI expose almost none of it. `canlab compile` is the
-  one exception. This line used to say "W4 onwards … are untouched", which
-  contradicted the table above it — the table was right and the line was stale.
+  tests; the CLI and the GUI expose almost none of it. Some of it is wired:
+  `canlab compile` and `canlab compile-sweep`, `crates/canlab-optics/src/bin/muon_study.rs`
+  (W14), which prints the study and its waveform, and `solve_nonlinear` (W2.8),
+  which the GUI reaches through its `SolveSystem` job. This line used to say
+  "W4 onwards … are untouched", which contradicted the table above it — the table
+  was right and the line was stale.
 - **Nothing executes WGSL or Lua.** `mlua` is not a dependency (no network, no
   vendored Lua), so the W7.1 `mlua` check is unrun, and the W7.3 sweep compares
   the CPU's `f64` against an `f32` *replay* of the emitter's arithmetic. There is
-  no measured CPU/GPU difference anywhere in this tree.
+  no measured CPU/GPU difference anywhere in this tree. The sweep's seed-1
+  result is not a general bound: at seed 7 it reports a worst relative
+  difference of `3.88·10⁻²` and two failures, and `canlab compile-sweep --seed
+  7` exits 2.
 - **The 3D scene has no viewport.** `canlab-scene` computes a camera and a mesh;
   the GUI draws neither.
 - **Surface nets at the grid boundary are not closed.** An interior grid is a
@@ -70,24 +76,28 @@ carry the same claims in more detail.
 
 ## Test counts, last run
 
-`cargo test --offline -j 2` on the working tree: **1212 passed, 0 failed, 5
-ignored.** The five ignored are the snapshot frames, and they are ignored
-because this machine is not the one they were rendered on (see below).
+`cargo test --offline -j 2` on the tree this note describes: **1222 passed, 0
+failed, 5 ignored.** The five ignored are the snapshot frames, and they are
+ignored because this machine is not the one they were rendered on (see below).
 
 | Suite | Count |
 |---|---|
-| `canlab-solver` | 158 |
-| `canlab-gui` | 123 + 5 ignored |
-| `canlab-cli` | 5 + 13 + 10 |
-| `canlab-core` | 50 + 1 + 6 + 10 |
-| `canlab-parse` | 95 |
-| `canlab-optics` | 75 + 14 + 9 + 5 + 4 + 3 + 1 + 1 |
+| `canlab-solver` | 216 |
+| `canlab-gui` | 124 + 5 ignored |
+| `canlab-cli` | 5 + 26 + 10 |
+| `canlab-core` | 93 + 1 + 6 + 10 |
+| `canlab-parse` | 101 |
+| `canlab-optics` | 76 + 14 + 1 + 9 + 5 + 3 + 1 + 4 |
 | `canlab-input` | 10 + 3 + 2 + 23 + 8 + 102 + 4 + 4 |
 | `canlab-plot` | 54 + 9 |
 | `canlab-poly` | 16 + 10 |
+| `canlab-ode` | 26 + 8 |
+| `canlab-mathview` | 3 + 5 + 33 |
+| `canlab-scene` | 21 |
 | `canlab-tex` | 43 |
-| `canlab-num` | 31 |
+| `canlab-num` | 45 |
 | `canlab-corpus` | 79 |
+| Doc-tests | 9 (input 1, parse 3, plot 2, mathview 3) |
 | Corpus | 15 of 15 rows |
 
 ## What changed this session, and why
