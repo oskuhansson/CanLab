@@ -25,6 +25,7 @@ carry the same claims in more detail.
 | W7.2 at the roadmap's size | `crates/canlab-gpu/tests/sweep.rs` | 193 generated programs at 10³ points each — 193 000 points, 0 disagreements, 5.1 s. The tolerance is `1e-5` relative **or** absolute; the roadmap's `1e-6` relative is not reachable on cancellation-heavy programs and the measured bound is stated. |
 | W7.4 on the adapter | `crates/canlab-gpu` | The photon kernel runs on Vulkan llvmpipe from the same source the interpreter runs: 15 photons, worst relative difference `0e0`, random stream included. The generator is a `u32` xorshift because WGSL has no `u64`. |
 | W7.4 light kernel | `crates/canlab-optics/src/kernel.rs` | The photon kernel in the Lua subset: Fresnel, total internal reflection, a per-photon random stream, path length out. `compile` emits WGSL from the same text `interpret` runs, so one source has two executions. `f32` vs `f64` agree to `1e-6`; the kernel and a Rust reference agree to `1e-12`. **Nothing executes WGSL**, and the throughput figure is unmeasured. |
+| W8.3 closed | `crates/canlab-scene/src/implicit.rs` | The surface net closes: a quad's four cells all have `c[axis] == corner[axis]`, and the first version moved the holder up one. A unit sphere went from 270 boundary edges and `V − E + F = −19` to **0 and 2**. |
 | W8.3 surface nets | `crates/canlab-scene/src/implicit.rs` | `mesh_implicit` for `f(x,y,z) = 0`, with analytic normals from the gradient. A sphere's vertices are within one cell of the surface; an empty region is an empty mesh, not an error. **Not closed where the surface meets the grid boundary** — stated, not hidden. |
 | W8.1 the scene crate | `crates/canlab-scene` | A pure orbit camera, perspective projection, frustum test, `fit` and a painter's-algorithm sort — no GPU, no window, no dependencies. A point behind the camera has no projection rather than a mirrored one. |
 | W7.3 compile plumbing | `crates/canlab-solver/src/kernel.rs`, `canlab compile` | `compile_expression`, `compile_lua`, `Artefact`, `Refusal` (naming the stage), an in-memory `KernelCache` whose key is a digest **and** the exact source, and a 200-program `sweep`. `canlab compile` prints the Lua and the WGSL; `canlab compile-sweep` reports the numbers. **Nothing executes WGSL or Lua**, and the sweep says so on its own output. |
@@ -80,7 +81,7 @@ carry the same claims in more detail.
 
 ## Test counts, last run
 
-`cargo test --offline -j 2` on the tree this note describes: **1242 passed, 0
+`cargo test --offline -j 2` on the tree this note describes: **1243 passed, 0
 failed, 5 ignored.** The five ignored are the snapshot frames, and they are
 ignored because this machine is not the one they were rendered on (see below).
 
@@ -97,7 +98,7 @@ ignored because this machine is not the one they were rendered on (see below).
 | `canlab-poly` | 16 + 10 |
 | `canlab-ode` | 26 + 8 |
 | `canlab-mathview` | 3 + 5 + 33 |
-| `canlab-scene` | 21 |
+| `canlab-scene` | 22 |
 | `canlab-tex` | 43 |
 | `canlab-num` | 45 |
 | `canlab-corpus` | 79 |
