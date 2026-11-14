@@ -1,0 +1,170 @@
+---
+tags: [cansat, muon, detector, overview]
+status: aktuell
+updated: 2026-11-14
+---
+
+# The muon detector — design study
+
+*Everything the simulation knows about detecting a cosmic muon in a 115 mm × Ø66 mm
+can, and the five designs it has been used to compare. The numbers are from
+`cargo run --release -p canlab-muon --bin design_study`.*
+
+---
+
+## The headline
+
+**A direction cannot be measured from arrival times.** The whole detector's timing
+signal is 0.22 ps and the readout's jitter is 47.4 ps, so the Cramér–Rao bound on
+the heading is 81 000° — an uncertainty larger than the sphere. The missing
+quantity is not precision; it is the **lever arm**. Light crosses the block in
+0.22 ps, so there is nothing for a clock to measure.
+
+**A direction can be measured from position.** Two planes separated by a gap give
+two crossing points, and two points give a line. A 20 mm pixel over a 40 mm gap is
+11.7°, and the gap is air inside a can that is 115 mm tall.
+
+**A plastic scintillator gives 74 times the light of a Cherenkov radiator.** The
+same centimetre that emits 270 Cherenkov photons emits 20 000 scintillation
+photons. That removes the photon starvation the Cherenkov design fights, and it
+changes which sensor is correct: the 1 mm² part with 504 microcells saturates on a
+scintillator and is right for a Cherenkov block.
+
+---
+
+## The chain
+
+```mermaid
+flowchart LR
+    subgraph SRC["Two light sources, one block"]
+        MUON(("Muon, 4 GeV, beta 0.99996"))
+        MAT["Block: PMMA or plastic scintillator"]
+        SCINT["Scintillation: 20000 photons per cm"]
+        CHER["Cherenkov: 270 photons per cm"]
+    end
+    subgraph OPT["Photon transport"]
+        TIR["Total internal reflection"]
+        ABS["Absorption: exp(-d/L)"]
+        FACE["Fresnel at the face: reflect or escape"]
+    end
+    subgraph DET["Sensor"]
+        SIPM["SiPM: 1 to 6 mm, 504 to 18980 cells"]
+        PDE["PDE 35 percent at 420 nm"]
+    end
+    subgraph OBS["Two observables"]
+        TIME["Timestamp, 47 ps jitter"]
+        POS["Hit position, 10 mm pixel"]
+    end
+    subgraph ANS["Answer"]
+        DIR{{"Direction"}}
+    end
+    MUON -->|"crosses"| MAT
+    MAT --> SCINT
+    MAT --> CHER
+    SCINT --> TIR
+    CHER --> TIR
+    TIR -->|"lost"| ABS
+    TIR -->|"reaches"| FACE
+    FACE -->|"escapes"| SIPM
+    SIPM --> PDE
+    PDE --> TIME
+    PDE --> POS
+    TIME -.->|"bound 81176 deg"| DIR
+    POS -->|"bound 12 deg"| DIR
+```
+
+The dotted edge is the one that does not arrive. A timestamp carries no direction
+information because the light does not take long enough to cross the block for the
+crossing time to differ between sensors.
+
+---
+
+## The five designs
+
+| Design | EUR | g | Sensors | Angle | Verdict |
+|---|---|---|---|---|---|
+| Counter | 115 | 48.8 | 1 | none | Cheapest; no direction |
+| Cherenkov timing | 185 | 47.7 | 4 | 81 176° | Rejected by the bound |
+| **Coarse tracker** | **245** | **44.7** | **8** | **11.7°** | **Passes every requirement** |
+| Fine tracker | 890 | 44.7 | 32 | 3.9° | Over budget |
+| Ring imager | 490 | 44.7 | 16 | (10.6°) | Unproven |
+
+Only the coarse tracker passes the mission's audit. It is the recommendation, and
+[designs.md](designs.md) is why.
+
+---
+
+## Which design to pick
+
+```mermaid
+flowchart TB
+    subgraph G_Q["The question"]
+        NEED{"What does the mission need"}
+    end
+    subgraph G_NODIR["A count is enough"]
+        COUNTER["Counter: 1 sensor, no direction"]
+    end
+    subgraph G_DIR["A direction is needed"]
+        HOW{"Which observable carries it"}
+    end
+    subgraph G_TIME["From timing"]
+        CHER["Cherenkov timing: 81176 deg, rejected"]
+    end
+    subgraph G_POS["From position"]
+        PLANES{"How many planes"}
+    end
+    subgraph G_ONE["One plane"]
+        RING["Ring imager: 490 EUR, unproven"]
+    end
+    subgraph G_TWO["Two planes and a gap"]
+        PIXELS{"How fine is the pixel"}
+    end
+    subgraph G_COARSE["Cheap"]
+        COARSE["Coarse tracker: 11.7 deg, 245 EUR"]
+    end
+    subgraph G_FINE["Sharp"]
+        FINE["Fine tracker: 3.9 deg, 890 EUR"]
+    end
+    NEED -->|"no"| COUNTER
+    NEED -->|"yes"| HOW
+    HOW -->|"time"| CHER
+    HOW -->|"position"| PLANES
+    PLANES -->|"one"| RING
+    PLANES -->|"two"| PIXELS
+    PIXELS -->|"cheap"| COARSE
+    PIXELS -->|"sharp"| FINE
+```
+
+---
+
+## The documents
+
+| File | What it holds |
+|---|---|
+| [simulation.md](simulation.md) | The simulation in detail: every module, every draw, and what is not modelled |
+| [designs.md](designs.md) | The five designs, their numbers, and the trade each one makes |
+| [components.md](components.md) | The four parts, their datasheet numbers, availability, and the jitter budget |
+| [constraints.md](constraints.md) | The mission's parameters and requirements, and the audit that enforces them |
+
+---
+
+## What is not known
+
+1. **The SiPM's SPTR is not in its datasheet.** It is the largest term in the
+   jitter budget and the only one with no figure. It needs a measurement.
+2. **The ring imager has never been simulated.** Its 10.6° is a geometric estimate
+   and is marked as unchecked wherever it appears.
+3. **The collection efficiency is an assumption.** 25 % is the middle of what a
+   well-made paddle achieves; a real one can be 10 % or 40 %, and that factor
+   moves every photoelectron count in this folder.
+4. **A machined acrylic face scatters.** The transport's Fresnel reflection assumes
+   a mirror, so a CNC-cut block's light yield is an upper bound until a scattering
+   model exists.
+
+---
+
+## Se även
+
+- [MUONDETEKTOR.md](../../../can-sat/dokument/MUONDETEKTOR.md) — the mission's own muon document
+- [DESIGN.md](../../crates/canlab-muon/DESIGN.md) — the crate's design note
+- [status.md](../status.md) — the project's build status

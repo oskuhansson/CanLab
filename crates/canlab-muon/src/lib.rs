@@ -35,14 +35,18 @@
 pub mod bound;
 pub mod can;
 pub mod components;
+pub mod designs;
 pub mod mission;
+pub mod scintillator;
 pub mod timing;
 
 mod solve;
 
 pub use bound::{position_bound, timing_bound, Bound};
 pub use components::{budget, dominant, total_jitter_ps, Contribution, COMPARATOR_WALK_PS, UNMODELLED};
+pub use designs::{Approach, Design, Metrics};
 pub use mission::{Candidate, Manufacturing, Mission, Violation};
+pub use scintillator::{Scintillator, SiPMChoice};
 pub use can::{tent_extent_mm, tent_mass_g, tent_volume_mm3, Can, CanError};
 pub use timing::{
     reconstruct, speed_mm_per_ps, tangent_basis, timing_signal_ps, FitError, Observation,

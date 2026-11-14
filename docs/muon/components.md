@@ -1,0 +1,151 @@
+---
+tags: [cansat, muon, components, availability]
+status: aktuell
+updated: 2026-11-14
+---
+
+# The parts, their numbers, and what is available
+
+*The four parts from `can-sat`'s `komponenter` list, with the datasheet figures
+that decide whether a design works. The jitter budget is
+`cargo run --release -p canlab-muon --bin direction_study`.*
+
+---
+
+## The four parts
+
+| Part | Role | Datasheet figure | Verdict |
+|---|---|---|---|
+| onsemi MICROFC-10035 | SiPM, 1 mm² | PDE 31 % at Vbr+2.5 V; 504 microcells; 30 kHz dark count; 7 % crosstalk; **SPTR not specified** | Right for Cherenkov, saturates on a scintillator |
+| TI OPA858 | TIA | 5.5 GHz GBW, 2.5 nV/√Hz, 20.5 mA | Fine, but the anode's 100 pF collapses its bandwidth |
+| ADI MAX40026 | comparator | 280 ps delay, **2 ps jitter**, 25 ps overdrive dispersion, LVDS | Good; the dispersion is the term to watch |
+| ADI MAX35101 | "analog pulse timer" | **20 ps accuracy**, 3.8 ps resolution, 2 channels | **Wrong part for four SiPMs** |
+
+---
+
+## The MAX35101 is not a general-purpose timer
+
+This is the finding that changed the design, and it is worth stating plainly
+because the part is listed as an "analog pulse timer" and reads like a TDC.
+
+- **Its START is internal.** It fires its own pulse launcher and measures
+  launch-to-echo. There is no external START pin, so it cannot answer "when did
+  this SiPM fire".
+- **Its STOP inputs are analog** — 10 to 700 mVpp into a comparator built for
+  1 MHz ultrasonic transducers, not for a 0.6 ns SiPM pulse.
+- **Its 20 ps is a differential accuracy.** The datasheet says absolute
+  measurements "include circuit delays and cannot be considered accurate".
+- **It has two channels**, not four.
+
+A general-purpose alternative would be a TDC with an external START and STOP, such
+as TI's TDC7200 or ScioSense's TDC-GP22. Neither is in the component list, and
+neither is needed: the bound says timing cannot give a direction at all, so
+replacing the timer would buy a better measurement of nothing.
+
+---
+
+## The sensor is right for one light source and wrong for the other
+
+| Part | Area | Microcells | Price estimate | Right for |
+|---|---|---|---|---|
+| MICROFC-10035 | 1 mm² | 504 | 10–25 € | Cherenkov (a handful of photons) |
+| MICROFC-30035 | 3 mm² | 4 774 | 20–45 € | a scintillator with a counter's energy readout |
+| MICROFC-60035 | 6 mm² | 18 980 | 40–90 € | a counter that needs the pulse height |
+
+A 5 mm scintillator plane gives 873 photoelectrons. The 1 mm² part has 504
+microcells, so it **saturates** — and that is not automatically a fault. A tracker
+reads out *which* pixel fired, so a clipped pulse is still a hit, and the cheap
+part is the correct choice. A counter reads the pulse *height*, so a clipped pulse
+is a lost measurement, and the 6 mm part is the correct choice.
+
+The component list cannot carry that distinction: the part is correct for one
+design and wrong for another, and the list does not say which.
+
+**Availability note:** all three are onsemi C-series parts in the same 4-side
+tileable SMT package, so a board can be laid out for the family and the part chosen
+at build time. Prices are estimates from the documented module range scaled by
+area, not quotes — `KOSTNADER.md` puts a SiPM module at 10–50 € and says to verify
+against the invoice.
+
+---
+
+## The fast output is the timing path, and the anode is not
+
+The MICROFC-10035 has **100 pF** from anode to cathode and **1 pF** from the fast
+terminal to cathode.
+
+An OPA858 transimpedance amplifier behind 100 pF at a 10 kΩ feedback has a
+bandwidth of
+
+```text
+f = sqrt(GBW / (2π · R_F · C_in)) = sqrt(5.5 GHz / (2π · 10 kΩ · 100 pF)) ≈ 30 MHz
+```
+
+which is a **33 ns rise time**. Any timing measurement is destroyed before the
+comparator sees it. The fast output — 1 pF, 0.3 ns rise, 0.6 ns FWHM — is the
+timing path; the anode is the energy path.
+
+A design that needs both needs both taps, and that is a board change rather than a
+component change.
+
+---
+
+## The jitter budget
+
+| Part | ps | Random | Source |
+|---|---|---|---|
+| MICROFC-10035 | 42.5 | yes | **not in the datasheet**; 70–120 ps FWHM is the published range, 100 ps FWHM is the middle |
+| MAX35101 | 20.0 | yes | datasheet: 20 ps accuracy, 3.8 ps resolution |
+| OPA858 | 6.0 | yes | 2.5 nV/√Hz over a 0.6 ns edge at a 10 mV pulse |
+| MAX40026 | 2.0 | yes | datasheet: 2 ps jitter, 150 ps edge, 100 mV overdrive |
+| **total** | **47.4** | | quadrature of the random terms |
+
+Three details decide whether the budget means anything:
+
+1. **The largest term is the one with no datasheet figure.** The vendor specifies
+   the fast output's rise time and pulse width and no single-photon time
+   resolution at all. Every other term is smaller than the uncertainty on this one,
+   so the budget cannot be closed without measuring the part.
+2. **FWHM is not a standard deviation.** The transport's `jitter_ps` is a standard
+   deviation, and SPTR is quoted as a FWHM. 100 ps FWHM is 42.5 ps σ, and using
+   100 ps as a σ is 2.355 times too pessimistic.
+3. **The comparator's 25 ps is a dispersion, not a jitter.** It is the change in
+   propagation delay with overdrive, so it is a systematic walk that tracks the
+   pulse amplitude — and therefore the photon count. Adding it in quadrature would
+   be wrong; it belongs in the model as an amplitude-dependent bias.
+
+---
+
+## What the simulation does not carry
+
+| Not modelled | The number | Why it matters |
+|---|---|---|
+| A PDE curve | 31 % at Vbr+2.5 V, 41 % at +5 V, peak at 420 nm | The model uses one mid-band 35 % |
+| SPTR | not specified | The largest term in the budget |
+| Crosstalk | 7 % at 35 µm cells | One photon can produce two timestamps |
+| Dark count | 30 kHz typ, 96 kHz max | A 100 ns window is not always empty |
+| Vbr drift | 21.5 mV/°C, gain −0.8 %/°C | A descending can changes its own PDE and SPTR in flight |
+| Afterpulsing | 0.2 % | Late timestamps at the per-mille level |
+
+The fifth is the one a mission has to answer: a bias-tracking loop, a temperature
+model, or an acceptance that the count drifts during the flight.
+
+---
+
+## What is genuinely missing from the component list
+
+- **A timer that can take an external START.** The MAX35101 cannot.
+- **A sensor with a specified SPTR.** None of the C-series parts has one.
+- **A temperature sensor at the SiPM.** Vbr drifts 21.5 mV/°C, and the can flies
+  through 0–10 °C, so the bias needs to track the temperature or the gain drifts.
+- **A light-tight enclosure.** `MUONDETEKTOR.md` says black tape and a housing; a
+  SiPM in daylight is a saturated photodiode.
+
+---
+
+## Se även
+
+- [README.md](README.md) — the overview
+- [designs.md](designs.md) — which part each design needs
+- [simulation.md](simulation.md) — how the transport uses these numbers
+- [constraints.md](constraints.md) — the budget the parts have to fit
