@@ -21,6 +21,7 @@ carry the same claims in more detail.
 | W3.2 limits | `crates/canlab-parse/src/limit.rs` | `sin x/x → 1`, `(1−cos x)/x² → ½`, `0/0` by cancellation, `∞/∞` by degree, one-sided `∓∞`, a jump reported as "does not exist" with both sides. |
 | W3.3 tangents and extrema | `crates/canlab-parse/src/calculus.rs`, `canlab sign` | `tangent`, `normal`, `extrema` including endpoints, `sign_table` with a touching zero of `f'` found, and the table shaded in the SVG. |
 | W3.4 volumes and areas | `crates/canlab-parse/src/figure.rs` | `\vol` (discs and shells) and `\area` split at crossings: a sphere gives `32π/3`, a cone `2π/3`, swapping the curves does not change the area. |
+| W7.4 light kernel | `crates/canlab-optics/src/kernel.rs` | The photon kernel in the Lua subset: Fresnel, total internal reflection, a per-photon random stream, path length out. `compile` emits WGSL from the same text `interpret` runs, so one source has two executions. `f32` vs `f64` agree to `1e-6`; the kernel and a Rust reference agree to `1e-12`. **Nothing executes WGSL**, and the throughput figure is unmeasured. |
 | W8.3 surface nets | `crates/canlab-scene/src/implicit.rs` | `mesh_implicit` for `f(x,y,z) = 0`, with analytic normals from the gradient. A sphere's vertices are within one cell of the surface; an empty region is an empty mesh, not an error. **Not closed where the surface meets the grid boundary** — stated, not hidden. |
 | W8.1 the scene crate | `crates/canlab-scene` | A pure orbit camera, perspective projection, frustum test, `fit` and a painter's-algorithm sort — no GPU, no window, no dependencies. A point behind the camera has no projection rather than a mirrored one. |
 | W7.3 compile plumbing | `crates/canlab-solver/src/kernel.rs`, `canlab compile` | `compile_expression`, `compile_lua`, `Artefact`, `Refusal` (naming the stage), an in-memory `KernelCache` whose key is a digest **and** the exact source, and a 200-program `sweep`. `canlab compile` prints the Lua and the WGSL; `canlab compile-sweep` reports the numbers. **Nothing executes WGSL or Lua**, and the sweep says so on its own output. |
@@ -76,7 +77,7 @@ carry the same claims in more detail.
 
 ## Test counts, last run
 
-`cargo test --offline -j 2` on the tree this note describes: **1222 passed, 0
+`cargo test --offline -j 2` on the tree this note describes: **1236 passed, 0
 failed, 5 ignored.** The five ignored are the snapshot frames, and they are
 ignored because this machine is not the one they were rendered on (see below).
 
@@ -85,9 +86,9 @@ ignored because this machine is not the one they were rendered on (see below).
 | `canlab-solver` | 216 |
 | `canlab-gui` | 124 + 5 ignored |
 | `canlab-cli` | 5 + 26 + 10 |
-| `canlab-core` | 93 + 1 + 6 + 10 |
+| `canlab-core` | 100 + 1 + 6 + 10 |
 | `canlab-parse` | 101 |
-| `canlab-optics` | 76 + 14 + 1 + 9 + 5 + 3 + 1 + 4 |
+| `canlab-optics` | 83 + 14 + 1 + 9 + 5 + 3 + 1 + 4 |
 | `canlab-input` | 10 + 3 + 2 + 23 + 8 + 102 + 4 + 4 |
 | `canlab-plot` | 54 + 9 |
 | `canlab-poly` | 16 + 10 |
