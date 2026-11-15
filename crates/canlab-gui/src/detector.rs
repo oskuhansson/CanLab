@@ -45,6 +45,9 @@ pub struct DetectorScene {
     pub block: Block,
     /// The four sensors.
     pub sensors: [SiPM; 4],
+    /// The entrance aperture of each sensor, millimetres: the side of the square
+    /// on the face that a photon must hit to be detected.
+    pub apertures: [f64; 4],
     /// Where the muon's track enters the caller's path.
     pub entry: Vec3,
     /// The muon's heading, a unit vector.
@@ -119,6 +122,10 @@ impl DetectorScene {
         // third of the 6 mm part's 143 ps — so the picture showed timestamps the
         // study would never see.
         let sensors = sensor.sensors(&design);
+        // The patch of each face a photon must hit to be detected. The dot the
+        // picture draws at the face centre is the centre of this square; the
+        // model detects only inside it.
+        let apertures = entrance_apertures(&block, &optical, sensors, sensor);
         let mut rng = canlab_muon::Rng::new(seed);
 
         // A direction from the measured sky, and a point inside the block.
@@ -181,6 +188,7 @@ impl DetectorScene {
             design,
             block,
             sensors,
+            apertures,
             entry,
             heading,
             inside_start,
@@ -297,6 +305,25 @@ impl DetectorScene {
     pub fn first_arrival_ps(&self, sensor: usize) -> Option<f64> {
         self.event.true_ps.get(sensor).and_then(|times| times.first().copied())
     }
+}
+
+/// The side of each sensor's entrance square on its face, millimetres.
+///
+/// A guided sensor's aperture is the taper's mouth, so the side comes from
+/// [`canlab_optics::Optical::guide_area_mm2`]; a bare sensor's side is the
+/// square root of its own area.
+/// The faces come from the `SiPM`s because the guide's mouth is clamped to the
+/// face it is cut into, and the faces differ in area.
+fn entrance_apertures(
+    block: &Block,
+    optical: &canlab_optics::Optical,
+    sensors: [SiPM; 4],
+    sensor: canlab_muon::timing_study::SensorModel,
+) -> [f64; 4] {
+    sensors.map(|part| match sensor.guide_efficiency {
+        Some(_) => optical.guide_area_mm2(block, part.face).sqrt(),
+        None => sensor.area_mm2.sqrt(),
+    })
 }
 
 /// A point strictly inside the block, by rejection over its bounding box.
@@ -606,6 +633,27 @@ pub fn draw(scene: &mut DetectorScene, ui: &mut egui::Ui, rect: egui::Rect) -> e
         if lit {
             painter.circle_stroke(at, 10.0, Stroke::new(1.0, colour.gamma_multiply(0.5)));
         }
+        // The aperture: the square on the face a photon must hit to be
+        // detected. The dot is the face centre; this is the patch around it.
+        // Thin and dim, so it does not compete with the photons.
+        let half = 0.5 * scene.apertures[index];
+        let centre = scene.block.face_centre(sensor.face);
+        let (u, v) = scene.block.face_axes(sensor.face);
+        let corners = [
+            centre.add(u.scale(-half)).add(v.scale(-half)),
+            centre.add(u.scale(half)).add(v.scale(-half)),
+            centre.add(u.scale(half)).add(v.scale(half)),
+            centre.add(u.scale(-half)).add(v.scale(half)),
+        ];
+        let points: Vec<egui::Pos2> = corners.iter().filter_map(|p| to_screen(*p)).collect();
+        if points.len() == 4 {
+            for i in 0..4 {
+                painter.line_segment(
+                    [points[i], points[(i + 1) % 4]],
+                    Stroke::new(0.8, colour.gamma_multiply(0.35)),
+                );
+            }
+        }
         painter.text(
             at + egui::vec2(11.0, -11.0),
             egui::Align2::LEFT_BOTTOM,
@@ -816,6 +864,39 @@ mod tests {
             checked += 1;
         }
         assert!(checked > 0, "the event has no detection to check");
+    }
+
+    #[test]
+    fn the_aperture_is_the_square_a_photon_must_hit() {
+        // The bug this prevents: the view drew a dot at the face centre, so a
+        // detection looked like a point on the face. The model's detection is a
+        // square — the taper's mouth, or a bare part's own area — and the
+        // picture has to draw that patch.
+        let scene = DetectorScene::new(hexagon(), 1).expect("a scene");
+        let guided = canlab_muon::timing_study::SensorModel::six_mm_guided();
+        let gain = guided.optical(&scene.design).gain();
+        assert!(gain > 3.8 && gain < 3.9, "the etendue gain is {gain}");
+        let expected = (guided.area_mm2 * gain).sqrt();
+        for (index, &side) in scene.apertures.iter().enumerate() {
+            assert!(
+                (side - expected).abs() < 1e-9,
+                "sensor {index} is {side} mm, expected {expected}"
+            );
+            assert!((11.0..12.5).contains(&side), "the aperture is {side} mm");
+        }
+
+        // A bare part's aperture is its own square, not the guide's mouth.
+        let bare = canlab_muon::timing_study::SensorModel::six_mm();
+        let sides = entrance_apertures(
+            &scene.block,
+            &bare.optical(&scene.design),
+            bare.sensors(&scene.design),
+            bare,
+        );
+        assert!(
+            sides.iter().all(|side| (side - 6.0).abs() < 1e-9),
+            "a bare 6 x 6 mm part opens a {sides:?} mm square"
+        );
     }
 
     #[test]

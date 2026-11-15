@@ -68,15 +68,15 @@ same 1 500, for the hexagon at 30 mm with the 6 × 6 mm part behind the taper:
 
 | Configuration | Median | 68th | within 30° | within 60° |
 |---|---|---|---|---|
-| vMF mean direction | 26.0° | 35.0° | 59.9 % | 90.3 % |
-| regressor, nominal readout | 26.4° | 36.4° | 56.8 % | 90.5 % |
+| vMF mean direction | 28.9° | 37.1° | 53.5 % | 94.0 % |
+| regressor, nominal readout | 29.4° | 38.3° | 51.2 % | 93.3 % |
 
 The distribution costs **nothing** in the mean direction: the two heads land
 within half a degree and three points, which is the noise. The `κ` is one extra
 output unit, not another network.
 
-Mean `κ` is 8.6, which implies a mean angular error of 28.2° — the 26.0° it
-actually makes is slightly better than its own prediction.
+Mean `κ` is 6.9, which implies a mean angular error of 29.3° — the 28.9° it
+actually makes is very close to its own prediction.
 
 ### Is the κ believable?
 
@@ -86,18 +86,18 @@ prediction:
 
 | bin (by predicted) | predicted | observed | ratio |
 |---|---|---|---|
-| 0–25 % | 20.2° | 19.0° | 0.94 |
-| 25–50 % | 22.1° | 21.2° | 0.96 |
-| 50–75 % | 30.2° | 31.0° | 1.03 |
-| 75–100 % | 40.4° | 42.6° | 1.06 |
+| 0–25 % | 22.6° | 24.4° | 1.08 |
+| 25–50 % | 27.2° | 26.7° | 0.98 |
+| 50–75 % | 31.2° | 29.5° | 0.95 |
+| 75–100 % | 36.4° | 34.4° | 0.95 |
 
 The ordering works: the events the network calls hard are harder, and the ratio
-is within 6 % of 1 in every bin. The *absolute* probability at the mission's
+is within 8 % of 1 in every bin. The *absolute* probability at the mission's
 criterion is close as well:
 
-**P(θ ≤ 30°): 62.7 % predicted by the network's own κ, 59.9 % observed.**
+**P(θ ≤ 30°): 58.2 % predicted by the network's own κ, 53.5 % observed.**
 
-The vMF tail is slightly light — the 30° probability is optimistic by about three
+The vMF tail is slightly light — the 30° probability is optimistic by about five
 points — but the bin ratios show the shape is right.
 
 ## What it buys, and what it does not
@@ -106,7 +106,7 @@ points — but the bin ratios show the shape is right.
   direction identical to the regressor's within the noise. At inference it is one
   more output unit.
 - **Does not buy:** an absolute probability you can put in a trigger. The 30°
-  number is 62.7 % against an observed 59.9 %.
+  number is 58.2 % against an observed 53.5 %.
 - **The fix is cheap:** a single scale on `κ` fitted on held-out data
   (temperature scaling) moves the predicted 30° fraction to the observed one
   without touching the mean direction. A heavier-tailed distribution on the
@@ -116,8 +116,8 @@ points — but the bin ratios show the shape is right.
 
 The mission's criterion is the fraction within 30°, and that is a property of the
 **timing resolution**, not of the output head. A calibrated distribution tells
-you when to trust a reconstruction; it does not make a 26.4° detector a 20°
-detector. The design still fails the criterion at 59.9 % within 30°, and
+you when to trust a reconstruction; it does not make a 29.4° detector a 20°
+detector. The design still fails the criterion at 53.5 % within 30°, and
 [cherenkov.md](cherenkov.md) says why.
 
 ## Reproducing it

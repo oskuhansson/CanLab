@@ -150,8 +150,8 @@ study gave. Light crosses the 54.1 mm between the two furthest sensors in
 measurement. The failure is the **sensor placement**, not the clock.
 
 The **network** does much better than the analytic inversion, because it
-marginalises over the unknown track position: **26.4° median, 36.4° at 68 %**, and
-**57 % of events within 30°** through the realistic readout. That is borderline
+marginalises over the unknown track position: **29.4° median, 38.3° at 68 %**, and
+**51 % of events within 30°** through the realistic readout. That is borderline
 rather than a pass — the mission wants most events inside 30°, not a bare
 majority — but it is the design's real number, and it is what the corrected photon
 count and the absolute arrival give.
@@ -182,17 +182,17 @@ Measured through the realistic readout, on the corrected photon count:
 
 | Block | Mass | Horizontal area | Median | Within 30° |
 |---|---|---|---|---|
-| **20 mm tent, 10 mm** | **36 g** | **400 mm²** | **26.2°** | **59 %** |
-| 24 mm tent, 20 mm | 103 g | 960 mm² | 28.9° | 53 % |
-| 28 mm hexagon, 30 mm | 73 g | 2 036 mm² | 26.4° | 57 % |
+| 20 mm tent, 10 mm | 36 g | 400 mm² | 31.0° | 48 % |
+| 24 mm tent, 20 mm | 103 g | 960 mm² | 31.4° | 47 % |
+| **28 mm hexagon, 30 mm** | **73 g** | **2 036 mm²** | **29.4°** | **51 %** |
 
 The hexagon buys **muon rate**, not resolution: five times the horizontal area,
 so five times the crossings, at twice the mass. The measured resolution is the
 same within the noise, because it is set by the sensor's coverage of the face it
 sits on and by the jitter, not by the face's size. The depth buys photons, not
-resolution either — 20, 30 and 40 mm measure 26.4°, 26.4° and 28.4°.
+resolution either — 20, 30 and 40 mm measure 30.7°, 29.4° and 30.6°.
 
-The photon count is the other half of the problem. The transport measures **11.1
+The photon count is the other half of the problem. The transport measures **10.4
 photoelectrons** per muon for the Cherenkov block — not the 18 that a
 born-times-collection estimate gives, because 11 % of the light is trapped by
 total internal reflection and much of the rest leaves through a face no sensor

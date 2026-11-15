@@ -123,6 +123,18 @@ pub struct Optical {
     /// measured 70–80 % of the ePIC and Bretz guides is a *transmission* for a
     /// guide whose entrance is only 2.5× its exit, not a concentration of 840×.
     pub guide_efficiency: Option<f64>,
+    /// The taper's concentration, as an area gain over the bare sensor.
+    ///
+    /// The entrance aperture is `sensor_area_mm2 * gain`, so a photon is
+    /// detected only if it hits inside that square — the guide's entrance, not
+    /// the whole face. Etendue caps the gain at `2π / escape` (3.87 for
+    /// n = 1.49), and the same cap fixes the acceptance cone: a concentrator of
+    /// gain `G` accepts `cos θ = 1 − 1/G`, which is exactly the escape cone at
+    /// the etendue limit.
+    ///
+    /// `None` with `guide_efficiency` set means the etendue-limited gain for the
+    /// block's index.
+    pub guide_gain: Option<f64>,
     /// The refractive index of the optical adhesive on the sensor faces, if any.
     ///
     /// Optical adhesive is not a polish substitute: it changes the **critical
@@ -151,6 +163,7 @@ impl Optical {
             max_bounces: 64,
             sensor_area_mm2: 1.0,
             guide_efficiency: None,
+            guide_gain: None,
             glue_index: None,
         }
     }
@@ -165,7 +178,22 @@ impl Optical {
     /// light to the sensor.
     pub fn with_guide(mut self, efficiency: f64) -> Optical {
         self.guide_efficiency = Some(efficiency);
+        self.guide_gain = Some(etendue_gain(self.index));
         self
+    }
+
+    /// The taper's concentration, clamped to the etendue limit for the index.
+    pub fn gain(&self) -> f64 {
+        let limit = etendue_gain(self.index);
+        self.guide_gain.unwrap_or(limit).clamp(1.0, limit)
+    }
+
+    /// The taper's entrance aperture, mm², on this face.
+    ///
+    /// It is the sensor's area times the gain, clamped to the face: a guide
+    /// cannot have an entrance larger than the face it is cut into.
+    pub fn guide_area_mm2(&self, block: &Block, face: Face) -> f64 {
+        (self.sensor_area_mm2 * self.gain()).min(block.face_area(face))
     }
 
     /// The fraction of a face's escaping light the sensor registers.
@@ -177,13 +205,7 @@ impl Optical {
         let bare = (self.sensor_area_mm2 / block.face_area(face)).clamp(0.0, 1.0);
         match self.guide_efficiency {
             Some(transmission) => {
-                // The light reaches the face within the escape cone; the sensor
-                // accepts a hemisphere. Their ratio is the most a passive taper
-                // can concentrate, however long it is.
-                let cos_escape = (1.0 - 1.0 / (self.index * self.index)).max(0.0).sqrt();
-                let escape = 2.0 * std::f64::consts::PI * (1.0 - cos_escape);
-                let gain = (2.0 * std::f64::consts::PI / escape).max(1.0);
-                (bare * gain * transmission.clamp(0.0, 1.0)).clamp(0.0, 1.0)
+                (bare * self.gain() * transmission.clamp(0.0, 1.0)).clamp(0.0, 1.0)
             }
             None => bare,
         }
@@ -199,13 +221,17 @@ impl Optical {
     ///   on the face. The photon is detected only if its exit point is inside
     ///   that square. A photon that hits the face a millimetre away from the
     ///   sensor is not a detection.
-    /// * **A taper** is a light guide whose entrance is the whole face and
-    ///   whose exit is the sensor. Etendue limits what it can accept: the
-    ///   entrance solid angle is `A_sensor · 2π / A_face`, so the acceptance
-    ///   cone has `cos θ = 1 − A_sensor/A_face`, and the photon is detected only
-    ///   if its exit direction is inside that cone. It is then transmitted with
-    ///   probability `guide_efficiency`. The detection happens at the sensor,
-    ///   not at the point on the face where the light entered the guide.
+    /// * **A taper** is a light guide with an **entrance aperture** of
+    ///   `sensor_area · gain` centred on the face. The photon must hit inside
+    ///   that square — the guide's mouth, not the whole face — and its
+    ///   direction must be inside the acceptance cone `cos θ = 1 − 1/gain`,
+    ///   which is the escape cone at the etendue limit. It is then transmitted
+    ///   with probability `guide_efficiency`.
+    ///
+    ///   The aperture is what makes the detection a square on the face. The
+    ///   first version tested only the direction, so every near-normal photon
+    ///   was detected wherever it hit, and the detections traced a strip across
+    ///   the face instead of a patch of the sensor's size.
     pub fn detects(
         &self,
         block: &Block,
@@ -214,21 +240,23 @@ impl Optical {
         direction: Vec3,
         random: &mut dyn FnMut() -> f64,
     ) -> bool {
+        let centre = block.face_centre(face);
+        let (u, v) = block.face_axes(face);
+        let offset = exit.sub(centre);
         match self.guide_efficiency {
             Some(transmission) => {
-                let ratio = (self.sensor_area_mm2 / block.face_area(face)).clamp(0.0, 1.0);
-                let cos_accept = 1.0 - ratio;
-                let normal = block.face_normal(face);
-                if direction.dot(normal) < cos_accept {
+                let side = self.guide_area_mm2(block, face).sqrt();
+                if offset.dot(u).abs() > 0.5 * side || offset.dot(v).abs() > 0.5 * side {
+                    return false;
+                }
+                let cos_accept = 1.0 - 1.0 / self.gain();
+                if direction.dot(block.face_normal(face)) < cos_accept {
                     return false;
                 }
                 random() < transmission.clamp(0.0, 1.0)
             }
             None => {
                 let side = self.sensor_area_mm2.sqrt();
-                let centre = block.face_centre(face);
-                let (u, v) = block.face_axes(face);
-                let offset = exit.sub(centre);
                 offset.dot(u).abs() <= 0.5 * side && offset.dot(v).abs() <= 0.5 * side
             }
         }
@@ -250,6 +278,17 @@ impl Optical {
             _ => self.index_outside,
         }
     }
+}
+
+/// The most a passive concentrator can gain over a bare sensor, by etendue.
+///
+/// The light inside the block reaches a face within the escape cone,
+/// `2π(1 − cos θc)`; the sensor accepts a hemisphere, `2π`. A passive element
+/// can concentrate by the ratio of those solid angles and no more, however long
+/// it is: `1 / (1 − sqrt(1 − 1/n²))`, which is 3.87 for n = 1.49.
+pub fn etendue_gain(index: f64) -> f64 {
+    let cos_escape = (1.0 - 1.0 / (index * index)).max(0.0).sqrt();
+    1.0 / (1.0 - cos_escape).max(1e-9)
 }
 
 /// A trace in full.

@@ -106,4 +106,9 @@ fn main() {
     println!("etendue, and a guide outside the block would see the light after it");
     println!("had refracted into the full hemisphere and could not concentrate at");
     println!("all. That is why the taper has to be a cavity in the PMMA.");
+    println!();
+    println!("The taper's entrance is a square of `sensor area × gain` centred on");
+    println!("the face — 11.8 mm on a side for the 6 × 6 mm part at n = 1.49 — and");
+    println!("a photon outside it is not detected, however normal its direction.");
+    println!("The detection is that square, not the whole face.");
 }

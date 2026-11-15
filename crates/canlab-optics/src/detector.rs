@@ -662,38 +662,64 @@ mod tests {
 
     #[test]
     fn a_muon_makes_photons_and_some_of_them_reach_a_sensor() {
-        // A sensor that can actually see light. A bare 1 mm² part sees 0.12 % of
-        // a side face, so a single 268-photon event lands ~0.4 photons on it and
-        // this seed gets none — the test failed for the right reason, twice. Even
-        // the best possible taper only reaches ~0.35 %, so the test uses the 6 × 6
-        // mm part, which is the size the light budget actually needs.
+        // A sensor that can actually see light. The 6 x 6 mm part behind a taper
+        // has an entrance aperture of `area * gain` on the face centre, and one
+        // 268-photon event lands about one photon inside it, so a single event
+        // is a coin flip. The premise is "some photons reach a sensor", not
+        // "one event does", so the test runs a few events.
         let (block, optical, sensors) = setup();
-        // The design point's sensor: the 6 × 6 mm part behind a taper. A bare
-        // 6 × 6 mm square is a 36 mm² target on a face of hundreds of square
-        // millimetres, and one event of 268 photons lands about three of them
-        // on the sensor faces — this seed gets none, which is the geometry and
-        // not a bug. The taper accepts a cone over the whole face, which is
-        // what makes "some photons reach a sensor" true of one event.
         let optical = optical.with_sensor(36.0).with_guide(0.75);
         let mut uniform = Uniform(42);
         let mut random = || uniform.next();
-        let event = simulate(
-            &block,
-            &optical,
-            &sensors,
-            Vec3::ZERO,
-            Vec3::new(1.0, 0.0, 0.0),
-            10.0,
-            1.0,
-            &mut random,
-        )
-        .expect("a muon at beta 1");
-        assert!(event.photons_born > 100, "{} photons", event.photons_born);
-        let detected: usize = event.arrivals_ps.iter().map(Vec::len).sum();
-        // Some photons reach a sensor: a block with total internal reflection
-        // loses most of them, but "most" is not "all".
-        assert!(detected > 0, "{event:?}");
-        assert!(detected <= event.photons_born);
+        let mut detected = 0usize;
+        let mut born = 0usize;
+        for _ in 0..20 {
+            let event = simulate(
+                &block,
+                &optical,
+                &sensors,
+                Vec3::ZERO,
+                Vec3::new(1.0, 0.0, 0.0),
+                10.0,
+                1.0,
+                &mut random,
+            )
+            .expect("a muon at beta 1");
+            born += event.photons_born;
+            detected += event.arrivals_ps.iter().map(Vec::len).sum::<usize>();
+        }
+        assert!(born > 2_000, "{born} photons");
+        assert!(detected > 0, "no photon reached a sensor in 20 events");
+        assert!(detected <= born);
+    }
+
+    #[test]
+    fn the_taper_entrance_is_a_square_of_area_times_gain() {
+        // The bug this prevents: a taper that detects anywhere on the face. The
+        // guide's mouth is a square of `sensor_area * gain`, centred on the face,
+        // and a photon outside it is not a detection however normal its direction.
+        let (block, optical, _) = setup();
+        let guided = optical.with_sensor(36.0).with_guide(0.75);
+        let gain = guided.gain();
+        assert!((gain - 6.23).abs() < 0.01, "gain {gain} at n = 1.84");
+        let face = Face::Top;
+        let area = guided.guide_area_mm2(&block, face);
+        assert!((area - 36.0 * gain).abs() < 1e-9, "aperture {area}");
+        let side = area.sqrt();
+        let centre = block.face_centre(face);
+        let normal = block.face_normal(face);
+        let (u, v) = block.face_axes(face);
+        let mut random = || 0.5;
+        // Inside the mouth, along the normal: detected.
+        assert!(guided.detects(&block, face, centre, normal, &mut random));
+        // Inside the mouth, at 2.9 mm: still detected.
+        assert!(guided.detects(&block, face, centre.add(u.scale(0.49 * side)), normal, &mut random));
+        // Outside the mouth: not detected, however normal the direction.
+        assert!(!guided.detects(&block, face, centre.add(u.scale(0.51 * side)), normal, &mut random));
+        assert!(!guided.detects(&block, face, centre.add(v.scale(10.0)), normal, &mut random));
+        // Inside the mouth but outside the acceptance cone: not detected.
+        let steep = normal.scale(0.2).add(u.scale(0.98)).normalized().expect("a direction");
+        assert!(!guided.detects(&block, face, centre, steep, &mut random));
     }
 
     #[test]
@@ -762,40 +788,24 @@ mod tests {
 
     #[test]
     fn a_taper_cannot_make_a_one_millimetre_sensor_viable() {
-        // The light budget, measured over many events so the comparison is the
-        // physics and not one seed's luck. The bare 1 mm² part detects about one
-        // photon per eleven muons; the best possible taper multiplies that by
-        // 3.87 × 0.75 = 2.9, which is still one photon per four muons. The design
-        // needs a bigger sensor, and the test says so with the number.
-        let (block, optical, sensors) = setup();
+        // The light budget, as the mean coverage the study quotes. The bare
+        // 1 mm² part sees 0.28 % of this block's side face; the best possible
+        // taper multiplies that by the etendue gain and its transmission, which
+        // is still under 1 %. The design needs a bigger sensor, and the test says
+        // so with the number. The coverage is the mean over the face, so it does
+        // not depend on where the aperture sits or on a seed.
+        let (block, optical, _) = setup();
+        let bare = optical.coverage_for(&block, Face::Top);
         let taper = optical.with_guide(0.75);
-        let total = |optical: &Optical| {
-            let mut uniform = Uniform(99);
-            let mut random = || uniform.next();
-            let mut detected = 0usize;
-            for _ in 0..200 {
-                let event = simulate(
-                    &block,
-                    optical,
-                    &sensors,
-                    Vec3::ZERO,
-                    Vec3::new(1.0, 0.0, 0.0),
-                    10.0,
-                    1.0,
-                    &mut random,
-                )
-                .expect("a muon at beta 1");
-                detected += event.arrivals_ps.iter().map(Vec::len).sum::<usize>();
-            }
-            detected as f64 / 200.0
-        };
-        let bare = total(&optical);
-        let guided = total(&taper);
-        assert!(bare < 1.0, "the bare 1 mm² part: {bare} photons per muon");
-        // The taper is a gain of 2.9, not of 500: it must stay under one photon
-        // per muon, which is the number that says the design needs a bigger part.
-        assert!(guided < 1.0, "the taper: {guided} photons per muon");
-        assert!(guided > bare, "the taper is {guided} vs {bare}");
+        let guided = taper.coverage_for(&block, Face::Top);
+        assert!(bare < 0.01, "the bare 1 mm² part: {bare}");
+        assert!(guided < 0.01, "the taper: {guided}");
+        // And the gain is the etendue ratio, not the area ratio of the face.
+        let expected = bare * taper.gain() * 0.75;
+        assert!((guided - expected).abs() < 1e-12, "{guided} vs {expected}");
+        // The aperture is the sensor's area times that gain, not the face.
+        let aperture = taper.guide_area_mm2(&block, Face::Top);
+        assert!((aperture - 1.0 * taper.gain()).abs() < 1e-12, "{aperture}");
     }
 
     #[test]
