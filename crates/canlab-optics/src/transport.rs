@@ -90,13 +90,39 @@ pub struct Optical {
     pub absorption_mm: f64,
     /// How many bounces one photon may make before it is called trapped.
     pub max_bounces: usize,
-    /// What fraction of a face a sensor actually covers.
+    /// The sensor's active area, mm².
     ///
-    /// A 6 × 6 mm sensor on a 236 mm² face sees 15 % of it. Without this factor
-    /// the study said tens of photons per muon per sensor where the geometry
-    /// says single digits, and the difference decides whether the detector can
-    /// be timed at all — so it is a parameter here, not a footnote.
-    pub sensor_coverage: f64,
+    /// The component list's part is the onsemi MICROFC-10035, 1 mm². This is
+    /// the *area*, not a fraction of a face: the coverage is this over the
+    /// face's own area, so a side face and an end face of the same block get
+    /// different coverages, which is what the geometry says.
+    pub sensor_area_mm2: f64,
+    /// A taper cut into the block, as its optical transmission.
+    ///
+    /// `None` is a bare sensor: coverage is `sensor_area_mm2 / face_area`.
+    /// `Some(transmission)` is a **recessed** taper — a cavity moulded into the
+    /// PMMA face, with the sensor at its bottom — and the transmission is the
+    /// Fresnel and absorption loss through it.
+    ///
+    /// The taper cannot be an external guide, and it cannot concentrate by the
+    /// area ratio. Two reasons, both of which the earlier model ignored:
+    ///
+    /// * **It does not fit outside the block.** The hexagon's circumradius is
+    ///   28 mm and the can's inner radius is 28 mm, so the side faces are 3.75 mm
+    ///   from the wall at their centres and touch it at the corners. A taper from
+    ///   a 28 × 30 mm face to 1 mm² needs tens of millimetres of length.
+    /// * **Etendue caps the concentration at 3.87×.** The light inside the block
+    ///   reaches the face within the escape cone, `2π(1 − cos θc)` = 1.63 sr for
+    ///   n = 1.49; the sensor accepts a hemisphere, 6.28 sr. A passive taper can
+    ///   concentrate by the ratio of those solid angles and no more, however long
+    ///   it is. A guide *outside* the block would see the light after it had
+    ///   refracted into the full hemisphere and could not concentrate at all,
+    ///   which is why the taper has to be a cavity.
+    ///
+    /// So the best a taper can do is `bare × 3.87 × transmission`, and the
+    /// measured 70–80 % of the ePIC and Bretz guides is a *transmission* for a
+    /// guide whose entrance is only 2.5× its exit, not a concentration of 840×.
+    pub guide_efficiency: Option<f64>,
     /// The refractive index of the optical adhesive on the sensor faces, if any.
     ///
     /// Optical adhesive is not a polish substitute: it changes the **critical
@@ -123,8 +149,43 @@ impl Optical {
             index_outside: 1.0,
             absorption_mm,
             max_bounces: 64,
-            sensor_coverage: 0.15,
+            sensor_area_mm2: 1.0,
+            guide_efficiency: None,
             glue_index: None,
+        }
+    }
+
+    /// The same block with a sensor of `area_mm2`.
+    pub fn with_sensor(mut self, area_mm2: f64) -> Optical {
+        self.sensor_area_mm2 = area_mm2;
+        self
+    }
+
+    /// The same block with a light guide delivering `efficiency` of the face's
+    /// light to the sensor.
+    pub fn with_guide(mut self, efficiency: f64) -> Optical {
+        self.guide_efficiency = Some(efficiency);
+        self
+    }
+
+    /// The fraction of a face's escaping light the sensor registers.
+    ///
+    /// A bare sensor sees its own area over the face's. A recessed taper sees
+    /// that, times the etendue ratio and its transmission — never the area ratio,
+    /// because no passive element can concentrate past the light's own etendue.
+    pub fn coverage_for(&self, block: &Block, face: Face) -> f64 {
+        let bare = (self.sensor_area_mm2 / block.face_area(face)).clamp(0.0, 1.0);
+        match self.guide_efficiency {
+            Some(transmission) => {
+                // The light reaches the face within the escape cone; the sensor
+                // accepts a hemisphere. Their ratio is the most a passive taper
+                // can concentrate, however long it is.
+                let cos_escape = (1.0 - 1.0 / (self.index * self.index)).max(0.0).sqrt();
+                let escape = 2.0 * std::f64::consts::PI * (1.0 - cos_escape);
+                let gain = (2.0 * std::f64::consts::PI / escape).max(1.0);
+                (bare * gain * transmission.clamp(0.0, 1.0)).clamp(0.0, 1.0)
+            }
+            None => bare,
         }
     }
 

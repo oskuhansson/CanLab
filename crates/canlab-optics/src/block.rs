@@ -93,6 +93,25 @@ impl Block {
         self.outline.thickness_mm
     }
 
+    /// The area of one face, mm².
+    ///
+    /// The ends are the cross-section's area; a side is the edge between its two
+    /// corners times the thickness. The sensor's coverage is its own area divided
+    /// by this one, so the two have to be the same quantity — a fixed fraction of
+    /// "a face" is not, because the faces of one block differ by a factor of 2.4
+    /// and blocks differ by more.
+    pub fn face_area(&self, face: Face) -> f64 {
+        match face {
+            Face::Top | Face::Bottom => self.outline.area_mm2(),
+            Face::Side(index) => {
+                let corners = self.outline.corners_mm();
+                let (ax, ay) = corners[index % corners.len()];
+                let (bx, by) = corners[(index + 1) % corners.len()];
+                (bx - ax).hypot(by - ay) * self.thickness_mm()
+            }
+        }
+    }
+
     /// The side planes as `(normal, offset)` with `normal · p = offset` on the
     /// plane and `normal` outward.
     ///

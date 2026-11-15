@@ -420,7 +420,16 @@ impl Design {
             return 0.0;
         };
         let block = canlab_optics::Block::new(outline);
-        let optical = canlab_optics::Optical::block_in_air(1.49, 10_000.0);
+        // The design point's sensor, so the table and the timing study agree on
+        // what is being read out. A bare 1 mm² part sees 0.12 % of a side face and
+        // would report a light budget of almost nothing.
+        let sensor = crate::timing_study::default_sensor();
+        let optical = canlab_optics::Optical::block_in_air(1.49, 10_000.0)
+            .with_sensor(sensor.area_mm2);
+        let optical = match sensor.guide_efficiency {
+            Some(efficiency) => optical.with_guide(efficiency),
+            None => optical,
+        };
         // The transport's default sensor, and the microcell count is why.
         //
         // `detector::simulate` clamps the **born** photon count to the smallest

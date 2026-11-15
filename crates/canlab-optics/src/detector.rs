@@ -58,6 +58,93 @@ use crate::transport::{Fate, Optical, Transport};
 use crate::vec3::Vec3;
 use crate::Block;
 
+/// The spectral range of the C-Series part, nanometres.
+///
+/// From the datasheet's Table 1, Note 4: "the range where PDE > 1 % at
+/// Vbr + 5.0 V". It is 300-950 nm, which is why a Cherenkov band of 400-600 nm
+/// sits inside it and a sensor can see the light the block makes.
+pub const SENSOR_SPECTRAL_RANGE_NM: (f64, f64) = (300.0, 950.0);
+
+/// The wavelength the part's PDE peaks at, nanometres (datasheet Table 1).
+pub const SENSOR_PEAK_NM: f64 = 420.0;
+
+/// The part's PDE at the peak, at Vbr + 2.5 V and at Vbr + 5.0 V.
+///
+/// Both are 41 % for the 1 mm and 6 mm 35 µm parts and 31 % for the 1 mm part at
+/// the lower overvoltage. The spread is the part's own: the datasheet quotes a
+/// range, so a single number cannot be more precise than the range it sits in.
+pub const SENSOR_PEAK_PDE: (f64, f64) = (0.31, 0.41);
+
+/// The part's photon-detection efficiency at a wavelength, as a fraction.
+///
+/// A piecewise-linear curve through three independent anchors rather than a
+/// fit: the peak of 41 % at 420 nm and the 1 % floor at 950 nm from the
+/// datasheet, and the FWHM of 310-560 nm measured for the same blue-sensitive
+/// SensL die by Otte et al. (arXiv:1606.05186), which puts the half-maximum at
+/// 20.5 % at 560 nm. Outside the spectral range the part does not respond and
+/// the answer is zero, not a small number.
+///
+/// The model does not use this per photon: [`SiPM::pde`] is one flat number and
+/// [`band_weighted_pde`] is what that number approximates. This function is
+/// here so the approximation can be checked against the curve it replaces
+/// instead of being asserted from memory.
+pub fn sensor_pde_at(wavelength_nm: f64) -> f64 {
+    const ANCHORS: [(f64, f64); 13] = [
+        (300.0, 0.010),
+        (310.0, 0.205),
+        (350.0, 0.280),
+        (400.0, 0.373),
+        (420.0, 0.410),
+        (450.0, 0.370),
+        (500.0, 0.300),
+        (560.0, 0.205),
+        (600.0, 0.150),
+        (650.0, 0.100),
+        (700.0, 0.060),
+        (800.0, 0.025),
+        (950.0, 0.010),
+    ];
+    if wavelength_nm <= ANCHORS[0].0 {
+        return ANCHORS[0].1;
+    }
+    if wavelength_nm >= ANCHORS[ANCHORS.len() - 1].0 {
+        return ANCHORS[ANCHORS.len() - 1].1;
+    }
+    for pair in ANCHORS.windows(2) {
+        let (x0, y0) = pair[0];
+        let (x1, y1) = pair[1];
+        if x0 <= wavelength_nm && wavelength_nm <= x1 {
+            let t = (wavelength_nm - x0) / (x1 - x0);
+            return y0 + t * (y1 - y0);
+        }
+    }
+    0.0
+}
+
+/// The average of [`sensor_pde_at`] over a Cherenkov band, weighted by the
+/// `1/λ²` spectrum that makes the photons.
+///
+/// This is the number a flat [`SiPM::pde`] stands in for. A flat 0.35 is 12.6 %
+/// above it, but 0.35 also sits inside the part's own 0.31-0.41 overvoltage
+/// spread, so the two choices are not the same size of error: the flat value is
+/// a choice of operating point, not a spectral mistake.
+pub fn band_weighted_pde(blue_nm: f64, red_nm: f64) -> Option<f64> {
+    if !(0.0 < blue_nm && blue_nm < red_nm) {
+        return None;
+    }
+    let steps = 2000;
+    let step = (red_nm - blue_nm) / steps as f64;
+    let mut numerator = 0.0;
+    let mut denominator = 0.0;
+    for i in 0..steps {
+        let lambda = blue_nm + (i as f64 + 0.5) * step;
+        let weight = 1.0 / (lambda * lambda);
+        numerator += weight * sensor_pde_at(lambda);
+        denominator += weight;
+    }
+    Some(numerator / denominator)
+}
+
 /// One silicon photomultiplier watching one face.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SiPM {
@@ -392,7 +479,7 @@ fn simulate_inner(
         // The sensor does not cover the face. This is the loss that dominates
         // everything else, and leaving it out is how the model reported tens of
         // photons per sensor where the geometry allows a handful.
-        if random() >= optical.sensor_coverage {
+        if random() >= optical.coverage_for(block, face) {
             event.lost += 1;
             continue;
         }
@@ -538,6 +625,17 @@ mod tests {
         (block, optical, sensors)
     }
 
+    /// The design point: the same block with a light guide on every sensor face.
+    ///
+    /// The bare 1 mm² part covers 0.12 % of a side face, so one event of a few
+    /// hundred photons usually detects nothing at all — the physics is right and
+    /// the test's premise ("some photons reach a sensor") is not. A guide covering
+    /// the face is what makes the premise true, and it is what the design uses.
+    fn setup_guided() -> (Block, Optical, [SiPM; 4]) {
+        let (block, optical, sensors) = setup();
+        (block, optical.with_guide(0.6), sensors)
+    }
+
     #[test]
     fn the_four_sensors_watch_four_different_faces() {
         let (block, _, sensors) = setup();
@@ -556,7 +654,13 @@ mod tests {
 
     #[test]
     fn a_muon_makes_photons_and_some_of_them_reach_a_sensor() {
+        // A sensor that can actually see light. A bare 1 mm² part sees 0.12 % of
+        // a side face, so a single 268-photon event lands ~0.4 photons on it and
+        // this seed gets none — the test failed for the right reason, twice. Even
+        // the best possible taper only reaches ~0.35 %, so the test uses the 6 × 6
+        // mm part, which is the size the light budget actually needs.
         let (block, optical, sensors) = setup();
+        let optical = optical.with_sensor(36.0);
         let mut uniform = Uniform(42);
         let mut random = || uniform.next();
         let event = simulate(
@@ -576,6 +680,108 @@ mod tests {
         // loses most of them, but "most" is not "all".
         assert!(detected > 0, "{event:?}");
         assert!(detected <= event.photons_born);
+    }
+
+    #[test]
+    fn a_bare_sensor_sees_its_area_over_the_face() {
+        // The coverage is the sensor's area over the face's, per face. A constant
+        // fraction of "a face" is not the same quantity: the end and side faces of
+        // one block differ by 2.4×, and the old 0.15 was a 236 mm² face's value
+        // carried over to an 840 mm² one.
+        let (block, optical, _) = setup();
+        assert_eq!(optical.guide_efficiency, None);
+        assert_eq!(optical.sensor_area_mm2, 1.0);
+        for face in [Face::Top, Face::Bottom, Face::Side(0), Face::Side(2)] {
+            let expected = optical.sensor_area_mm2 / block.face_area(face);
+            let actual = optical.coverage_for(&block, face);
+            assert!((actual - expected).abs() < 1e-12, "{face:?}: {actual} != {expected}");
+        }
+        // The faces really do differ, so a constant could not have been right.
+        let end = optical.coverage_for(&block, Face::Top);
+        let side = optical.coverage_for(&block, Face::Side(0));
+        assert!(end < side, "the end face is larger, so its coverage is smaller");
+        // And the numbers are the geometry's, not a constant's: a 1 mm² sensor on
+        // this block's 361 mm² side face sees 0.28 %, not 15 %.
+        assert!((end - 1.0 / block.face_area(Face::Top)).abs() < 1e-12);
+        assert!((side - 1.0 / block.face_area(Face::Side(0))).abs() < 1e-12);
+        assert!(side > 0.002 && side < 0.004, "a 1 mm² sensor on a side face: {side}");
+        assert!(side < 0.15, "the old constant was 0.15, which is 50× too generous here");
+    }
+
+    #[test]
+    fn a_taper_is_capped_by_etendue_not_by_area() {
+        // The bug this prevents: a "light guide" that delivers 60 % of a face's
+        // light to a 1 mm² sensor. No passive element can. The light reaches the
+        // face within the escape cone — 1.63 sr for n = 1.49 — and the sensor
+        // accepts a hemisphere, 6.28 sr, so the most a taper can concentrate is
+        // 3.87×, times its own transmission. A model that beats that is a model
+        // of a concentrator that does not exist.
+        let (block, optical, _) = setup();
+        let taper = optical.with_guide(0.75);
+        // The limit is the ratio of the sensor's hemisphere to the escape cone,
+        // and it depends on the block's index.
+        let cos_escape = (1.0 - 1.0 / (optical.index * optical.index)).max(0.0).sqrt();
+        let escape = 2.0 * std::f64::consts::PI * (1.0 - cos_escape);
+        let limit = 2.0 * std::f64::consts::PI / escape;
+        for face in [Face::Top, Face::Bottom, Face::Side(0), Face::Side(2)] {
+            let bare = optical.coverage_for(&block, face);
+            let guided = taper.coverage_for(&block, face);
+            let gain = guided / bare;
+            assert!(
+                (gain - limit * 0.75).abs() < 0.05,
+                "{face:?}: the taper gained {gain}×, the etendue limit is {limit}×"
+            );
+            assert!(
+                guided < 0.05,
+                "{face:?}: a 1 mm² sensor cannot see {guided} of its face — a few \
+                 percent is the etendue limit, and 60 % was the model's mistake"
+            );
+        }
+        // The gain is the same on every face, because it is the solid-angle
+        // ratio and not the geometry.
+        let top = taper.coverage_for(&block, Face::Top) / optical.coverage_for(&block, Face::Top);
+        let side = taper.coverage_for(&block, Face::Side(0)) / optical.coverage_for(&block, Face::Side(0));
+        assert!((top - side).abs() < 1e-12);
+        // A transmission outside [0, 1] is clamped, not propagated.
+        assert!(optical.with_guide(1.7).coverage_for(&block, Face::Top) < 0.01);
+    }
+
+    #[test]
+    fn a_taper_cannot_make_a_one_millimetre_sensor_viable() {
+        // The light budget, measured over many events so the comparison is the
+        // physics and not one seed's luck. The bare 1 mm² part detects about one
+        // photon per eleven muons; the best possible taper multiplies that by
+        // 3.87 × 0.75 = 2.9, which is still one photon per four muons. The design
+        // needs a bigger sensor, and the test says so with the number.
+        let (block, optical, sensors) = setup();
+        let taper = optical.with_guide(0.75);
+        let total = |optical: &Optical| {
+            let mut uniform = Uniform(99);
+            let mut random = || uniform.next();
+            let mut detected = 0usize;
+            for _ in 0..200 {
+                let event = simulate(
+                    &block,
+                    optical,
+                    &sensors,
+                    Vec3::ZERO,
+                    Vec3::new(1.0, 0.0, 0.0),
+                    10.0,
+                    1.0,
+                    &mut random,
+                )
+                .expect("a muon at beta 1");
+                detected += event.arrivals_ps.iter().map(Vec::len).sum::<usize>();
+            }
+            detected as f64 / 200.0
+        };
+        let bare = total(&optical);
+        let guided = total(&taper);
+        assert!(bare < 1.0, "the bare 1 mm² part: {bare} photons per muon");
+        // The taper is a gain of 2.9, not of 500: it must stay under one photon
+        // per muon, which is the number that says the design needs a bigger part.
+        assert!(guided < 1.0, "the taper: {guided} photons per muon");
+        assert!(guided > bare, "the taper is {guided} vs {bare}");
     }
 
     #[test]

@@ -199,9 +199,20 @@ pub fn default_plastic() -> Vec<(f64, f64)> {
     ]
 }
 
-/// The detector's band: the blue/red extremes of the indexing light.
+/// The blue end of the band the simulation emits in, nanometres.
+///
+/// This is the band the *light* is drawn in, not the band the sensor responds
+/// to. The C-Series part's response runs 300–950 nm, so the emitted band sits
+/// well inside it; [`crate::detector::SENSOR_SPECTRAL_RANGE_NM`] is the sensor's
+/// range and a test compares the two.
 pub const BLUE_NM: f64 = 400.0;
-/// The red end of the sensor's sensitivity.
+/// The red end of the band the simulation emits in, nanometres.
+///
+/// 600 nm is where the emitted band stops, not where the sensor stops — the
+/// part responds to 950 nm. Choosing 600 nm for the light is a modelling choice
+/// (it is where the Cherenkov yield in the visible is conventionally cut), and
+/// it is the conservative direction: everything above 600 nm has a lower PDE,
+/// so emitting more red would only add photons the sensor sees less well.
 pub const RED_NM: f64 = 600.0;
 
 /// The `1/λ²` weighting of Cherenkov light: the number of photons between `λ`

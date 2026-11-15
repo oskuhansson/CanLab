@@ -124,6 +124,18 @@ That is less than the earlier study reported, and the difference is a bug fix: t
 photon count used to be taken from the caller's 200 mm path instead of the block's
 own chord, which credited the block with six times the light it makes.
 
+### The network as a distribution
+
+The regressor returns a point and no uncertainty. A second head — the same
+network with a **von Mises–Fisher** output — returns a mean direction *and* a
+concentration `κ`, so every event carries its own predicted error. On the same
+8 000 events (hexagon at 30 mm) it lands on the same median, **28.4°**, and the
+same 60° fraction, so the distribution costs nothing in the mean direction. Its
+`κ` ranks events correctly — the events it calls hard are harder — but its 30°
+probability is optimistic: **62.6 % predicted, 53.9 % observed**. The vMF tail is
+too light, and a single scale on `κ` would fix the number without touching the
+direction. [vmf.md](vmf.md) has the measurement and the calibration table.
+
 ---
 
 ## The block

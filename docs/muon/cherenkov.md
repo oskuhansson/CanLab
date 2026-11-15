@@ -16,6 +16,26 @@ open.*
 *Every number here comes from the code in this repository. Where a number is a
 model rather than a measurement, it says so.*
 
+> **Status, 2026-11-15 — the sensor model changed after these measurements.**
+> The light guide as modelled delivered 60 % of a face to a 1 mm² sensor, which no
+> passive element can: the light reaches the face within the escape cone
+> (1.63 sr at n = 1.49) and the sensor accepts a hemisphere (6.28 sr), so etendue
+> caps a taper at **3.87×** the bare coverage. The taper also has to be a **cavity
+> in the block**, because the hexagon's corners touch the can's wall and a side
+> face has only 3.75 mm of clearance at its centre. The sensor's jitter now scales
+> with its area as well: the C-series fast output rises in 0.3 / 0.6 / 1.0 ns for
+> the 1 / 3 / 6 mm parts, and the measured SPTR of a 3 mm part is 179 ps FWHM
+> against ~100 ps for the 1 mm, so the 6 mm part pays **143 ps** for its light.
+>
+> The design point is therefore the **6 × 6 mm part behind the taper**, and the
+> numbers in §3, §4 and §7 predate the correction. The current measurement for the
+> hexagon at 30 mm is **28.4° median, 53.3 % within 30°** — the design does not
+> pass the mission's criterion, and the light budget, not the geometry, is why:
+> 20, 30 and 40 mm deep measure 28.0°, 28.4° and 27.4°, which is the run-to-run
+> noise. The tables below are kept because the ablation and the design comparison
+> are the record of what was tried; they are not the current numbers.
+> [vmf.md](vmf.md) has the distribution head measured on the current model.
+
 ---
 
 ## 1. The idea in one paragraph

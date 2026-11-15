@@ -15,7 +15,7 @@
 //! photon that reached it gets there.
 
 use canlab_muon::timing_study::TimingDesign;
-use canlab_optics::{Block, Event, Fate, Optical, PhotonRecord, SiPM, Vec3};
+use canlab_optics::{Block, Event, Fate, PhotonRecord, SiPM, Vec3};
 use canlab_scene::Camera;
 
 /// A photon a sensor detected: the signal.
@@ -90,6 +90,17 @@ pub struct DetectorScene {
     pub show_photons: bool,
     /// Whether to draw the cone.
     pub show_cone: bool,
+    /// Whether to draw each fate's photons.
+    ///
+    /// The signal and the three losses answer different questions: a reader
+    /// asking "where did the light go" wants the losses, and a reader asking
+    /// "what reached a sensor" wants the detections and nothing else. Four
+    /// switches, not one, because "only trapped and detected" is a combination
+    /// the reader asked for.
+    pub show_detected: bool,
+    pub show_lost: bool,
+    pub show_absorbed: bool,
+    pub show_trapped: bool,
     /// How many photons reached a sensor face, for the header.
     pub detected: usize,
 }
@@ -98,7 +109,10 @@ impl DetectorScene {
     /// Simulate one event for a design.
     pub fn new(design: TimingDesign, seed: u64) -> Option<DetectorScene> {
         let block = design.block()?;
-        let optical = Optical::block_in_air(design.index, 10_000.0);
+        // The design point's sensor: the 1 mm² part behind a light guide. A bare
+        // part sees 0.12 % of a side face and the view would show no signal at
+        // all, which is the truth about a bare part and not about this design.
+        let optical = canlab_muon::timing_study::default_sensor().optical(&design);
         let sensors = design.sensors();
         let mut rng = canlab_muon::Rng::new(seed);
 
@@ -154,7 +168,10 @@ impl DetectorScene {
         }
         let mut order = first;
         order.extend(rest);
-        let photon_limit = photons.len().min(120);
+        // Every photon, not a sample: the reader asked for the maximum, and the
+        // slider beside the checkbox is how they cut it down. A fixed default of
+        // 120 made "reset to the maximum" mean two different numbers.
+        let photon_limit = photons.len();
         Some(DetectorScene {
             design,
             block,
@@ -177,6 +194,10 @@ impl DetectorScene {
             zoom: 1.0,
             show_photons: true,
             show_cone: true,
+            show_detected: true,
+            show_lost: true,
+            show_absorbed: true,
+            show_trapped: true,
             detected,
         })
     }
@@ -191,13 +212,47 @@ impl DetectorScene {
         (last + 20.0).max(60.0)
     }
 
-    /// The photons the drawing shows: every detected one, then a sample of the
-    /// losses.
+    /// Whether a photon's fate is one the drawing shows.
+    ///
+    /// A detected photon is the signal whatever its fate says — `detected` is
+    /// set on the same record — so the detection switch wins over the loss
+    /// switches. Otherwise a reader who hid "lost" would hide the light that
+    /// reached a sensor on a face the coverage would have lost.
+    pub fn shows(&self, photon: &PhotonRecord) -> bool {
+        match (photon.detected, photon.fate) {
+            (Some(_), _) => self.show_detected,
+            (None, Fate::Escaped) => self.show_lost,
+            (None, Fate::Absorbed) => self.show_absorbed,
+            (None, Fate::Trapped) => self.show_trapped,
+        }
+    }
+
+    /// The photons the drawing shows: every enabled fate, in the order above,
+    /// up to the limit.
     pub fn visible(&self) -> impl Iterator<Item = &PhotonRecord> {
         self.order
             .iter()
-            .take(self.photon_limit.min(self.order.len()))
             .map(|index| &self.photons[*index])
+            .filter(|photon| self.shows(photon))
+            .take(self.photon_limit.min(self.order.len()))
+    }
+
+    /// Carry the reader's view settings onto a new scene.
+    ///
+    /// The camera, the clock's speed and the switches are the reader's, not the
+    /// event's, so they survive a new event. The photon count is not: it is the
+    /// event's, and a new event starts at its own maximum.
+    pub fn adopt_view(&mut self, from: &DetectorScene) {
+        self.speed_ps_per_s = from.speed_ps_per_s;
+        self.zoom = from.zoom;
+        self.azimuth = from.azimuth;
+        self.elevation = from.elevation;
+        self.show_photons = from.show_photons;
+        self.show_cone = from.show_cone;
+        self.show_detected = from.show_detected;
+        self.show_lost = from.show_lost;
+        self.show_absorbed = from.show_absorbed;
+        self.show_trapped = from.show_trapped;
     }
 
     /// When a photon was emitted, picoseconds after the muon reached the block.
@@ -630,17 +685,15 @@ mod tests {
     }
 
     #[test]
-    #[test]
-    fn every_detected_photon_is_drawn() {
-        // The bug this prevents: the order was a uniform shuffle of all 687
-        // photons and only about ten are detected. At the default limit of 120
-        // the expected number of detected photons drawn is 120 * 10/687 = 1.75,
-        // so the green signal was statistically absent from the picture and a
-        // reader saw green paths that "did not reach a sensor" when in fact
-        // they were never drawn. The detected ones go first, so the limit
-        // cannot hide them.
+    fn every_detected_photon_that_fits_is_drawn() {
+        // The bug this prevents: the order was a uniform shuffle of all the
+        // photons, so the handful that reach a sensor were almost never drawn —
+        // 120 of 687 draws about 1.75 of them — and the green signal looked as
+        // though it never reached a sensor. The detected ones go first, so the
+        // limit can only cut the signal when the signal is larger than the limit,
+        // and then it cuts it from the end.
         let scene = DetectorScene::new(hexagon(), 1).expect("a scene");
-        let mut detected: Vec<usize> = scene
+        let detected: Vec<usize> = scene
             .photons
             .iter()
             .enumerate()
@@ -648,22 +701,80 @@ mod tests {
             .map(|(index, _)| index)
             .collect();
         assert!(!detected.is_empty(), "the event has no detection to draw");
-        assert!(
-            detected.len() <= scene.photon_limit,
-            "{} detected photons but the limit is {}",
-            detected.len(),
-            scene.photon_limit
-        );
-        let mut drawn: Vec<usize> = scene.order.iter().take(detected.len()).copied().collect();
-        drawn.sort_unstable();
-        detected.sort_unstable();
-        assert_eq!(drawn, detected, "the detected photons are not drawn first");
-        // And the drawing really shows all of them, not just the order.
-        assert_eq!(
-            scene.visible().filter(|photon| photon.detected.is_some()).count(),
-            detected.len(),
-            "a detected photon is missing from the drawing"
-        );
+        let shown = detected.len().min(scene.photon_limit);
+        for slot in 0..shown {
+            let index = scene.order[slot];
+            assert!(
+                scene.photons[index].detected.is_some(),
+                "slot {slot} of the order is a loss, not a detection"
+            );
+        }
+        // When the signal fits under the limit, every detection is drawn.
+        if detected.len() <= scene.photon_limit {
+            assert_eq!(
+                scene.visible().filter(|photon| photon.detected.is_some()).count(),
+                detected.len(),
+                "a detected photon is missing from the drawing"
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_ticked_fates_are_drawn() {
+        // The reader asked for "trapped and detected" as one combination, so the
+        // switches have to compose: hiding the losses must not hide a photon
+        // that reached a sensor, and showing only trapped photons must show
+        // exactly the trapped ones.
+        let mut scene = DetectorScene::new(hexagon(), 1).expect("a scene");
+        scene.show_detected = false;
+        scene.show_lost = false;
+        scene.show_absorbed = false;
+        scene.show_trapped = true;
+        let shown: Vec<&PhotonRecord> = scene.visible().collect();
+        let trapped = scene
+            .photons
+            .iter()
+            .filter(|photon| photon.detected.is_none() && photon.fate == Fate::Trapped)
+            .count();
+        assert!(trapped > 0, "the event has no trapped photon to show");
+        assert_eq!(shown.len(), trapped.min(scene.photon_limit));
+        assert!(shown
+            .iter()
+            .all(|photon| photon.detected.is_none() && photon.fate == Fate::Trapped));
+
+        // And the combination the reader asked for: trapped plus detected.
+        scene.show_detected = true;
+        let both: Vec<&PhotonRecord> = scene.visible().collect();
+        let detected = scene.photons.iter().filter(|photon| photon.detected.is_some()).count();
+        assert!(detected > 0, "the event has no detection to show");
+        assert_eq!(both.len(), (trapped + detected).min(scene.photon_limit));
+        assert!(both
+            .iter()
+            .all(|photon| photon.detected.is_some() || photon.fate == Fate::Trapped));
+        // Nothing else is drawn: the lost and absorbed photons are gone.
+        assert!(both
+            .iter()
+            .all(|photon| photon.detected.is_some() || photon.fate != Fate::Absorbed));
+    }
+
+    #[test]
+    fn a_new_event_starts_at_every_photon_and_keeps_the_view() {
+        // The count is the event's, the view is the reader's. A new event shows
+        // every photon it has; the camera and the switches are carried over.
+        let mut first = DetectorScene::new(hexagon(), 1).expect("a scene");
+        first.photon_limit = 5;
+        first.zoom = 2.0;
+        first.show_lost = false;
+        let mut second = DetectorScene::new(hexagon(), 2).expect("a scene");
+        second.adopt_view(&first);
+        assert_eq!(second.photon_limit, second.photons.len());
+        assert_eq!(second.zoom, 2.0);
+        assert!(!second.show_lost);
+        assert!(second.show_detected && second.show_absorbed && second.show_trapped);
+        // A scene starts with every fate shown.
+        let fresh = DetectorScene::new(hexagon(), 3).expect("a scene");
+        assert!(fresh.show_detected && fresh.show_lost && fresh.show_absorbed && fresh.show_trapped);
+        assert_eq!(fresh.photon_limit, fresh.photons.len());
     }
 
     #[test]

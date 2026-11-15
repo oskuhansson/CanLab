@@ -42,7 +42,13 @@ impl Stream {
 
 fn setup(index: f64) -> (Block, Optical, [SiPM; 4]) {
     let block = Block::new(Tropical::fits_in(20.0, 10.0).expect("fits"));
-    let optical = Optical::block_in_air(index, 10_000.0);
+    // A sensor that can actually see light. A bare 1 mm² part covers 0.28 % of
+    // this block's side face — one photon per eleven muons — and even the best
+    // possible taper only triples that, because etendue caps a passive
+    // concentrator at the ratio of the sensor's hemisphere to the escape cone.
+    // The 6 × 6 mm part behind a taper sees ~47 % of the face, which is a
+    // waveform.
+    let optical = Optical::block_in_air(index, 10_000.0).with_sensor(36.0).with_guide(0.75);
     let sensors = [
         SiPM::typical(Face::Top),
         SiPM::typical(Face::Bottom),

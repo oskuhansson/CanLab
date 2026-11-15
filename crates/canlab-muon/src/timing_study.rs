@@ -199,9 +199,20 @@ pub fn simulate_one(
     azimuth_rad: f64,
     rng: &mut Rng,
 ) -> Option<TimingOutcome> {
+    simulate_one_with_sensor(design, default_sensor(), zenith_rad, azimuth_rad, rng)
+}
+
+/// The same event, read out with the named sensor model.
+pub fn simulate_one_with_sensor(
+    design: &TimingDesign,
+    sensor: SensorModel,
+    zenith_rad: f64,
+    azimuth_rad: f64,
+    rng: &mut Rng,
+) -> Option<TimingOutcome> {
     let block = design.block()?;
-    let optical = Optical::block_in_air(design.index, 10_000.0);
-    let sensors = design.sensors();
+    let optical = sensor.optical(design);
+    let sensors = sensor.sensors(design);
 
     let heading = Vec3::new(
         zenith_rad.sin() * azimuth_rad.cos(),
@@ -301,9 +312,21 @@ pub fn simulate_one_realistic(
     azimuth_rad: f64,
     rng: &mut Rng,
 ) -> Option<TimingOutcome> {
+    simulate_one_realistic_with_sensor(design, default_sensor(), readout, zenith_rad, azimuth_rad, rng)
+}
+
+/// The same event through the readout, with the named sensor model.
+pub fn simulate_one_realistic_with_sensor(
+    design: &TimingDesign,
+    sensor: SensorModel,
+    readout: &Readout,
+    zenith_rad: f64,
+    azimuth_rad: f64,
+    rng: &mut Rng,
+) -> Option<TimingOutcome> {
     let block = design.block()?;
-    let optical = Optical::block_in_air(design.index, 10_000.0);
-    let sensors = design.sensors();
+    let optical = sensor.optical(design);
+    let sensors = sensor.sensors(design);
 
     let heading = Vec3::new(
         zenith_rad.sin() * azimuth_rad.cos(),
@@ -659,6 +682,117 @@ pub fn reconstruct_cherenkov(
     best.map(|(_, heading)| heading)
 }
 
+/// What the block's faces are read out with.
+///
+/// The coverage is not a constant: it is the sensor's own area over the face's,
+/// or a light guide's measured delivery efficiency when the face has one. The
+/// distinction decides the light budget — a 1 mm² bare sensor on an 840 mm² side
+/// face sees 0.12 % of it, and a guide on the same face sees 60 %.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SensorModel {
+    /// The sensor's active area, mm².
+    pub area_mm2: f64,
+    /// A light guide's delivery efficiency, if the face has one.
+    pub guide_efficiency: Option<f64>,
+}
+
+impl SensorModel {
+    /// The component list's part, bare: the onsemi MICROFC-10035, 1 mm².
+    pub fn microfc_10035() -> SensorModel {
+        SensorModel { area_mm2: 1.0, guide_efficiency: None }
+    }
+
+    /// The same part behind a **recessed taper**, with `transmission` loss.
+    ///
+    /// The taper is a cavity moulded into the PMMA face, not a guide outside it:
+    /// the hexagon's corners touch the can's wall, so there is no room outside,
+    /// and a guide outside would see the light after it had refracted into the
+    /// full hemisphere and could not concentrate at all. The cavity sees the light
+    /// inside the block, within the escape cone, and the etendue ratio caps the
+    /// concentration at 3.87× for n = 1.49.
+    pub fn guided(transmission: f64) -> SensorModel {
+        SensorModel { area_mm2: 1.0, guide_efficiency: Some(transmission) }
+    }
+
+    /// A 3 × 3 mm part, bare. Nine times the area of the 1 mm², twice the jitter.
+    pub fn three_mm() -> SensorModel {
+        SensorModel { area_mm2: 9.0, guide_efficiency: None }
+    }
+
+    /// A 3 × 3 mm part behind a recessed taper.
+    pub fn three_mm_guided() -> SensorModel {
+        SensorModel { area_mm2: 9.0, guide_efficiency: Some(0.75) }
+    }
+
+    /// A 6 × 6 mm part, bare. Nine times the area and about nine times the cost.
+    pub fn six_mm() -> SensorModel {
+        SensorModel { area_mm2: 36.0, guide_efficiency: None }
+    }
+
+    /// A 6 × 6 mm part behind a recessed taper: the design point.
+    ///
+    /// The 1 mm² part cannot be used even with the best possible taper — the
+    /// etendue limit leaves it seeing 0.35 % of a side face, about one photon per
+    /// four muons. The 6 × 6 mm part sees 4.3 % bare and 12.4 % tapered, which is
+    /// the light budget the timing needs.
+    pub fn six_mm_guided() -> SensorModel {
+        SensorModel { area_mm2: 36.0, guide_efficiency: Some(0.75) }
+    }
+
+    /// The SiPM's single-photon time resolution, picoseconds **FWHM**.
+    ///
+    /// The C-series datasheet gives the fast output's rise time by sensor size —
+    /// 0.3 ns for the 1 mm, 0.6 ns for the 3 mm, 1.0 ns for the 6 mm — and the
+    /// jitter follows it. The measured SPTR of a 3 × 3 mm part is 179 ps FWHM
+    /// against 100–120 ps for the 1 mm, which is the same factor of two as the
+    /// rise times, so 100 ps scaled by `rise / 0.3 ns` is the model.
+    ///
+    /// This is the term the earlier model left out: a 6 × 6 mm sensor buys 36×
+    /// the area and pays 3.3× the jitter for it.
+    pub fn sptr_fwhm_ps(self) -> f64 {
+        let rise_ns = if self.area_mm2 <= 1.0 {
+            0.3
+        } else if self.area_mm2 <= 9.0 {
+            0.6
+        } else {
+            1.0
+        };
+        100.0 * rise_ns / 0.3
+    }
+
+    /// The readout's total jitter, picoseconds sigma: this SiPM plus the
+    /// electronics, in quadrature.
+    pub fn jitter_ps(self) -> f64 {
+        let sensor = self.sptr_fwhm_ps() / 2.355;
+        let electronics = 6.0f64.powi(2) + 2.0f64.powi(2) + 20.0f64.powi(2);
+        (sensor * sensor + electronics).sqrt()
+    }
+
+    /// The four sensors, with this part's jitter and the design's PDE.
+    pub fn sensors(self, design: &TimingDesign) -> [SiPM; 4] {
+        let jitter = self.jitter_ps();
+        SENSOR_FACES.map(|face| SiPM { face, pde: design.pde, jitter_ps: jitter, microcells: 40_000 })
+    }
+
+    /// The optical model for a design and this sensor.
+    pub fn optical(self, design: &TimingDesign) -> Optical {
+        let optical = Optical::block_in_air(design.index, 10_000.0).with_sensor(self.area_mm2);
+        match self.guide_efficiency {
+            Some(efficiency) => optical.with_guide(efficiency),
+            None => optical,
+        }
+    }
+}
+
+/// The sensor the study assumes when the caller does not name one.
+///
+/// The design point: the 6 × 6 mm part behind a recessed taper. It is the
+/// smallest part that sees enough light — the 1 mm² part is capped by etendue at
+/// 0.35 % of a side face, which is one photon per four muons.
+pub fn default_sensor() -> SensorModel {
+    SensorModel::six_mm_guided()
+}
+
 /// The number of features one event gives the network.
 ///
 /// Four first arrival times, four **second** arrival times, four "did it fire"
@@ -761,9 +895,18 @@ pub fn training_sample(
     design: &TimingDesign,
     rng: &mut Rng,
 ) -> Option<crate::net::Sample> {
+    training_sample_with_sensor(design, default_sensor(), rng)
+}
+
+/// The same ideal sample, read out with the named sensor model.
+pub fn training_sample_with_sensor(
+    design: &TimingDesign,
+    sensor: SensorModel,
+    rng: &mut Rng,
+) -> Option<crate::net::Sample> {
     let zenith = crate::muon::MuonFlux::measured().sample_zenith(rng.uniform());
     let azimuth = rng.range(0.0, std::f64::consts::TAU);
-    let outcome = simulate_one(design, zenith, azimuth, rng)?;
+    let outcome = simulate_one_with_sensor(design, sensor, zenith, azimuth, rng)?;
     Some(crate::net::Sample {
         features: features(&outcome).to_vec(),
         target: outcome.direction,
@@ -781,9 +924,19 @@ pub fn training_sample_realistic(
     readout: &Readout,
     rng: &mut Rng,
 ) -> Option<crate::net::Sample> {
+    training_sample_realistic_with_sensor(design, default_sensor(), readout, rng)
+}
+
+/// The same sample, read out with the named sensor model.
+pub fn training_sample_realistic_with_sensor(
+    design: &TimingDesign,
+    sensor: SensorModel,
+    readout: &Readout,
+    rng: &mut Rng,
+) -> Option<crate::net::Sample> {
     let zenith = crate::muon::MuonFlux::measured().sample_zenith(rng.uniform());
     let azimuth = rng.range(0.0, std::f64::consts::TAU);
-    let outcome = simulate_one_realistic(design, readout, zenith, azimuth, rng)?;
+    let outcome = simulate_one_realistic_with_sensor(design, sensor, readout, zenith, azimuth, rng)?;
     Some(crate::net::Sample {
         features: features(&outcome).to_vec(),
         target: outcome.direction,
@@ -800,9 +953,19 @@ pub fn training_sample_first_only(
     readout: &Readout,
     rng: &mut Rng,
 ) -> Option<crate::net::Sample> {
+    training_sample_first_only_with_sensor(design, default_sensor(), readout, rng)
+}
+
+/// The same first-only sample, read out with the named sensor model.
+pub fn training_sample_first_only_with_sensor(
+    design: &TimingDesign,
+    sensor: SensorModel,
+    readout: &Readout,
+    rng: &mut Rng,
+) -> Option<crate::net::Sample> {
     let zenith = crate::muon::MuonFlux::measured().sample_zenith(rng.uniform());
     let azimuth = rng.range(0.0, std::f64::consts::TAU);
-    let outcome = simulate_one_realistic(design, readout, zenith, azimuth, rng)?;
+    let outcome = simulate_one_realistic_with_sensor(design, sensor, readout, zenith, azimuth, rng)?;
     Some(crate::net::Sample {
         features: features_first_only(&outcome).to_vec(),
         target: outcome.direction,

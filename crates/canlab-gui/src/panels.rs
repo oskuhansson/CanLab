@@ -3334,37 +3334,19 @@ pub fn designs(app: &mut CasApp, ui: &mut Ui) {
     });
 
     // The scene, rebuilt when the design or the seed changes. The view's
-    // settings — speed, zoom, camera, toggles — are the reader's, not the
+    // settings — speed, zoom, camera, switches — are the reader's, not the
     // event's, so they survive a new event. Rebuilding them from the defaults
     // is what made the speed reset every time the reader asked for another
-    // muon.
+    // muon. The photon count is the event's: a new event starts at its own
+    // maximum, so the reader sees everything before cutting it down.
     let stale = app
         .detector
         .as_ref()
         .is_none_or(|scene| scene.seed != app.detector_seed || scene.design != design);
     if stale {
-        let settings = app.detector.as_ref().map(|scene| {
-            (
-                scene.speed_ps_per_s,
-                scene.zoom,
-                scene.azimuth,
-                scene.elevation,
-                scene.show_photons,
-                scene.show_cone,
-                scene.photon_limit,
-            )
-        });
         let mut scene = crate::detector::DetectorScene::new(design, app.detector_seed);
-        if let (Some(scene), Some(settings)) = (scene.as_mut(), settings) {
-            scene.speed_ps_per_s = settings.0;
-            scene.zoom = settings.1;
-            scene.azimuth = settings.2;
-            scene.elevation = settings.3;
-            scene.show_photons = settings.4;
-            scene.show_cone = settings.5;
-            // The count is the reader's, but a scene can have fewer photons
-            // than the last one did; the slider's range is this scene's total.
-            scene.photon_limit = settings.6.min(scene.photons.len());
+        if let (Some(scene), Some(previous)) = (scene.as_mut(), app.detector.as_ref()) {
+            scene.adopt_view(previous);
         }
         app.detector = scene;
     }
@@ -3400,20 +3382,35 @@ pub fn designs(app: &mut CasApp, ui: &mut Ui) {
         ui.checkbox(&mut scene.show_photons, "photons");
         ui.checkbox(&mut scene.show_cone, "cone");
         if scene.show_photons {
-            let total = scene.photons.len();
+            // The slider counts the photons the switches leave, so its top is
+            // "every photon you asked to see" and not "every photon in the
+            // event". Unticking a fate shortens the range and the count with it.
+            let matching = scene.photons.iter().filter(|photon| scene.shows(photon)).count();
+            scene.photon_limit = scene.photon_limit.min(matching);
             ui.add(
-                egui::Slider::new(&mut scene.photon_limit, 0..=total.max(1))
-                    .text(format!("of {total}")),
+                egui::Slider::new(&mut scene.photon_limit, 0..=matching.max(1))
+                    .text(format!("of {matching}")),
             );
             ui.separator();
-            for (colour, label) in [
-                (crate::detector::DETECTED, "detected"),
-                (crate::detector::LOST, "lost"),
-                (crate::detector::ABSORBED, "absorbed"),
-                (crate::detector::TRAPPED, "trapped"),
-            ] {
-                ui.colored_label(colour, format!("● {label}"));
-            }
+            // The legend is the filter: a colour that names a fate is also the
+            // switch that shows it, so the reader does not have to match a
+            // separate key to the checkboxes.
+            ui.checkbox(
+                &mut scene.show_detected,
+                RichText::new("detected").color(crate::detector::DETECTED),
+            );
+            ui.checkbox(
+                &mut scene.show_lost,
+                RichText::new("lost").color(crate::detector::LOST),
+            );
+            ui.checkbox(
+                &mut scene.show_absorbed,
+                RichText::new("absorbed").color(crate::detector::ABSORBED),
+            );
+            ui.checkbox(
+                &mut scene.show_trapped,
+                RichText::new("trapped").color(crate::detector::TRAPPED),
+            );
         }
         // The two things in the picture that are not photons, named so neither
         // is guessed: the cross is the muon's position at the clock, the dot is
