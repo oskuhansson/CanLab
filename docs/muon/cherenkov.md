@@ -223,7 +223,7 @@ timestamps is set by the **placement**, not by the sensor.
 
 The resolution follows the light:
 
-| Sensor | Median | Within 30° | Four sensors |
+| Sensor | Median | Within 30° | Four sensors, € |
 |---|---|---|---|
 | 1 mm² + taper | 35.5° | 38 % | 40–100 € |
 | 3 × 3 mm + taper | 30.4° | 49 % | 80–180 € |
