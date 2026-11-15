@@ -240,8 +240,8 @@ So the sensor is a straight trade of money for resolution, and no point on it
 passes the 30° criterion: the best is 50 % within 30°, and it is the most
 expensive. The 1 mm² part cannot see the light even with the best possible taper:
 etendue caps a taper at 3.87× the bare coverage, so 0.12 % becomes 0.35 %, one
-photon per four muons. The 6 mm part sees 4.3 % bare and 12.4 % tapered — 2.21
-sensors timed per muon and about 10.4 photons across the four. It pays for that
+photon per four muons. The 6 mm part sees 4.3 % bare and 12.4 % tapered — 2.27
+sensors timed per muon and about 10.2 photons across the four. It pays for that
 light with
 jitter: the C-series fast output rises in 1.0 ns against the 1 mm part's 0.3 ns,
 and the jitter follows the rise time, so the total readout jitter is **143 ps
