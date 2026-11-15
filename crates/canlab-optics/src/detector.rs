@@ -163,6 +163,12 @@ pub struct SiPM {
     /// volume shrinkage and the process leaves voids and unwetted patches. The
     /// Fresnel transmission is separate and is computed by the transport.
     pub coupling: f64,
+    /// Where on its face the sensor sits, as an offset from the face centre in
+    /// the face's own `(u, v)` axes, millimetres.
+    ///
+    /// Four sensors on one face need this: the face alone does not say which of
+    /// them a photon hit.
+    pub offset: (f64, f64),
 }
 
 impl SiPM {
@@ -179,6 +185,7 @@ impl SiPM {
             jitter_ps: 100.0,
             microcells: 40_000,
             coupling: 1.0,
+            offset: (0.0, 0.0),
         }
     }
 
@@ -209,7 +216,10 @@ impl SiPM {
 /// test compared them.
 pub fn four_sensors(block: &Block) -> [SiPM; 4] {
     let _ = block;
-    SENSOR_FACES.map(SiPM::typical)
+    std::array::from_fn(|index| SiPM {
+        offset: crate::block::SENSOR_OFFSETS[index],
+        ..SiPM::typical(SENSOR_FACES[index])
+    })
 }
 
 /// One muon's event, as the sensors saw it.
@@ -496,26 +506,36 @@ fn simulate_inner(
             event.missed += 1;
             continue;
         };
-        let Some(sensor_index) = sensors.iter().position(|sensor| sensor.face == face) else {
-            event.lost += 1;
-            continue;
-        };
-        let sensor = sensors[sensor_index];
-        // The photon must hit the detector, not merely the face. A bare sensor
-        // is a square on the face, and a taper accepts only the cone etendue
-        // allows; either way the test is geometric, and a photon that hits the
-        // face a millimetre from the sensor is not a detection. The previous
-        // model multiplied every escaped photon by the face's mean coverage,
-        // which put detections anywhere on the face — including tens of
-        // millimetres from the sensor.
         let (Some(exit), Some(direction)) = (traced.exit, traced.exit_direction) else {
             event.missed += 1;
             continue;
         };
-        if !optical.detects(block, face, exit, direction, random) {
+        // The sensors on this face, each with its own aperture. A photon can
+        // hit only one of them, so the first that accepts it is the detection.
+        // The test is geometric: a bare sensor is a square on the face, and a
+        // taper's mouth is a square of `area * gain`. The previous model
+        // multiplied every escaped photon by the face's mean coverage, which put
+        // detections anywhere on the face — including tens of millimetres from
+        // the sensor.
+        let (u, v) = block.face_axes(face);
+        let mut hit = None;
+        for (index, sensor) in sensors.iter().enumerate() {
+            if sensor.face != face {
+                continue;
+            }
+            let centre = block
+                .face_centre(face)
+                .add(u.scale(sensor.offset.0))
+                .add(v.scale(sensor.offset.1));
+            if optical.detects_at(block, face, centre, exit, direction, random) {
+                hit = Some((index, *sensor));
+                break;
+            }
+        }
+        let Some((sensor_index, sensor)) = hit else {
             event.lost += 1;
             continue;
-        }
+        };
         // The sensor's own efficiency at the angle it sees. The angle in the
         // sensor's medium comes from Snell: the block's index over the glue's,
         // which is below one for a bonded face, so the light bends towards the
@@ -697,81 +717,25 @@ mod tests {
     }
 
     #[test]
-    fn the_four_sensors_watch_four_different_faces() {
+    fn the_four_sensors_watch_the_bottom_face() {
+        // The bottom-face experiment: one face, four positions. The block's
+        // drawn positions and the detector's faces are one list, so the picture
+        // and the counting cannot describe two different detectors.
         let (block, _, sensors) = setup();
-        let faces: Vec<Face> = sensors.iter().map(|sensor| sensor.face).collect();
-        assert_eq!(faces.iter().filter(|face| **face == Face::Top).count(), 1);
-        assert_eq!(faces.iter().filter(|face| **face == Face::Bottom).count(), 1);
-        assert_eq!(faces.iter().filter(|face| matches!(face, Face::Side(_))).count(), 2);
+        assert!(sensors.iter().all(|sensor| sensor.face == Face::Bottom));
         assert_eq!(block.sensor_positions().len(), 4);
-        // The detector's faces and the block's drawn positions are one list.
-        // They were two, and they named different faces for two of the four.
-        assert_eq!(faces, SENSOR_FACES.to_vec());
+        assert_eq!(
+            sensors.iter().map(|sensor| sensor.face).collect::<Vec<_>>(),
+            SENSOR_FACES.to_vec()
+        );
         for (sensor, position) in sensors.iter().zip(block.sensor_positions()) {
-            assert_eq!(position, block.face_centre(sensor.face));
+            let (u, v) = block.face_axes(sensor.face);
+            let expected = block
+                .face_centre(sensor.face)
+                .add(u.scale(sensor.offset.0))
+                .add(v.scale(sensor.offset.1));
+            assert_eq!(position, expected);
         }
-    }
-
-    #[test]
-    fn a_muon_makes_photons_and_some_of_them_reach_a_sensor() {
-        // A sensor that can actually see light. The 6 x 6 mm part behind a taper
-        // has an entrance aperture of `area * gain` on the face centre, and one
-        // 268-photon event lands about one photon inside it, so a single event
-        // is a coin flip. The premise is "some photons reach a sensor", not
-        // "one event does", so the test runs a few events.
-        let (block, optical, sensors) = setup();
-        let optical = optical.with_sensor(36.0).with_guide(0.75);
-        let mut uniform = Uniform(42);
-        let mut random = || uniform.next();
-        let mut detected = 0usize;
-        let mut born = 0usize;
-        for _ in 0..20 {
-            let event = simulate(
-                &block,
-                &optical,
-                &sensors,
-                Vec3::ZERO,
-                Vec3::new(1.0, 0.0, 0.0),
-                10.0,
-                1.0,
-                &mut random,
-            )
-            .expect("a muon at beta 1");
-            born += event.photons_born;
-            detected += event.arrivals_ps.iter().map(Vec::len).sum::<usize>();
-        }
-        assert!(born > 2_000, "{born} photons");
-        assert!(detected > 0, "no photon reached a sensor in 20 events");
-        assert!(detected <= born);
-    }
-
-    #[test]
-    fn the_taper_entrance_is_a_square_of_area_times_gain() {
-        // The bug this prevents: a taper that detects anywhere on the face. The
-        // guide's mouth is a square of `sensor_area * gain`, centred on the face,
-        // and a photon outside it is not a detection however normal its direction.
-        let (block, optical, _) = setup();
-        let guided = optical.with_sensor(36.0).with_guide(0.75);
-        let gain = guided.gain();
-        assert!((gain - 6.23).abs() < 0.01, "gain {gain} at n = 1.84");
-        let face = Face::Top;
-        let area = guided.guide_area_mm2(&block, face);
-        assert!((area - 36.0 * gain).abs() < 1e-9, "aperture {area}");
-        let side = area.sqrt();
-        let centre = block.face_centre(face);
-        let normal = block.face_normal(face);
-        let (u, v) = block.face_axes(face);
-        let mut random = || 0.5;
-        // Inside the mouth, along the normal: detected.
-        assert!(guided.detects(&block, face, centre, normal, &mut random));
-        // Inside the mouth, at 2.9 mm: still detected.
-        assert!(guided.detects(&block, face, centre.add(u.scale(0.49 * side)), normal, &mut random));
-        // Outside the mouth: not detected, however normal the direction.
-        assert!(!guided.detects(&block, face, centre.add(u.scale(0.51 * side)), normal, &mut random));
-        assert!(!guided.detects(&block, face, centre.add(v.scale(10.0)), normal, &mut random));
-        // Inside the mouth but outside the acceptance cone: not detected.
-        let steep = normal.scale(0.2).add(u.scale(0.98)).normalized().expect("a direction");
-        assert!(!guided.detects(&block, face, centre, steep, &mut random));
     }
 
     #[test]

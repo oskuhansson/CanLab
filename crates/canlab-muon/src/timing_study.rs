@@ -111,12 +111,13 @@ impl TimingDesign {
     pub fn sensors(&self) -> [SiPM; 4] {
         let jitter = components::total_jitter_ps();
         let pde = self.pde;
-        SENSOR_FACES.map(|face| SiPM {
-            face,
+        std::array::from_fn(|index| SiPM {
+            face: SENSOR_FACES[index],
             pde,
             jitter_ps: jitter,
             microcells: 40_000,
             coupling: 1.0,
+            offset: canlab_optics::SENSOR_OFFSETS[index],
         })
     }
 
@@ -783,12 +784,13 @@ impl SensorModel {
     pub fn sensors(self, design: &TimingDesign) -> [SiPM; 4] {
         let jitter = self.jitter_ps();
         let coupling = crate::components::adhesive().transmission;
-        SENSOR_FACES.map(|face| SiPM {
-            face,
+        std::array::from_fn(|index| SiPM {
+            face: SENSOR_FACES[index],
             pde: design.pde,
             jitter_ps: jitter,
             microcells: 40_000,
             coupling,
+            offset: canlab_optics::SENSOR_OFFSETS[index],
         })
     }
 
@@ -1043,11 +1045,11 @@ mod tests {
 
     #[test]
     fn the_bound_is_the_one_the_earlier_study_quoted() {
-        // The design point's bound is 81.2 degrees. Pinning it here means the
-        // measured error and the bound are compared against the same number the
-        // table quotes.
+        // The design point's bound with the bottom-face placement is 54.6
+        // degrees. Pinning it here means the measured error and the bound are
+        // compared against the same number the table quotes.
         let bound = TimingDesign::design().bound_deg().expect("a bound");
-        assert!((bound - 81.2).abs() < 1.0, "{bound}");
+        assert!((bound - 54.6).abs() < 1.0, "{bound}");
     }
 
     #[test]

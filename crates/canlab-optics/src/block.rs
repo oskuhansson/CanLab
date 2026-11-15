@@ -50,24 +50,32 @@ pub struct Block {
     pub outline: Tropical,
 }
 
-/// The four faces the SiPMs sit on: the two `±z` ends and two side walls.
+/// The four faces the SiPMs sit on.
 ///
-/// One list, because two lists is one more than a detector has. The detector
-/// model reads this to decide which face a photon is detected on, and
-/// [`Block::sensor_positions`] reads it to say where the sensors are drawn, so a
-/// change here moves both and they cannot drift apart.
+/// The user asked for **all four on the bottom end cap**, so that is what this
+/// is: four sensors on one face, at the four corners of a 20 mm square around
+/// the face centre. It is a deliberate experiment, not a recommendation — four
+/// coplanar sensors cannot determine a direction, because a timestamp is
+/// `t_i = t₀ + (r_i · d)/v` and the heading's component normal to the plane
+/// cancels out of every `r_i · d`. The direction study is expected to fail on
+/// this layout, and that failure is the point of building it.
 ///
-/// The four are **not coplanar**, and that is the whole point: a timestamp is
-/// `t_i = t₀ + (r_i · d)/v`, so four sensors whose positions span a plane leave
-/// the heading's component normal to that plane unconstrained. Two on the ends
-/// and two on the walls span three dimensions; four on the ends do not.
+/// [`Block::sensor_positions`] reads the same list and the same offsets, so the
+/// picture and the counting cannot describe two different detectors.
+pub const SENSOR_FACES: [Face; 4] = [Face::Bottom, Face::Bottom, Face::Bottom, Face::Bottom];
+
+/// Where on its face each sensor sits, as an offset from the face centre in the
+/// face's own `(u, v)` axes, millimetres.
 ///
-/// `Side(0)` is a roof slope and `Side(2)` a wall — an asymmetric pair, because
-/// the tent is not symmetric about the axis either. The symmetric alternatives
-/// are the two walls (`Side(2)`, `Side(4)`) or the two roof slopes (`Side(0)`,
-/// `Side(1)`); which is better is a question for the direction study, not a
-/// constant to guess here.
-pub const SENSOR_FACES: [Face; 4] = [Face::Top, Face::Bottom, Face::Side(0), Face::Side(2)];
+/// The four corners of a 20 mm square: the hexagon's bottom face has a 28 mm
+/// circumradius, so all four are well inside it, and the 11.8 mm apertures just
+/// touch rather than overlap.
+pub const SENSOR_OFFSETS: [(f64, f64); 4] = [
+    (-10.0, -10.0),
+    (10.0, -10.0),
+    (10.0, 10.0),
+    (-10.0, 10.0),
+];
 
 /// Where a ray leaves the block.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -387,7 +395,15 @@ impl Block {
     /// names, which is the same list the simulation detects on, so the picture
     /// and the counting cannot describe two different detectors.
     pub fn sensor_positions(&self) -> [Vec3; 4] {
-        SENSOR_FACES.map(|face| self.face_centre(face))
+        std::array::from_fn(|index| self.sensor_position(index))
+    }
+
+    /// The centre of sensor `index` on its face.
+    pub fn sensor_position(&self, index: usize) -> Vec3 {
+        let face = SENSOR_FACES[index];
+        let (u, v) = self.face_axes(face);
+        let (u_off, v_off) = SENSOR_OFFSETS[index];
+        self.face_centre(face).add(u.scale(u_off)).add(v.scale(v_off))
     }
 }
 
@@ -505,30 +521,37 @@ mod tests {
     }
 
     #[test]
-    fn the_four_sensors_are_the_centres_of_the_four_faces_they_read() {
+    fn the_four_sensors_are_on_the_bottom_face_at_four_positions() {
+        // The bottom-face experiment: all four on one end cap, at the corners of
+        // a 20 mm square. The positions are the face centre plus each sensor's
+        // own offset, and the four are coplanar — which is the point of the
+        // experiment, and the reason the direction cannot be reconstructed.
         let block = block();
         let sensors = block.sensor_positions();
         assert_eq!(sensors.len(), 4);
-        // Each position is its own face's centre, in the same order as the
-        // faces the detector model reads. This is the assertion that the
-        // picture and the counting describe one detector.
-        for (sensor, face) in sensors.iter().zip(SENSOR_FACES) {
-            assert_eq!(*sensor, block.face_centre(face), "{face:?}");
+        assert!(
+            SENSOR_FACES.iter().all(|face| *face == Face::Bottom),
+            "{SENSOR_FACES:?}"
+        );
+        let (u, v) = block.face_axes(Face::Bottom);
+        for (index, sensor) in sensors.iter().enumerate() {
+            let (u_off, v_off) = SENSOR_OFFSETS[index];
+            let expected = block
+                .face_centre(Face::Bottom)
+                .add(u.scale(u_off))
+                .add(v.scale(v_off));
+            assert_eq!(*sensor, expected, "sensor {index}");
+            assert_eq!(block.face_of(*sensor, 1e-9), Some(Face::Bottom));
         }
-        // Two on the ends and two on the walls, so the four are not coplanar.
-        assert_eq!(SENSOR_FACES.iter().filter(|f| **f == Face::Top).count(), 1);
-        assert_eq!(SENSOR_FACES.iter().filter(|f| **f == Face::Bottom).count(), 1);
-        assert_eq!(SENSOR_FACES.iter().filter(|f| matches!(f, Face::Side(_))).count(), 2);
-        // The coplanarity test, by the volume of the tetrahedron the four span:
-        // zero volume is four sensors on a plane, and four timestamps on a plane
-        // cannot give a direction. The old layout had all four at one `y`.
+        for i in 0..4 {
+            for j in (i + 1)..4 {
+                assert!(sensors[i].sub(sensors[j]).length() > 1.0, "{i} and {j} coincide");
+            }
+        }
+        // Coplanar: the tetrahedron they span has zero volume.
         let [a, b, c, d] = sensors;
         let volume = (b - a).dot((c - a).cross(d - a)).abs() / 6.0;
-        assert!(volume > 1.0, "the four sensors span {volume} mm³, so they are coplanar");
-        // And every one of them is on the surface it claims to be on.
-        for (sensor, face) in sensors.iter().zip(SENSOR_FACES) {
-            assert_eq!(block.face_of(*sensor, 1e-9), Some(face), "{face:?} {sensor:?}");
-        }
+        assert!(volume < 1e-9, "the four sensors span {volume} mm³, so they are not coplanar");
     }
 
     #[test]

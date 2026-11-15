@@ -254,7 +254,20 @@ impl Optical {
         direction: Vec3,
         random: &mut dyn FnMut() -> f64,
     ) -> bool {
-        let centre = block.face_centre(face);
+        self.detects_at(block, face, block.face_centre(face), exit, direction, random)
+    }
+
+    /// The same test with the sensor's own centre, for a face that carries more
+    /// than one.
+    pub fn detects_at(
+        &self,
+        block: &Block,
+        face: Face,
+        centre: Vec3,
+        exit: Vec3,
+        direction: Vec3,
+        random: &mut dyn FnMut() -> f64,
+    ) -> bool {
         let (u, v) = block.face_axes(face);
         let offset = exit.sub(centre);
         match self.guide_efficiency {
@@ -623,7 +636,7 @@ mod tests {
         // mouth is a hole; the rest of the face is bare PMMA and reflects.
         let block = Block::new(Tropical::fits_in(20.0, 10.0).expect("fits"));
         let optical = Optical::block_in_air(1.49, 10_000.0).with_sensor(36.0).with_guide(0.75);
-        let face = Face::Top;
+        let face = Face::Bottom;
         let centre = block.face_centre(face);
         let (u, _) = block.face_axes(face);
         let half = 0.5 * optical.guide_area_mm2(&block, face).sqrt();

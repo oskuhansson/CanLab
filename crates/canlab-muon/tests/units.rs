@@ -219,9 +219,10 @@ fn the_cramer_rao_bound_matches_a_closed_form_for_a_symmetric_tetrahedron() {
 
 #[test]
 fn the_timing_signal_is_the_light_crossing_the_detector() {
-    // The furthest two sensor centres are 54.1 mm apart, and light needs 269 ps
-    // for that. The signal is the spread of the projection, so it is at most
-    // that and is that when the heading is along the pair.
+    // The bottom-face placement: the four sensors are the corners of a 20 mm
+    // square, so the furthest pair is its diagonal, 28.28 mm, and light needs
+    // 140.6 ps for that. The signal is the spread of the projection, so it is at
+    // most that and is that when the heading is along the pair.
     let positions = design_positions();
     let speed = speed_mm_per_ps(1.49).expect("a speed");
     let mut furthest = 0.0f64;
@@ -230,9 +231,9 @@ fn the_timing_signal_is_the_light_crossing_the_detector() {
             furthest = furthest.max(positions[i].sub(positions[j]).length());
         }
     }
-    assert!((furthest - 54.1).abs() < 0.1, "{furthest}");
+    assert!((furthest - 28.284).abs() < 0.01, "{furthest}");
     let crossing_ps = furthest / speed;
-    assert!((crossing_ps - 268.9).abs() < 0.5, "{crossing_ps}");
+    assert!((crossing_ps - 140.58).abs() < 0.5, "{crossing_ps}");
     // The signal never exceeds the crossing time, and reaches it along the pair.
     let mut best = 0.0f64;
     for heading in [
@@ -246,7 +247,7 @@ fn the_timing_signal_is_the_light_crossing_the_detector() {
         assert!(signal <= crossing_ps + 1e-9, "{signal} exceeds {crossing_ps}");
         best = best.max(signal);
     }
-    assert!((best - 224.0).abs() < 2.0, "{best}");
+    assert!((best - 114.8).abs() < 2.0, "{best}");
     // And the signal is larger than the jitter, which is the whole point: a
     // timestamp can resolve the geometry. The first version of this study said
     // the opposite because its constant was a thousand times too large.

@@ -821,21 +821,22 @@ mod tests {
             violations.iter().any(|v| v.starts_with("direction:")),
             "{violations:#?}"
         );
-        // The bound is the crate's own, not a second estimate. 81 degrees is a
-        // direction in name only, and the reason is the sensor placement rather
-        // than the clock: the two end sensors are 10 mm apart.
+        // The bound is the crate's own, not a second estimate. The bottom-face
+        // experiment puts all four sensors on one plane, and the bound is 38.6
+        // degrees because the four are only 20 mm apart.
         let angle = cherenkov.metrics().angle_deg.expect("a bound");
-        assert!((angle - 81.2).abs() < 1.0, "{angle}");
+        assert!((angle - 38.6).abs() < 1.0, "{angle}");
         assert!(angle > 30.0, "it must fail the direction requirement");
-        // And the timing signal is real, which is what makes the failure a
-        // placement problem: 224 ps of signal against 47.4 ps of jitter.
+        // And the placement failure is exact, not statistical: for a heading
+        // normal to the sensor plane every sensor is the same distance from the
+        // track, so the timestamps are identical and the signal is zero.
         let signal = crate::timing::timing_signal_ps(
             &cherenkov.cherenkov_positions(),
             Vec3::new(0.0, 0.0, 1.0).normalized().expect("a direction"),
             crate::timing::speed_mm_per_ps(1.49).expect("a speed"),
         )
         .expect("a signal");
-        assert!(signal > 47.4, "{signal} ps");
+        assert!(signal < 1.0, "{signal} ps");
         // The short tracker passes every requirement it is audited on, and the
         // coarse one does not: it resolves 11.7 degrees but only 7.3 muons reach
         // its second plane, which is too few to measure a distribution with.
