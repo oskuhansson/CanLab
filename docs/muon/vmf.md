@@ -116,8 +116,8 @@ points — but the bin ratios show the shape is right.
 
 The mission's criterion is the fraction within 30°, and that is a property of the
 **timing resolution**, not of the output head. A calibrated distribution tells
-you when to trust a reconstruction; it does not make a 28.4° detector a 25°
-detector. The design still fails the criterion at 54.2 % within 30°, and
+you when to trust a reconstruction; it does not make a 26.4° detector a 20°
+detector. The design still fails the criterion at 59.9 % within 30°, and
 [cherenkov.md](cherenkov.md) says why.
 
 ## Reproducing it

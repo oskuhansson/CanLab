@@ -168,8 +168,8 @@ the same six-point polygon and the transport never asks which.
 
 | Block | Mass | Horizontal area | Median | Within 30° |
 |---|---|---|---|---|
-| 20 mm tent, 10 mm | 36 g | 400 mm² | 28.4° | 54 % |
-| 24 mm tent, 20 mm | 103 g | 960 mm² | 29.0° | 53 % |
+| 20 mm tent, 10 mm | 36 g | 400 mm² | 26.2° | 59 % |
+| 24 mm tent, 20 mm | 103 g | 960 mm² | 28.9° | 53 % |
 | 28 mm hexagon, 20 mm | 48 g | 2 036 mm² | 26.4° | 58 % |
 | **28 mm hexagon, 30 mm** | **73 g** | **2 036 mm²** | **26.4°** | **57 %** |
 | 28 mm hexagon, 40 mm | 97 g | 2 036 mm² | 28.4° | 55 % |
@@ -179,11 +179,21 @@ light budget is set by the sensor's area and the taper, not by the chord: 20, 30
 and 40 mm deep measure 26.4°, 26.4° and 28.4°. The 40 mm block is *worse* than
 the 20 mm one, which is the opposite of what the previous model said; the
 difference is 2° against a sampling error of about 1.3° on the median, so the
-honest reading is that the depth does not buy resolution either way. The hexagon still beats the tent by
-about a degree, because its faces are five times larger and the sensors see more
-of the light. What the depth buys is photons, and photons are no longer the
-limit — the sensor's jitter is. The 20 mm block is 25 g lighter than the 30 mm
-for the same measured resolution, which is the better trade if mass matters.
+honest reading is that the depth does not buy resolution either way.
+
+**Nor does the shape.** The 20 mm tent measures 26.2° and 59 % against the
+hexagon's 26.4° and 57 % — equal within the noise, for half the mass. What the
+hexagon buys is **muon rate**: 2 036 mm² of horizontal area against 400, five
+times the crossings, and the resolution is set by the sensor's coverage of the
+face it sits on, not by the face's size. The earlier model said the hexagon was a
+degree better; that was the flat-coverage model, which credited every face with
+the same fraction of the light regardless of where the photon went. The geometric
+test does not.
+
+So the depth and the shape buy photons and muons, and the sensor's jitter sets
+the resolution. The 20 mm tent is 36 g against the 30 mm hexagon's 73 g for the
+same measured resolution; the hexagon is worth its mass only if the muon rate is
+the binding constraint.
 
 ---
 
@@ -230,7 +240,7 @@ The resolution follows the light:
 | **6 × 6 mm + taper** | **26.4°** | **57 %** | **160–360 €** |
 
 So the sensor is a straight trade of money for resolution, and no point on it
-passes the 30° criterion: the best is 54 % within 30°, and it is the most
+passes the 30° criterion: the best is 57 % within 30°, and it is the most
 expensive. The 1 mm² part cannot see the light even with the best possible taper:
 etendue caps a taper at 3.87× the bare coverage, so 0.12 % becomes 0.35 %, one
 photon per four muons. The 6 mm part sees 4.3 % bare and 12.4 % tapered — 1.42
@@ -431,15 +441,15 @@ Through the realistic readout, on the corrected photon count:
 
 | Block | Median | 68th | Within 30° | Within 60° |
 |---|---|---|---|---|
-| 20 mm tent, 10 mm | 28.4° | 36.7° | 54 % | 94 % |
-| 24 mm tent, 20 mm | 29.0° | 37.5° | 53 % | 94 % |
+| 20 mm tent, 10 mm | 26.2° | 34.2° | 59 % | 92 % |
+| 24 mm tent, 20 mm | 28.9° | 37.6° | 53 % | 89 % |
 | 28 mm hexagon, 20 mm | 26.4° | 34.7° | 58 % | 90 % |
 | 28 mm hexagon, 30 mm | 26.4° | 36.4° | 57 % | 91 % |
 | 28 mm hexagon, 40 mm | 28.4° | 37.6° | 55 % | 88 % |
 
-The mission's criterion is 30°. The hexagon reaches it for a little over half the
-events, which is **a fail rather than a pass** — the mission wants most events
-inside 30°, and the spread between the five blocks is smaller than the gap to the
+The mission's criterion is 30°. The best block reaches it for 59 % of the events,
+which is **a fail rather than a pass** — the mission wants most events inside
+30°, and the spread between the five blocks is smaller than the gap to the
 criterion.
 
 These numbers are lower than the study first reported (the hexagon was 21.6° and
