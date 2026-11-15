@@ -3415,6 +3415,15 @@ pub fn designs(app: &mut CasApp, ui: &mut Ui) {
                 ui.colored_label(colour, format!("● {label}"));
             }
         }
+        // The two things in the picture that are not photons, named so neither
+        // is guessed: the cross is the muon's position at the clock, the dot is
+        // a sensor. The muon's old marker was a filled dot inside a ring — the
+        // lit sensor's shape — and was read as a sensor that had fired.
+        ui.colored_label(egui::Color32::WHITE, "× muon");
+        ui.colored_label(
+            egui::Color32::from_rgb(255, 196, 64),
+            "● sensor (fires when a photon arrives)",
+        );
         ui.label(format!("t = {:.0} ps", scene.time_ps));
         ui.label(format!("seed {} · {} photons detected", scene.seed, scene.detected));
     });
@@ -3429,7 +3438,7 @@ pub fn designs(app: &mut CasApp, ui: &mut Ui) {
             ui.label("true arrivals, ps");
             ui.label("recorded arrivals, ps");
             ui.label("photons");
-            ui.label("fired");
+            ui.label("lit");
             ui.end_row();
             for index in 0..4 {
                 ui.label(format!("{index}"));

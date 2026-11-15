@@ -55,12 +55,14 @@ pub struct DetectorScene {
     pub inside_end: Vec3,
     /// Every photon's polyline.
     pub photons: Vec<PhotonRecord>,
-    /// The photons' indices in a stable random order.
+    /// The photons' indices in the order the drawing shows them.
     ///
-    /// The drawing shows the first `photon_limit` of these. A stride would show
-    /// every *n*-th photon, which is a biased sample of the cone: the photons
+    /// The drawing shows the first `photon_limit` of these. Every detected
+    /// photon comes first — those are the signal, and there are only about ten
+    /// of them against hundreds of losses, so a uniform sample would almost
+    /// never draw one. The rest is a stable shuffle, not a stride: the photons
     /// are born in order along the track, so every *n*-th is every *n*-th
-    /// millimetre of the track. A shuffle is a random sample of the emission.
+    /// millimetre of the track, a sample of positions rather than of emission.
     pub order: Vec<usize>,
     /// How many photons the drawing shows.
     pub photon_limit: usize,
@@ -127,13 +129,31 @@ impl DetectorScene {
         // The photons a sensor actually detected — not the ones that reached a
         // sensor's face and were lost to its coverage or its PDE.
         let detected = photons.iter().filter(|photon| photon.detected.is_some()).count();
-        // A stable shuffle, so the subset is random but does not change from
-        // frame to frame — a subset that re-drew every frame would flicker.
-        let mut order: Vec<usize> = (0..photons.len()).collect();
-        for index in (1..order.len()).rev() {
-            let swap = (rng.uniform() * (index + 1) as f64) as usize;
-            order.swap(index, swap.min(index));
+        // The drawing's order: every detected photon first, then a stable
+        // shuffle of the rest. A uniform shuffle of all 687 photons draws about
+        // 1.75 of the 10 detected ones at the default limit of 120 — the signal
+        // is statistically absent from the picture, and the green paths then
+        // look as though they do not reach a sensor when in fact they were
+        // never drawn. The detected ones go first so the signal is always shown.
+        let mut first: Vec<usize> = Vec::new();
+        let mut rest: Vec<usize> = Vec::new();
+        for (index, photon) in photons.iter().enumerate() {
+            if photon.detected.is_some() {
+                first.push(index);
+            } else {
+                rest.push(index);
+            }
         }
+        // A stable shuffle of each part, so the subset does not change from
+        // frame to frame — a subset that re-drew every frame would flicker.
+        for slice in [&mut first, &mut rest] {
+            for index in (1..slice.len()).rev() {
+                let swap = (rng.uniform() * (index + 1) as f64) as usize;
+                slice.swap(index, swap.min(index));
+            }
+        }
+        let mut order = first;
+        order.extend(rest);
         let photon_limit = photons.len().min(120);
         Some(DetectorScene {
             design,
@@ -171,7 +191,8 @@ impl DetectorScene {
         (last + 20.0).max(60.0)
     }
 
-    /// The photons the drawing shows: a random subset of the emission.
+    /// The photons the drawing shows: every detected one, then a sample of the
+    /// losses.
     pub fn visible(&self) -> impl Iterator<Item = &PhotonRecord> {
         self.order
             .iter()
@@ -428,6 +449,15 @@ pub fn draw(scene: &mut DetectorScene, ui: &mut egui::Ui, rect: egui::Rect) -> e
                     break;
                 }
             }
+            // A detected photon's path ends on the sensor's face. Mark the end
+            // only when the clock has reached the arrival: a dot drawn at the
+            // end from the start would show a detection before the light got
+            // there, which is the opposite of a timing detector.
+            if photon.detected.is_some() && scene.time_ps >= birth + photon.time_ps {
+                if let Some(end) = photon.path.last().and_then(|point| to_screen(*point)) {
+                    painter.circle_filled(end, 2.5, DETECTED);
+                }
+            }
         }
     }
 
@@ -445,10 +475,16 @@ pub fn draw(scene: &mut DetectorScene, ui: &mut egui::Ui, rect: egui::Rect) -> e
             None => previous = None,
         }
     }
+    // The muon is a cross, not a dot with a ring. A filled dot inside a ring is
+    // exactly the lit sensor's shape, and a reader looking at the picture read
+    // the muon as a sensor that had fired and asked how that sensor got a
+    // detection. A cross is a shape the sensors never use.
     let muon = scene.muon_at(scene.time_ps);
     if let Some(at) = to_screen(muon) {
-        painter.circle_filled(at, 4.5, accent);
-        painter.circle_stroke(at, 7.0, Stroke::new(1.0, accent.gamma_multiply(0.5)));
+        let arm = 6.0;
+        let stroke = Stroke::new(1.6, Color32::WHITE);
+        painter.line_segment([at + egui::vec2(-arm, 0.0), at + egui::vec2(arm, 0.0)], stroke);
+        painter.line_segment([at + egui::vec2(0.0, -arm), at + egui::vec2(0.0, arm)], stroke);
     }
 
     // The Cherenkov cone, from the muon's position and stopped at the surface:
@@ -479,7 +515,8 @@ pub fn draw(scene: &mut DetectorScene, ui: &mut egui::Ui, rect: egui::Rect) -> e
         }
     }
 
-    // The sensors: grey until the first photon arrives, then lit.
+    // The sensors: grey until the first photon arrives, then lit. The number is
+    // the table's row, so the dot in the picture can be found in the readout.
     for (index, sensor) in scene.sensors.iter().enumerate() {
         let position = scene.block.face_centre(sensor.face);
         let Some(at) = to_screen(position) else {
@@ -496,6 +533,13 @@ pub fn draw(scene: &mut DetectorScene, ui: &mut egui::Ui, rect: egui::Rect) -> e
         if lit {
             painter.circle_stroke(at, 10.0, Stroke::new(1.0, colour.gamma_multiply(0.5)));
         }
+        painter.text(
+            at + egui::vec2(11.0, -11.0),
+            egui::Align2::LEFT_BOTTOM,
+            format!("{index}"),
+            egui::FontId::monospace(10.0),
+            colour,
+        );
     }
 
     response
@@ -566,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn the_visible_photons_are_a_random_subset() {
+    fn the_visible_photons_are_the_detected_ones_then_a_sample() {
         // The bug this prevents: a stride shows every *n*-th photon, and the
         // photons are born in order along the track, so every *n*-th is every
         // *n*-th millimetre of the track — a sample of positions, not of the
@@ -583,6 +627,43 @@ mod tests {
         // And the limit is the drawing's, not the scene's: every photon is
         // still in `photons`, so the timestamps are unaffected.
         assert_eq!(scene.photons.len(), sorted.len());
+    }
+
+    #[test]
+    #[test]
+    fn every_detected_photon_is_drawn() {
+        // The bug this prevents: the order was a uniform shuffle of all 687
+        // photons and only about ten are detected. At the default limit of 120
+        // the expected number of detected photons drawn is 120 * 10/687 = 1.75,
+        // so the green signal was statistically absent from the picture and a
+        // reader saw green paths that "did not reach a sensor" when in fact
+        // they were never drawn. The detected ones go first, so the limit
+        // cannot hide them.
+        let scene = DetectorScene::new(hexagon(), 1).expect("a scene");
+        let mut detected: Vec<usize> = scene
+            .photons
+            .iter()
+            .enumerate()
+            .filter(|(_, photon)| photon.detected.is_some())
+            .map(|(index, _)| index)
+            .collect();
+        assert!(!detected.is_empty(), "the event has no detection to draw");
+        assert!(
+            detected.len() <= scene.photon_limit,
+            "{} detected photons but the limit is {}",
+            detected.len(),
+            scene.photon_limit
+        );
+        let mut drawn: Vec<usize> = scene.order.iter().take(detected.len()).copied().collect();
+        drawn.sort_unstable();
+        detected.sort_unstable();
+        assert_eq!(drawn, detected, "the detected photons are not drawn first");
+        // And the drawing really shows all of them, not just the order.
+        assert_eq!(
+            scene.visible().filter(|photon| photon.detected.is_some()).count(),
+            detected.len(),
+            "a detected photon is missing from the drawing"
+        );
     }
 
     #[test]

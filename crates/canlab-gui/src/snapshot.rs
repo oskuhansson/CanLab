@@ -456,8 +456,8 @@ fn the_detector_at_a_fixed_clock() {
         pde: 0.35,
         shape: canlab_muon::timing_study::Shape::Hexagon,
     };
-    let mut scene = crate::detector::DetectorScene::new(design, 3).expect("a scene");
-    scene.time_ps = 120.0;
+    let mut scene = crate::detector::DetectorScene::new(design, 1).expect("a scene");
+    scene.time_ps = 56.0;
     scene.playing = false;
     let mut harness = egui_kittest::Harness::builder()
         .with_size(egui::vec2(800.0, 600.0))
@@ -470,5 +470,5 @@ fn the_detector_at_a_fixed_clock() {
     for _ in 0..4 {
         harness.step();
     }
-    harness.snapshot("detector-clock");
+    harness.snapshot("cone-probe-user");
 }
