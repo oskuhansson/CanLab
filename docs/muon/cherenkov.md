@@ -337,11 +337,11 @@ gives, for the hexagon at 30 mm through the nominal readout:
 | 16 — first, second, flags, counts | 25.5° | 34.0° | 60 % | 95 % |
 | **8 — first and flags, one threshold** | **33.6°** | **42.4°** | **43 %** | **91 %** |
 
-The **second arrival** is worth **8°**. It costs more than every other feature
-combined, and it takes the design from "borderline" to "fails the criterion". The
-count and the mean/spread are noise by comparison, because the second arrival is
-the feature that carries the track position — its gap from the first is the extra
-path length, which is the distance to the track.
+The multi-hit record costs **8°** in total, and it takes the design from
+"borderline" to "fails the criterion". The count alone was worth 2.9° (above), so
+most of the gap is the **second arrival**: its gap from the first is the extra path
+length, and the extra path length is the distance to the track — the latent
+variable the direction fit is missing. The mean and spread add nothing on top.
 
 So the readout is the design. A single-threshold TDC gives 33.6° and 43 %; a
 multi-hit TDC gives 25.5° and 60 %. The TDC-GPX2 has a 16-stage FIFO per channel
