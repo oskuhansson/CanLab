@@ -25,16 +25,15 @@ model rather than a measurement, it says so.*
 > face has only 3.75 mm of clearance at its centre. The sensor's jitter now scales
 > with its area as well: the C-series fast output rises in 0.3 / 0.6 / 1.0 ns for
 > the 1 / 3 / 6 mm parts, and the measured SPTR of a 3 mm part is 179 ps FWHM
-> against ~100 ps for the 1 mm, so the 6 mm part pays **143 ps** for its light.
+> against ~100 ps for the 1 mm, so the 6 mm part pays **143 ps sigma** (337 ps
+> FWHM) for its light.
 >
 > The design point is therefore the **6 × 6 mm part behind the taper**, and the
-> numbers in §3, §4 and §7 predate the correction. The current measurement for the
-> hexagon at 30 mm is **28.4° median, 53.3 % within 30°** — the design does not
-> pass the mission's criterion, and the light budget, not the geometry, is why:
-> 20, 30 and 40 mm deep measure 28.0°, 28.4° and 27.4°, which is the run-to-run
-> noise. The tables below are kept because the ablation and the design comparison
-> are the record of what was tried; they are not the current numbers.
-> [vmf.md](vmf.md) has the distribution head measured on the current model.
+> numbers below are re-measured with it. The hexagon at 30 mm is **26.4° median
+> and 56.8 % within 30°** through the nominal readout — the design does not pass
+> the mission's criterion, and the light budget and the jitter, not the geometry,
+> are why: 20, 30 and 40 mm deep measure 26.4°, 26.4° and 28.4°.
+> [vmf.md](vmf.md) has the distribution head measured on the same model.
 
 ---
 
@@ -51,8 +50,9 @@ no gap, no coincidence, no second plane — which is what makes it small and che
 The design's problem is not the idea. It is **how few photons arrive**: a 30 mm
 crossing makes about 630 photons, but most are trapped by total internal
 reflection, the sensors cover a fraction of the faces, and their PDE is 35 % — so
-an event yields **3.25 photoelectrons** and the timestamps are noisy. Everything
-below is a consequence of that one number.
+an event yields about **11.1 photoelectrons across the four sensors**,
+**1.42 of them fire**, and only 8.7 % of events fire all four. Everything below
+is a consequence of those numbers — and of the placement that sets them.
 
 ---
 
@@ -119,8 +119,9 @@ photons, so the sensor sees
 and with a 35 % PDE, **0.012 photoelectrons**. One photon every eighty muons.
 
 The block is a total-internal-reflection cavity, and that is what rescues the
-design: the light is not lost to the room, it bounces until it reaches a face. The
-transport measures the result rather than estimating it — see §6.
+design: the light is not lost to the room, it bounces until it reaches a face. It
+does not rescue a 1 mm² sensor — the transport measures 0.09 photons per muon for
+one — which is why the design point is the 6 × 6 mm part (§4).
 
 ---
 
@@ -167,49 +168,99 @@ the same six-point polygon and the transport never asks which.
 
 | Block | Mass | Horizontal area | Median | Within 30° |
 |---|---|---|---|---|
-| 20 mm tent, 10 mm | 36 g | 400 mm² | 27.2° | 56 % |
-| 24 mm tent, 20 mm | 103 g | 960 mm² | 25.1° | 59 % |
-| 28 mm hexagon, 20 mm | 48 g | 2 036 mm² | 26.7° | 57 % |
-| 28 mm hexagon, 30 mm | 73 g | 2 036 mm² | 25.9° | 62 % |
-| **28 mm hexagon, 40 mm** | **97 g** | **2 036 mm²** | **24.2°** | **62 %** |
+| 20 mm tent, 10 mm | 36 g | 400 mm² | 28.4° | 54 % |
+| 24 mm tent, 20 mm | 103 g | 960 mm² | 29.0° | 53 % |
+| 28 mm hexagon, 20 mm | 48 g | 2 036 mm² | 26.4° | 58 % |
+| **28 mm hexagon, 30 mm** | **73 g** | **2 036 mm²** | **26.4°** | **57 %** |
+| 28 mm hexagon, 40 mm | 97 g | 2 036 mm² | 28.4° | 55 % |
 
-The depth buys accuracy because the chord a vertical muon crosses *is* the
-thickness: 30 mm makes 630 photons where 10 mm makes 210. The 40 mm block is the
-best of the five at 24.2°, but it is 24 g heavier for 1.7°, and the run-to-run
-noise of the training is about half a degree — the 30 mm is the one to build, and
-the 40 mm is the one to build if the mass budget turns out to have room.
+**The depth buys almost nothing.** With the 6 × 6 mm part behind the taper the
+light budget is set by the sensor's area and the taper, not by the chord: 20, 30
+and 40 mm deep measure 26.4°, 26.4° and 28.4°. The 40 mm block is *worse* than
+the 20 mm one, which is the opposite of what the previous model said; the
+difference is 2° against a sampling error of about 1.3° on the median, so the
+honest reading is that the depth does not buy resolution either way. The hexagon still beats the tent by
+about a degree, because its faces are five times larger and the sensors see more
+of the light. What the depth buys is photons, and photons are no longer the
+limit — the sensor's jitter is. The 20 mm block is 25 g lighter than the 30 mm
+for the same measured resolution, which is the better trade if mass matters.
 
 ---
 
 ## 4. The sensors
 
-Four **onsemi MICROFC-10035** SiPMs, one per face, on the faces
-`[Top, Bottom, Side(0), Side(2)]`:
+Four **onsemi MICROFC-60035** SiPMs, one per face, on the faces
+`[Top, Bottom, Side(0), Side(2)]`, each behind a **recessed taper** moulded into
+the block:
 
 | Figure | Value | Source |
 |---|---|---|
-| Area | 1 mm² | datasheet |
-| Microcells | 504 | datasheet |
-| PDE | 31 % at Vbr+2.5 V, 41 % at Vbr+5 V at 420 nm | datasheet; the model uses one mid-band **35 %** |
-| Dark count | 30 kHz typ, 96 kHz max | datasheet |
+| Area | 6 × 6 mm | datasheet |
+| Microcells | 18 980 | datasheet |
+| PDE | 31 % at Vbr+2.5 V, 41 % at Vbr+5 V at 420 nm | datasheet; the model uses one flat **35 %** |
+| Spectral range | 300–950 nm, peak 420 nm | datasheet |
+| Dark count | 1 200 kHz typ, 3 400 kHz max | datasheet |
 | Crosstalk | 7 % at 35 µm cells | datasheet |
-| SPTR | **not in the datasheet** | the dominant uncertainty |
+| Fast-output rise time | 1.0 ns (0.3 ns for the 1 mm part) | datasheet |
+| SPTR | **not in the datasheet**; the model takes 333 ps FWHM from the rise time | the dominant uncertainty |
 
-The 1 mm² part is the right choice here and the wrong one for a scintillator: a
-Cherenkov event yields a handful of photons, so the sensor's area is not the
-limit; a scintillator plane yields hundreds, and the 504 microcells would clip the
-pulse. A tracker reads *which* pixel fired, so clipping is harmless; a counter
-reads the pulse height, so it is not.
+The sensor's area is a trade, not a free choice. The measured light budget, per
+muon, on the hexagon at 30 mm:
+
+| Sensor | Photons detected | Sensors timed | Four fire | Coverage of a side face | Jitter, sigma |
+|---|---|---|---|---|---|
+| 1 mm² bare | 0.09 | 0.06 | — | 0.12 % | 47.4 ps |
+| 1 mm² + taper | 0.25 | 0.12 | — | 0.35 % | 47.4 ps |
+| 3 × 3 mm + taper | 2.68 | 0.61 | — | 3.1 % | 87.5 ps |
+| 6 × 6 mm bare | 3.91 | 1.42 | 3.0 % | 4.3 % | 143.1 ps |
+| **6 × 6 mm + taper** | **11.07** | **1.42** | **8.7 %** | **12.4 %** | **143.1 ps** |
+
+The taper raises the light on the sensor that already fires from 2.8 to 7.8
+photons; it does not make more sensors fire. The acceptance cone is 10.8° on an
+end face, so the taper takes the near-normal light — the light that was already
+going to the nearest sensor — and leaves the grazing light alone. The number of
+timestamps is set by the **placement**, not by the sensor.
+
+The resolution follows the light:
+
+| Sensor | Median | Within 30° | Four sensors |
+|---|---|---|---|
+| 1 mm² + taper | 35.5° | 38 % | 40–100 € |
+| 3 × 3 mm + taper | 30.4° | 49 % | 80–180 € |
+| **6 × 6 mm + taper** | **26.4°** | **57 %** | **160–360 €** |
+
+So the sensor is a straight trade of money for resolution, and no point on it
+passes the 30° criterion: the best is 54 % within 30°, and it is the most
+expensive. The 1 mm² part cannot see the light even with the best possible taper:
+etendue caps a taper at 3.87× the bare coverage, so 0.12 % becomes 0.35 %, one
+photon per four muons. The 6 mm part sees 4.3 % bare and 12.4 % tapered — 1.42
+sensors timed per muon and about 11.1 photons across the four. It pays for that
+light with
+jitter: the C-series fast output rises in 1.0 ns against the 1 mm part's 0.3 ns,
+and the jitter follows the rise time, so the total readout jitter is **143 ps
+sigma** against 47.4 ps — 337 ps against 112 ps FWHM, the units a datasheet
+quotes SPTR in.
+
+### The taper has to be a cavity
+
+A guide outside the block cannot work. The hexagon's circumradius is 28 mm and
+the can's inner radius is 28 mm, so its corners touch the wall: a side face has
+3.75 mm of clearance at its centre and none at the corners. A guide outside would
+also see the light after it had refracted into the full hemisphere, where no
+passive element can concentrate at all. The taper is therefore a cavity moulded
+into the PMMA with the sensor at its bottom, and etendue caps what it can
+deliver: the light reaches the face within the escape cone (1.63 sr at
+n = 1.49), the sensor accepts a hemisphere (6.28 sr), and the ratio is 3.87×.
 
 ### The SPTR is the budget's open wound
 
-The C-series sheet gives the fast output's rise time (0.3 ns) and pulse width
-(0.6 ns FWHM) and **no single-photon time resolution at all**. Published
-measurements of this class of part put SPTR at 70–120 ps FWHM, and a 1 mm² sensor
-with 35 µm cells is at the slow end because SPTR grows with cell size. The model
-uses 100 ps FWHM, converted to a standard deviation (`100 / 2.355 = 42.5 ps`).
-Every other term in the budget is smaller than the uncertainty on this one, which
-is why the budget cannot be closed without measuring the part.
+The C-series sheet gives the fast output's rise time and pulse width and **no
+single-photon time resolution at all**. The model takes the jitter to scale with
+the rise time — the measured SPTR of a 3 × 3 mm part is 179 ps FWHM against
+100–120 ps for the 1 mm, the same factor of two as the rise times — so the 6 mm
+part is 333 ps FWHM, or 141 ps sigma. The 143 ps the rest of this document
+quotes is a sigma; the FWHM equivalent is 337 ps. That is the largest term in the budget and
+the only one with no datasheet figure.
 
 ---
 
@@ -223,7 +274,7 @@ SiPM (fast output) → TIA (OPA858) → comparator (MAX40026) → timer
 
 | Part | Role | Figure | Verdict |
 |---|---|---|---|
-| onsemi MICROFC-10035 | SiPM | PDE 31–41 %, 504 cells | right for Cherenkov |
+| onsemi MICROFC-60035 | SiPM | PDE 31–41 %, 18 980 cells | the light the 1 mm² part cannot see |
 | TI OPA858 | TIA | 5.5 GHz, 2.5 nV/√Hz | fine, but the anode's 100 pF collapses its bandwidth — use the **fast** output (1 pF) |
 | ADI MAX40026 | comparator | 280 ps delay, **2 ps jitter**, 25 ps overdrive dispersion | good; the dispersion is a *systematic walk*, not a jitter |
 | ADI MAX35101 | "analog pulse timer" | 20 ps accuracy, 3.8 ps resolution, **2 channels** | **the wrong part for four SiPMs** |
@@ -280,24 +331,31 @@ sensor positions and the heading.
 
 ### 6.2 The jitter
 
-| Part | ps | Random? |
-|---|---|---|
-| MICROFC-10035 | 42.5 | yes (100 ps FWHM converted to σ) |
-| OPA858 | 6.0 | yes |
-| MAX40026 | 2.0 | yes |
-| MAX35101 | 20.0 | yes |
-| **Total** | **47.4** | quadrature |
+The figures are standard deviations; SPTR is quoted FWHM and converted.
 
-The signal-to-noise is `224 / 47.4 = 4.7`: the electronics can resolve the
-geometry, and the budget decides how well. Halving it would halve the angular
-uncertainty.
+| Part | 1 mm² budget, ps sigma | 6 mm design point, ps sigma |
+|---|---|---|
+| SiPM SPTR | 42.5 | 141.4 |
+| OPA858 | 6.0 | 6.0 |
+| MAX40026 | 2.0 | 2.0 |
+| timer | 20.0 | 20.0 |
+| **Total** | **47.4** | **143.1** |
+
+The 1 mm² column is the component list's budget and the one the bound below is
+quoted at. The design point's 6 mm part pays 143 ps sigma for its light: the
+signal-to-noise falls from `224 / 47.4 = 4.7` to `224 / 143 = 1.6`, which is why
+the measured resolution is 28° and not the 20° the 1 mm² column suggests.
 
 ### 6.3 The bound
 
 The Cramér–Rao bound on the heading from four timestamps, at 47.4 ps, is **81.2°
 worst case** (48.2° at the best heading). That is the number the earlier study
-quoted, and it is a *bound*: no estimator can do better from those four times
-alone.
+quoted, and it is a *bound* on the linear model `t = t₀ + (r·d)/v` — the model the
+linear fit uses, which is wrong because the light does not leave from a point. At
+the design point's 143 ps the same formula gives ~245°, past the point where it
+says anything at all. The measured 26° is not a violation of it: it comes from a
+different model, and the ablation shows where — the four timestamps and the flags
+alone give 31.3°, and the second arrival and the counts add the rest.
 
 The bound is not the limit on the design. The limit is **where the sensors are**:
 the two end sensors sit 10 mm apart (the block's thickness), so a heading along
@@ -338,12 +396,10 @@ counts. The second, mean and spread are what a multi-hit TDC records and a
 single-threshold readout throws away.
 
 **The multi-hit summary does not pay.** The ablation is direct: the hexagon at
-30 mm is 25.9° with the mean and spread and 25.5° without, and the tent at 20 mm is
-27.2° with and 27.5° without — a half-degree in opposite directions, which is the
-run-to-run noise. The first photon and the count already carry most of what the
-extra stops know, and the mean is dominated by the emission-time spread, which is
-noise for the direction. The features are kept because they cost nothing and the
-panel shows the data they summarise, but the design should not be sold on them.
+30 mm is 26.4° with the mean and spread and 24.6° without: dropping them *helps*
+by 1.8° and six points of within-30°. The mean and spread are dominated by the
+emission-time spread and the path-length spread, and the network can overfit
+them. The 16-feature set is the one to ship.
 
 **But the count is not what the readout can supply.** The component list is a
 comparator and one TDC stop per sensor: a discriminator fires once per pulse and
@@ -353,18 +409,19 @@ gives, for the hexagon at 30 mm through the nominal readout:
 
 | Features | Median | 68th | Within 30° | Within 60° |
 |---|---|---|---|---|
-| 24 — everything | 25.9° | 33.3° | 62 % | 95 % |
-| 16 — first, second, flags, counts | 25.5° | 34.0° | 60 % | 95 % |
-| **8 — first and flags, one threshold** | **33.6°** | **42.4°** | **43 %** | **91 %** |
+| 24 — everything | 26.4° | 36.4° | 56.8 % | 90.5 % |
+| **16 — first, second, flags, counts** | **24.6°** | **32.2°** | **62.8 %** | **92.9 %** |
+| 8 — first and flags, one threshold | 31.3° | 39.8° | 47.8 % | 90.4 % |
 
-The multi-hit record costs **8°** in total, and it takes the design from
-"borderline" to "fails the criterion". The count alone was worth 2.9° (above), so
-most of the gap is the **second arrival**: its gap from the first is the extra path
-length, and the extra path length is the distance to the track — the latent
-variable the direction fit is missing. The mean and spread add nothing on top.
+The multi-hit record is worth **6.7°** in total and fifteen points of
+within-30°: 31.3° and 47.8 % on one threshold, 24.6° and 62.8 % with the second
+arrival and the counts. The gap is the **second arrival**: its gap from the first
+is the extra path length, and the extra path length is the distance to the track —
+the latent variable the direction fit is missing. The mean and spread are not
+worth adding on top; they cost 1.8°.
 
-So the readout is the design. A single-threshold TDC gives 33.6° and 43 %; a
-multi-hit TDC gives 25.5° and 60 %. The TDC-GPX2 has a 16-stage FIFO per channel
+So the readout is the design. A single-threshold TDC gives 31.3° and 47.8 %; a
+multi-hit TDC gives 24.6° and 62.8 %. The TDC-GPX2 has a 16-stage FIFO per channel
 and unlimited multi-hit, so it is the part this design needs, not an optional
 extra — and that is also the €55–60 and QFN64 problem.
 
@@ -374,13 +431,16 @@ Through the realistic readout, on the corrected photon count:
 
 | Block | Median | 68th | Within 30° | Within 60° |
 |---|---|---|---|---|
-| 20 mm tent, 10 mm | 27.2° | 36.2° | 56 % | 94 % |
-| 24 mm tent, 20 mm | 25.1° | 34.9° | 59 % | 95 % |
-| 28 mm hexagon, 30 mm | 25.9° | 33.3° | 62 % | 95 % |
+| 20 mm tent, 10 mm | 28.4° | 36.7° | 54 % | 94 % |
+| 24 mm tent, 20 mm | 29.0° | 37.5° | 53 % | 94 % |
+| 28 mm hexagon, 20 mm | 26.4° | 34.7° | 58 % | 90 % |
+| 28 mm hexagon, 30 mm | 26.4° | 36.4° | 57 % | 91 % |
+| 28 mm hexagon, 40 mm | 28.4° | 37.6° | 55 % | 88 % |
 
-The mission's criterion is 30°. The hexagon reaches it for three events in five,
-which is **borderline rather than a pass** — the mission wants most events inside
-30°, not three fifths.
+The mission's criterion is 30°. The hexagon reaches it for a little over half the
+events, which is **a fail rather than a pass** — the mission wants most events
+inside 30°, and the spread between the five blocks is smaller than the gap to the
+criterion.
 
 These numbers are lower than the study first reported (the hexagon was 21.6° and
 66 %), and the difference is a fix, not a regression: the timestamps used to be
@@ -391,12 +451,10 @@ order as the jitter. The absolute arrival is the honest number.
 
 ### 7.3 The photon count the transport measures
 
-The design block fires **2.53 of its four sensors** on average over the measured
-sky (`timing_realistic`), and **2.02** for a muon along its long axis
-(`direction_study`). A horizontal muon through the 40 mm width yields **3.25
-photoelectrons** across the four sensors. Those are the numbers that decide the
-timing, and they are measured, not modelled: both commands run the transport event
-by event.
+The design block fires **1.42 of its four sensors** on average over the measured
+sky, with **11.1 photons** across the four (`sensor_study`). Those are the numbers
+that decide the timing, and they are measured, not modelled: the command runs the
+transport event by event.
 
 An earlier version of the study credited the block with six times that light,
 because the photon count was taken from the caller's 200 mm path instead of the
@@ -409,15 +467,24 @@ fixed; the corrected count is what the table above reflects.
 
 | Item | EUR |
 |---|---|
-| 4 × MICROFC-10035 at the top of the 10–25 € range | 100 |
+| 4 × MICROFC-60035 at 40–90 € | 160–360 |
 | Board, connectors, mechanics | 60 |
-| Timer (TDC7200 or equivalent) | 25 |
+| Timer, TDC-GPX2 (four channels, multi-hit) | 55–60 |
 | Optical adhesive, Norland NOA 68, one 1 oz bottle | 32.70 |
-| **Total** | **217.70** |
+| **Total** | **308–513** |
 
-The detector's budget is 200–300 €, so the design fits with ~80 € of headroom. The
-adhesive is a purchase and not a usage: the material is cents, the bottle is 33 €,
-and one bottle bonds many blocks.
+The detector's budget is 200–300 €, so the design is **at or over it**: 308 € at
+the bottom of the sensor's price range and 513 € at the top. The sensor decides
+it — four 6 mm parts are 160–360 € where four 1 mm parts were 40–100 €. The
+3 × 3 mm part (20–45 €) brings the total to 228–328 € and costs resolution; the
+1 mm² part fits comfortably and cannot see the light.
+
+The timer line is the TDC-GPX2, not the TDC7200 the earlier table quoted: the
+TDC7200 needs an external START and has two stops, and the design needs four
+multi-hit channels (§5). That is the €55–60 and QFN64 problem.
+
+The adhesive is a purchase and not a usage: the material is cents, the bottle is
+33 €, and one bottle bonds many blocks.
 
 The block itself is the cheap part: PMMA is a few euros, and 73 g of it is a
 hexagon 56 mm across.
@@ -474,16 +541,18 @@ is how the table in §3.2 was produced.
 4. **The adhesive's cure is unproven on this geometry.** NOA 68 cures at 365 nm,
    and PMMA absorbs there; it has to be cured from the bond line's edge with a
    395–405 nm LED, which needs a trial on scrap acrylic.
-5. **The network's 25.5° is a simulation result.** The sim-to-real gap is
+5. **The network's 26.4° is a simulation result.** The sim-to-real gap is
    unmeasured, and the domain randomisation only covers the parameters that were
    varied.
-6. **The 30° criterion is met for three events in five**, not for most. Whether
+6. **The 30° criterion is met for a little over half the events**, not for most,
+   and the sensor that gets closest to it is at the top of the budget. Whether
    that is enough is a mission decision, not a simulation one.
 
 ---
 
 ## 11. The one-line summary
 
-A 73 g hexagon of acrylic, four 1 mm² SiPMs and four timestamps recover a muon's
-direction to **25.5° median, 60 % within 30°**, for **218 €** — which is the best
-this approach gives, and it is borderline against the mission's criterion.
+A 73 g hexagon of acrylic, four 6 × 6 mm SiPMs behind recessed tapers and four
+timestamps recover a muon's direction to **26.4° median, 57 % within 30°**, for
+**308–513 €** — which is the best this approach gives, it **fails** the mission's
+30° criterion, and it is at or over the detector's budget.

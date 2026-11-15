@@ -112,8 +112,13 @@ impl DetectorScene {
         // The design point's sensor: the 1 mm² part behind a light guide. A bare
         // part sees 0.12 % of a side face and the view would show no signal at
         // all, which is the truth about a bare part and not about this design.
-        let optical = canlab_muon::timing_study::default_sensor().optical(&design);
-        let sensors = design.sensors();
+        let sensor = canlab_muon::timing_study::default_sensor();
+        let optical = sensor.optical(&design);
+        // The same sensor model the study trains on, jitter included. The view
+        // used `design.sensors()`, which carries the 1 mm² part's 47.4 ps — a
+        // third of the 6 mm part's 143 ps — so the picture showed timestamps the
+        // study would never see.
+        let sensors = sensor.sensors(&design);
         let mut rng = canlab_muon::Rng::new(seed);
 
         // A direction from the measured sky, and a point inside the block.
@@ -504,12 +509,25 @@ pub fn draw(scene: &mut DetectorScene, ui: &mut egui::Ui, rect: egui::Rect) -> e
                     break;
                 }
             }
-            // A detected photon's path ends on the sensor's face. Mark the end
-            // only when the clock has reached the arrival: a dot drawn at the
-            // end from the start would show a detection before the light got
-            // there, which is the opposite of a timing detector.
-            if photon.detected.is_some() && scene.time_ps >= birth + photon.time_ps {
-                if let Some(end) = photon.path.last().and_then(|point| to_screen(*point)) {
+            // A detected photon's path ends on the sensor's face, and the
+            // taper carries it from there to the sensor at the face centre.
+            // Both are drawn only when the clock has reached the arrival: a dot
+            // drawn at the end from the start would show a detection before the
+            // light got there, which is the opposite of a timing detector.
+            //
+            // The funnel matters. The model's coverage is a probability over the
+            // whole face, so a photon can be detected tens of millimetres from
+            // the face centre; drawing the dot at the hit point alone made the
+            // picture claim a detection in mid-air. The thin segment is the
+            // taper, and it ends on the sensor.
+            if let Some(index) = photon.detected
+                && scene.time_ps >= birth + photon.time_ps
+            {
+                let sensor = scene.block.face_centre(scene.sensors[index].face);
+                if let (Some(end), Some(at)) =
+                    (photon.path.last().and_then(|point| to_screen(*point)), to_screen(sensor))
+                {
+                    painter.line_segment([end, at], Stroke::new(0.8, DETECTED.gamma_multiply(0.6)));
                     painter.circle_filled(end, 2.5, DETECTED);
                 }
             }
@@ -775,6 +793,29 @@ mod tests {
         let fresh = DetectorScene::new(hexagon(), 3).expect("a scene");
         assert!(fresh.show_detected && fresh.show_lost && fresh.show_absorbed && fresh.show_trapped);
         assert_eq!(fresh.photon_limit, fresh.photons.len());
+    }
+
+    #[test]
+    fn a_detection_escaped_through_the_face_its_sensor_sits_on() {
+        // The invariant the model actually has: a photon is detected when it
+        // escapes through a face a sensor sits on, and the sensor's coverage and
+        // PDE decide whether it registers. The hit point on that face is *not*
+        // the sensor's position — a taper funnels the whole face onto the
+        // sensor — so a detection can be tens of millimetres from the face
+        // centre and still be real. What must hold is that the face is the
+        // sensor's face; the drawing must not imply the hit point is the sensor.
+        let scene = DetectorScene::new(hexagon(), 1).expect("a scene");
+        let mut checked = 0;
+        for photon in &scene.photons {
+            let Some(index) = photon.detected else { continue };
+            assert_eq!(
+                photon.face,
+                Some(scene.sensors[index].face),
+                "a detection on sensor {index} escaped through the wrong face"
+            );
+            checked += 1;
+        }
+        assert!(checked > 0, "the event has no detection to check");
     }
 
     #[test]

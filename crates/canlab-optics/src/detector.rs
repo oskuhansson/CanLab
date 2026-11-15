@@ -476,10 +476,18 @@ fn simulate_inner(
             continue;
         };
         let sensor = sensors[sensor_index];
-        // The sensor does not cover the face. This is the loss that dominates
-        // everything else, and leaving it out is how the model reported tens of
-        // photons per sensor where the geometry allows a handful.
-        if random() >= optical.coverage_for(block, face) {
+        // The photon must hit the detector, not merely the face. A bare sensor
+        // is a square on the face, and a taper accepts only the cone etendue
+        // allows; either way the test is geometric, and a photon that hits the
+        // face a millimetre from the sensor is not a detection. The previous
+        // model multiplied every escaped photon by the face's mean coverage,
+        // which put detections anywhere on the face — including tens of
+        // millimetres from the sensor.
+        let (Some(exit), Some(direction)) = (traced.exit, traced.exit_direction) else {
+            event.missed += 1;
+            continue;
+        };
+        if !optical.detects(block, face, exit, direction, random) {
             event.lost += 1;
             continue;
         }
@@ -660,7 +668,13 @@ mod tests {
         // the best possible taper only reaches ~0.35 %, so the test uses the 6 × 6
         // mm part, which is the size the light budget actually needs.
         let (block, optical, sensors) = setup();
-        let optical = optical.with_sensor(36.0);
+        // The design point's sensor: the 6 × 6 mm part behind a taper. A bare
+        // 6 × 6 mm square is a 36 mm² target on a face of hundreds of square
+        // millimetres, and one event of 268 photons lands about three of them
+        // on the sensor faces — this seed gets none, which is the geometry and
+        // not a bug. The taper accepts a cone over the whole face, which is
+        // what makes "some photons reach a sensor" true of one event.
+        let optical = optical.with_sensor(36.0).with_guide(0.75);
         let mut uniform = Uniform(42);
         let mut random = || uniform.next();
         let event = simulate(

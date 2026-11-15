@@ -93,10 +93,15 @@ impl TimingDesign {
 
     /// The four sensors, with the readout's total jitter.
     ///
-    /// `jitter_ps` is the **readout's total** — 47.4 ps from the four parts — not
-    /// the SiPM's own 42.5, because the timestamp a timer records has the timer's
-    /// jitter in it as well as the sensor's. Using the total here is what makes
-    /// the measured error comparable with the bound, which also uses the total.
+    /// `jitter_ps` is the **readout's total** — 47.4 ps from the four parts of
+    /// the 1 mm² component list — not the SiPM's own 42.5, because the timestamp
+    /// a timer records has the timer's jitter in it as well as the sensor's.
+    ///
+    /// This is the 1 mm² part's sensor set, and it is the one the Cramér–Rao
+    /// bound is about. The study itself reads out through [`SensorModel`], whose
+    /// jitter grows with the sensor's area: the 6 mm part's total is 143 ps, not
+    /// 47.4. A caller that wants the design point's sensors wants
+    /// [`default_sensor`] and [`SensorModel::sensors`], not this.
     ///
     /// The microcell count is the transport's default 40 000, not the part's 504,
     /// because `simulate` clamps the **born** photon count to it: a 40 mm crossing

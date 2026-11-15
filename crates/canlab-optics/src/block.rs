@@ -338,6 +338,37 @@ impl Block {
         }
     }
 
+    /// The outward unit normal of a face.
+    pub fn face_normal(&self, face: Face) -> Vec3 {
+        match face {
+            Face::Top => Vec3::new(0.0, 0.0, 1.0),
+            Face::Bottom => Vec3::new(0.0, 0.0, -1.0),
+            Face::Side(index) => {
+                let (normal, _) = self.side_planes()[index % 6];
+                normal.normalized().unwrap_or(Vec3::new(0.0, 0.0, 1.0))
+            }
+        }
+    }
+
+    /// Two unit vectors spanning a face: the first along the face's width, the
+    /// second along the extrusion.
+    pub fn face_axes(&self, face: Face) -> (Vec3, Vec3) {
+        match face {
+            Face::Top | Face::Bottom => {
+                (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0))
+            }
+            Face::Side(index) => {
+                let corners = self.outline.corners_mm();
+                let (ax, ay) = corners[index % corners.len()];
+                let (bx, by) = corners[(index + 1) % corners.len()];
+                let edge = Vec3::new(bx - ax, by - ay, 0.0)
+                    .normalized()
+                    .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+                (edge, Vec3::new(0.0, 0.0, 1.0))
+            }
+        }
+    }
+
     /// The SiPM positions: the centres of the four faces in [`SENSOR_FACES`].
     ///
     /// These are positions for the *visualisation and the counting*, not

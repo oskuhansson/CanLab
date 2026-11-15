@@ -189,6 +189,51 @@ impl Optical {
         }
     }
 
+    /// Whether a photon that escaped through `face` lands on the sensor.
+    ///
+    /// This is the geometric test, not the mean coverage: a detection is a
+    /// photon that hits the detector, and the detector is either a square on
+    /// the face or the exit of a taper.
+    ///
+    /// * **A bare sensor** is a square of side `sqrt(sensor_area_mm2)` centred
+    ///   on the face. The photon is detected only if its exit point is inside
+    ///   that square. A photon that hits the face a millimetre away from the
+    ///   sensor is not a detection.
+    /// * **A taper** is a light guide whose entrance is the whole face and
+    ///   whose exit is the sensor. Etendue limits what it can accept: the
+    ///   entrance solid angle is `A_sensor · 2π / A_face`, so the acceptance
+    ///   cone has `cos θ = 1 − A_sensor/A_face`, and the photon is detected only
+    ///   if its exit direction is inside that cone. It is then transmitted with
+    ///   probability `guide_efficiency`. The detection happens at the sensor,
+    ///   not at the point on the face where the light entered the guide.
+    pub fn detects(
+        &self,
+        block: &Block,
+        face: Face,
+        exit: Vec3,
+        direction: Vec3,
+        random: &mut dyn FnMut() -> f64,
+    ) -> bool {
+        match self.guide_efficiency {
+            Some(transmission) => {
+                let ratio = (self.sensor_area_mm2 / block.face_area(face)).clamp(0.0, 1.0);
+                let cos_accept = 1.0 - ratio;
+                let normal = block.face_normal(face);
+                if direction.dot(normal) < cos_accept {
+                    return false;
+                }
+                random() < transmission.clamp(0.0, 1.0)
+            }
+            None => {
+                let side = self.sensor_area_mm2.sqrt();
+                let centre = block.face_centre(face);
+                let (u, v) = block.face_axes(face);
+                let offset = exit.sub(centre);
+                offset.dot(u).abs() <= 0.5 * side && offset.dot(v).abs() <= 0.5 * side
+            }
+        }
+    }
+
     /// The same block with the sensor faces bonded with an adhesive of `index`.
     pub fn block_bonded(index: f64, absorption_mm: f64, glue_index: f64) -> Optical {
         Optical { glue_index: Some(glue_index), ..Optical::block_in_air(index, absorption_mm) }
@@ -220,6 +265,12 @@ pub struct Traced {
     pub face: Option<Face>,
     /// The point it left through, if it did.
     pub exit: Option<Vec3>,
+    /// The direction it was travelling when it left, if it did.
+    ///
+    /// The detection test needs it: a taper accepts light only within a cone
+    /// about the face normal, and the exit point alone cannot say whether the
+    /// photon was inside that cone.
+    pub exit_direction: Option<Vec3>,
     /// The distance travelled *inside the block*, millimetres.
     pub path_mm: f64,
     /// The straight-line displacement from birth to exit, millimetres.
@@ -302,6 +353,7 @@ impl Transport {
         let fate;
         let mut face = None;
         let mut exit = None;
+        let mut exit_direction = None;
         // The face the photon last reflected off, if it has not crossed the
         // block since. It may not leave through that face: the only thing
         // between it and the surface is the nudge that got it back inside, and
@@ -381,6 +433,7 @@ impl Transport {
             fate = Fate::Escaped;
             face = Some(next.face);
             exit = Some(next.point);
+            exit_direction = Some(heading);
             break;
         }
         let displacement = exit.map(|point| (point - origin).length()).unwrap_or(path);
@@ -391,6 +444,7 @@ impl Transport {
             birth_direction: direction,
             face,
             exit,
+            exit_direction,
             path_mm: path,
             displacement_mm: displacement,
             time_ps,
@@ -477,6 +531,43 @@ mod tests {
             .unwrap();
         assert_eq!(traced.fate, Fate::Absorbed);
         assert!(traced.path_mm > 0.0 && traced.path_mm <= 6.0, "{}", traced.path_mm);
+    }
+
+    #[test]
+    fn a_bare_sensor_detects_only_what_hits_it() {
+        // The bug this prevents: a detection anywhere on the face. A bare sensor
+        // is a square of side sqrt(area) centred on the face, and a photon that
+        // hits the face a centimetre away is not a detection.
+        let block = Block::new(Tropical::fits_in(20.0, 10.0).expect("fits"));
+        let optical = Optical::block_in_air(1.49, 10_000.0).with_sensor(36.0);
+        let face = Face::Top;
+        let centre = block.face_centre(face);
+        let normal = block.face_normal(face);
+        let (u, v) = block.face_axes(face);
+        let mut random = || 0.5;
+        assert!(optical.detects(&block, face, centre, normal, &mut random));
+        // 2.9 mm along the face is inside a 6 mm square; 3.1 mm is outside.
+        assert!(optical.detects(&block, face, centre.add(u.scale(2.9)), normal, &mut random));
+        assert!(!optical.detects(&block, face, centre.add(u.scale(3.1)), normal, &mut random));
+        assert!(!optical.detects(&block, face, centre.add(v.scale(10.0)), normal, &mut random));
+    }
+
+    #[test]
+    fn a_taper_accepts_only_the_cone_etendue_allows() {
+        // The taper's entrance is the whole face, but etendue caps what it can
+        // accept: cos θ = 1 − A_sensor/A_face. A photon along the normal is
+        // inside the cone; one at 45° is outside, however close to the centre it
+        // hit.
+        let block = Block::new(Tropical::fits_in(20.0, 10.0).expect("fits"));
+        let optical = Optical::block_in_air(1.49, 10_000.0).with_sensor(36.0).with_guide(1.0);
+        let face = Face::Top;
+        let centre = block.face_centre(face);
+        let normal = block.face_normal(face);
+        let (u, _) = block.face_axes(face);
+        let mut random = || 0.5;
+        assert!(optical.detects(&block, face, centre, normal, &mut random));
+        let steep = normal.scale(0.5).add(u.scale(0.866)).normalized().expect("a direction");
+        assert!(!optical.detects(&block, face, centre, steep, &mut random));
     }
 
     #[test]

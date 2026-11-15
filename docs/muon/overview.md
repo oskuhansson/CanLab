@@ -15,14 +15,16 @@ well, and what is still uncertain. The full reasoning is in
 
 ## The design in one paragraph
 
-A **PMMA tent prism**, 40 mm wide, 90 mm tall and 10 mm deep, sits on edge inside
-the can. A muon crossing it emits Cherenkov light along a cone at 47.8°. Four
-1 mm² SiPMs on four of the block's faces record the **first photon** each one sees,
-and a time-to-digital converter timestamps them. Twelve numbers per event — four
-times, four "did it fire" flags and four photon counts — go into a small neural
-network, which returns the muon's direction.
+A **PMMA hexagon**, 56 mm across and 30 mm deep, sits inside the can. A muon
+crossing it emits Cherenkov light along a cone at 47.8°. Four **6 × 6 mm SiPMs**
+on four of the block's faces, each behind a taper moulded into the acrylic,
+record the photons that reach them, and a multi-hit time-to-digital converter
+timestamps them. Twenty-four numbers per event — four first arrivals, four second
+arrivals, four means, four spreads, four "did it fire" flags and four photon
+counts — go into a small neural network, which returns the muon's direction.
 
-**The measured resolution is 27.0° median (35.8° at the 68th percentile).**
+**The measured resolution is 26.4° median (36.4° at the 68th percentile), and
+56.8 % of events are within the mission's 30° — a fail, not a pass.**
 
 ---
 
@@ -40,12 +42,12 @@ flowchart LR
     end
     subgraph G_SENSOR["The readout"]
         SIPM["Four SiPMs, 504 cells, 35 percent PDE"]
-        TDC["First photon per sensor, 47 ps jitter"]
+        TDC["First photon per sensor, 143 ps jitter"]
     end
     subgraph G_NET["The network"]
-        FEAT["12 features: 4 times, 4 flags, 4 counts"]
-        MLP["64 x 64 network, 5122 parameters"]
-        DIR{{"Direction, 27.0 deg median"}}
+        FEAT["24 features: first, second, flags, counts, mean, spread"]
+        MLP["64 x 64 network, 5890 parameters"]
+        DIR{{"Direction, 26.4 deg median"}}
     end
     MUON -->|"emits"| CONE
     CONE -->|"trapped"| TIR
@@ -68,16 +70,16 @@ sensors cover 15 % of the faces they sit on.
 
 | Quantity | Value | Where |
 |---|---|---|
-| Block | 40 × 90 × 10 mm tent prism, PMMA, n = 1.491 | `Tropical::fits_in(20, 10)` |
-| Block mass | 35.7 g | `tent_mass_g` |
-| Cherenkov yield | 21 photons/mm, 840 per crossing | `photons_per_mm(1.0, 1.49)` |
-| Photons detected | ~19 per muon from a 40 mm crossing, after TIR, Fresnel and coverage | `detector::simulate` |
-| Sensors | 4 × MICROFC-10035, 504 microcells, 35 % PDE | `components` |
-| Readout jitter | 47.4 ps total (42.5 SiPM, 20 timer, 6 amp, 2 comparator) | `components::total_jitter_ps` |
-| Timestamps per event | 3.25 of 4 on average; 44 % of events have all four | `timing_study::run` |
-| Timing signal | 224 ps across the detector | `timing_signal_ps` |
-| **Direction resolution** | **27.0° median, 35.8° at 68 %** | `train_timing` |
-| Cost | 218 € | `Design::cherenkov_timing` |
+| Block | 56 mm hexagon, 30 mm deep, PMMA, n = 1.49 | `Tropical::hexagon(28, 30)` |
+| Block mass | 73 g | `hexagon_mass_g` |
+| Cherenkov yield | 21 photons/mm, 630 per 30 mm crossing | `photons_per_mm(1.0, 1.49)` |
+| Photons detected | 11.1 per muon across the four sensors | `sensor_study` |
+| Sensors | 4 × MICROFC-60035, 18 980 microcells, 35 % PDE, behind a taper | `components` |
+| Readout jitter | 143.1 ps total (141.4 SiPM, 20 timer, 6 amp, 2 comparator) | `SensorModel::jitter_ps` |
+| Timestamps per event | 1.42 of 4 on average; 8.7 % fire all four | `sensor_study` |
+| Timing signal | 209 ps across the detector | `timing_signal_ps` |
+| **Direction resolution** | **26.4° median, 36.4° at 68 %, 56.8 % within 30°** | `train_realistic` |
+| Cost | 308–513 € | `cherenkov.md` §8 |
 
 ---
 
@@ -88,22 +90,24 @@ The network is a **regressor**, not a classifier: it outputs two continuous numb
 recovered from the unit constraint. The loss is mean squared error, so it converges
 to the conditional mean `E[direction | features]`.
 
-The reported 27.0° is therefore the **median angular error of that point estimate**
+The reported 26.4° is therefore the **median angular error of that point estimate**
 over held-out events — the irreducible spread of the true direction around its own
-conditional mean. Half the muons are reconstructed to better than 27.0°, and the
-**realistic readout** (a threshold, dark counts, crosstalk and walk) keeps **56 %**
+conditional mean. Half the muons are reconstructed to better than 26.4°, and the
+**realistic readout** (a threshold, dark counts, crosstalk and walk) keeps **57 %**
 of events within the mission's 30°.
 
-| Configuration | Median | 68th percentile |
-|---|---|---|
-| timestamps only (8 features) | 29.9° | 38.4° |
-| **timestamps and counts (24 features)** | **27.0°** | **35.8°** |
-| randomised detector | 27.7° | 36.2° |
+| Configuration | Median | 68th percentile | Within 30° |
+|---|---|---|---|
+| first and flags, one threshold (8 features) | 31.3° | 39.8° | 47.8 % |
+| **first, second, flags, counts (16 features)** | **24.6°** | **32.2°** | **62.8 %** |
+| everything (24 features) | 26.4° | 36.4° | 56.8 % |
 
-The four extra features are the **second arrival** at each sensor — the stop a
-multi-hit TDC records and a single-threshold readout throws away. The gap between
-the first and second photon depends on how far the track is from the sensor, which
-is the latent variable the direction fit needs.
+The extra stops are the **second arrival** at each sensor — what a multi-hit TDC
+records and a single-threshold readout throws away — plus the photon counts. The
+second arrival and the counts together are worth **6.7°** and fifteen points of
+within-30°. The mean and spread over every photon are not worth adding: they
+*raise* the median by 1.8°, because they are dominated by the emission-time
+spread, which is noise for the direction.
 
 ### Why the network beats the algebra
 
@@ -113,13 +117,14 @@ Two analytic reconstructions were tried first, and both are worse:
 |---|---|---|
 | Linear fit, `t = t₀ + (r·d)/v` | 119.5° | The model is wrong: the light does not leave from a point |
 | Cherenkov model, **true** track point | 81.1° | The model is right, but four timestamps cannot determine the track position |
-| **Network** | **27.0°** | Learns `p(direction \| features)`, marginalising over the track position |
+| **Network** | **26.4°** | Learns `p(direction \| features)`, marginalising over the track position |
 
 The network is not doing better physics. It is doing something the analytic
 inversion cannot: the track position is a **latent variable**, and the network
 absorbs it into the conditional distribution. The ablation shows where the
 information comes from — the photon counts depend on the path length, and the path
-length depends on where the track is, so the counts are worth **2.9°** on their own.
+length depends on where the track is, so the counts and the second arrival are
+worth **6.7°** together.
 That is less than the earlier study reported, and the difference is a bug fix: the
 photon count used to be taken from the caller's 200 mm path instead of the block's
 own chord, which credited the block with six times the light it makes.
@@ -129,34 +134,28 @@ own chord, which credited the block with six times the light it makes.
 The regressor returns a point and no uncertainty. A second head — the same
 network with a **von Mises–Fisher** output — returns a mean direction *and* a
 concentration `κ`, so every event carries its own predicted error. On the same
-8 000 events (hexagon at 30 mm) it lands on the same median, **28.4°**, and the
-same 60° fraction, so the distribution costs nothing in the mean direction. Its
-`κ` ranks events correctly — the events it calls hard are harder — but its 30°
-probability is optimistic: **62.6 % predicted, 53.9 % observed**. The vMF tail is
-too light, and a single scale on `κ` would fix the number without touching the
-direction. [vmf.md](vmf.md) has the measurement and the calibration table.
+8 000 events (hexagon at 30 mm) it lands on **26.0°** and **59.9 % within 30°**,
+within half a degree and three points of the regressor, so the distribution costs
+nothing in the mean direction. Its `κ` ranks events correctly — the events it
+calls hard are harder — and its 30° probability is close: **62.7 % predicted,
+59.9 % observed**. The vMF tail is slightly light, and a single scale on `κ` would
+close the last three points without touching the direction. [vmf.md](vmf.md) has the measurement and the calibration table.
 
 ---
 
 ## The block
 
-```text
-                 (0, 3)                  the apex
-              /         \
-     (-1, 1.5)           (1, 1.5)        the shoulders
-        |                  |
-     (-1,-1.5)           (1,-1.5)        the base
-```
+A **hexagon**, not a slab, because the can is round: a regular hexagon inscribed
+in the Ø56 mm inner circle has a horizontal cross-section of `3√3/2 · 28² =
+2 036 mm²`, five times the 40 × 10 mm tent's, and its six flat faces are what the
+sensors sit on. The corners touch the wall, so the block uses the full diameter
+and the depth is the only free dimension: 30 mm is the design point, and 20 and
+40 mm measure the same resolution within the noise.
 
-A tent, not a slab, because that is what you can cut and still keep a
-total-internal-reflection cavity with a flat face for the sensor. With a CNC
-available the outline is any closed 2.5D shape within the tool's reach, so the tent
-is a choice the study should sweep rather than a manufacturing limit.
-
-The block is mounted **on edge**: its 40 × 90 mm silhouette cannot lie flat in the
-can's 56 mm inner circle, but with the tent's plane holding the can's axis the
-circle only constrains the 40 × 10 mm cross-section (20.6 mm of half-diagonal
-against 28 mm of radius).
+The taper is a **cavity** moulded into the PMMA, not a guide outside it: a side
+face has 3.75 mm of clearance at its centre and none at the corners, and a guide
+outside would see the light after it had refracted into the full hemisphere, where
+no passive element can concentrate at all.
 
 ---
 
@@ -164,16 +163,18 @@ against 28 mm of radius).
 
 | Part | Role | Key number |
 |---|---|---|
-| onsemi MICROFC-10035 | SiPM, 1 mm² | 504 microcells, PDE 31–41 %, **SPTR not specified** |
+| onsemi MICROFC-60035 | SiPM, 6 × 6 mm | 18 980 microcells, PDE 31–41 %, **SPTR not specified** |
 | TI OPA858 | transimpedance amplifier | 5.5 GHz, 2.5 nV/√Hz |
 | ADI MAX40026 | comparator | 280 ps delay, 2 ps jitter, 25 ps overdrive dispersion |
-| ADI MAX35101 | "analog pulse timer" | 20 ps accuracy, 3.8 ps resolution, **2 channels, no external START** |
+| ScioSense TDC-GPX2 | four-channel multi-hit timer | 20 ps rms, 16-stage FIFO per channel, **no external START — free-running against REFCLK** |
 | Norland NOA 68 | optical adhesive | cured n = 1.54, €32.70 |
 
 **The MAX35101 is the wrong part for four independent SiPMs.** Its START is
 generated internally by its own pulse launcher, so it measures launch-to-echo
 rather than "when did this SiPM fire", and its 20 ps is a *differential* accuracy.
-A general-purpose TDC with an external START is the replacement.
+The TDC-GPX2 is the replacement: four channels, multi-hit, and a free-running
+reference counter so no START is needed. It is also €55–60 and QFN64, which is the
+cost and assembly problem.
 
 **Optical adhesive nearly doubles the light.** At a PMMA/air face only 13 % of the
 light escapes and an adhesive with an index above PMMA's removes the critical angle
@@ -216,7 +217,7 @@ than corrected for.
 2. **The tracker's light model is a kernel, not a transport.** It gives the
    expected photoelectrons per pixel and draws the Poisson count; it does not trace
    individual photons.
-3. **The network's 27.0° is a simulation result.** The sim-to-real gap is
+3. **The network's 26.4° is a simulation result.** The sim-to-real gap is
    unmeasured, and the domain randomisation only covers the parameters that were
    varied.
 4. **The timer part is wrong.** The MAX35101 cannot timestamp four independent

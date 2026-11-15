@@ -149,10 +149,17 @@ impl Readout {
         } else {
             real
         };
-        // The walk: a brighter pulse fires earlier. The bias is zero at one
-        // photoelectron and `-walk_ps` at four, so it scales linearly with the
-        // pulse height above one.
-        let walk = -self.walk_ps * (needed as f64 - 1.0) / 3.0;
+        // The walk: a brighter pulse crosses the threshold earlier. The bias is
+        // zero at one photoelectron and `-walk_ps` at four, so it scales
+        // linearly with the pulse height above one. The height is the number of
+        // photons the pulse carries, not the threshold: the threshold decides
+        // *which* photon is recorded, and scaling the walk with it made the walk
+        // a constant offset — the same on every sensor, so it cancelled in the
+        // direction fit and modelled nothing. The pulse height is approximated
+        // by the number of photons the sensor saw, which is the amplitude the
+        // pulse reaches.
+        let amplitude = (times.len() as f64).clamp(1.0, 4.0);
+        let walk = -self.walk_ps * (amplitude - 1.0) / 3.0;
         Some(time + walk)
     }
 }
@@ -207,19 +214,31 @@ mod tests {
     }
 
     #[test]
-    fn the_walk_is_negative_and_grows_with_the_threshold() {
-        // A brighter pulse fires earlier, so the walk is a negative delay, and a
-        // higher threshold needs a brighter pulse, so the walk grows.
+    fn the_walk_grows_with_the_pulse_height_not_the_threshold() {
+        // The walk is the comparator's amplitude-dependent delay: a pulse of four
+        // photoelectrons crosses the threshold 25 ps earlier than a pulse of one.
+        // The threshold decides *which* photon is recorded, not how much the
+        // crossing walks. The old model scaled the walk with `needed`, which made
+        // it the same constant on every sensor, so it cancelled in the
+        // mean-relative features and modelled nothing at all.
+        let base = Readout { dark_rate_hz: 0.0, ..Readout::nominal() };
+        let unwalked = Readout { walk_ps: 0.0, ..base };
         let mut rng = Rng::new(4);
-        let walked = Readout { threshold_pe: 4.0, ..Readout::nominal() };
-        let unwalked = Readout { threshold_pe: 4.0, walk_ps: 0.0, ..Readout::nominal() };
-        let walked_time = walked.timestamp(&[100.0, 200.0, 300.0, 400.0], &mut rng).unwrap();
-        let unwalked_time = unwalked.timestamp(&[100.0, 200.0, 300.0, 400.0], &mut rng).unwrap();
-        // The walk is a negative delay: a brighter pulse fires earlier than the
-        // same pulse without walk. It is *not* earlier than the first photon —
-        // the threshold still waits for the fourth.
-        assert!(walked_time < unwalked_time, "{walked_time} vs {unwalked_time}");
-        assert!((walked_time - 375.0).abs() < 1e-9, "{walked_time}");
-        assert!((unwalked_time - 400.0).abs() < 1e-9, "{unwalked_time}");
+        // One photon: no walk.
+        let one = base.timestamp(&[400.0], &mut rng).unwrap();
+        let one_flat = unwalked.timestamp(&[400.0], &mut rng).unwrap();
+        assert!((one - one_flat).abs() < 1e-9, "one photon walked: {one} vs {one_flat}");
+        // Four photons: the full 25 ps, and the first photon is still the one
+        // recorded because the threshold is half a photoelectron.
+        let four = base.timestamp(&[100.0, 200.0, 300.0, 400.0], &mut rng).unwrap();
+        let four_flat = unwalked.timestamp(&[100.0, 200.0, 300.0, 400.0], &mut rng).unwrap();
+        assert!((four_flat - four - 25.0).abs() < 1e-9, "{four_flat} vs {four}");
+        // The threshold moves which photon is recorded and leaves the walk alone:
+        // the same four-photon pulse walks 25 ps whatever the threshold is.
+        let high = Readout { threshold_pe: 4.0, ..base };
+        let high_flat = Readout { threshold_pe: 4.0, ..unwalked };
+        let high_time = high.timestamp(&[100.0, 200.0, 300.0, 400.0], &mut rng).unwrap();
+        let high_flat_time = high_flat.timestamp(&[100.0, 200.0, 300.0, 400.0], &mut rng).unwrap();
+        assert!((high_flat_time - high_time - 25.0).abs() < 1e-9, "{high_flat_time} vs {high_time}");
     }
 }

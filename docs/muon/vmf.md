@@ -68,15 +68,15 @@ same 1 500, for the hexagon at 30 mm with the 6 × 6 mm part behind the taper:
 
 | Configuration | Median | 68th | within 30° | within 60° |
 |---|---|---|---|---|
-| vMF mean direction | 28.4° | 36.7° | 53.9 % | 93.1 % |
-| regressor, nominal readout | 28.4° | 37.5° | 53.3 % | 93.1 % |
+| vMF mean direction | 26.0° | 35.0° | 59.9 % | 90.3 % |
+| regressor, nominal readout | 26.4° | 36.4° | 56.8 % | 90.5 % |
 
-The distribution costs **nothing** in the mean direction: the two heads land on
-the same median and the same 60° fraction, which is the run-to-run noise. The
-`κ` is one extra output unit, not another network.
+The distribution costs **nothing** in the mean direction: the two heads land
+within half a degree and three points, which is the noise. The `κ` is one extra
+output unit, not another network.
 
-Mean `κ` is 7.7, which implies a mean angular error of 27.3° — close to the 28.4°
-it actually makes.
+Mean `κ` is 8.6, which implies a mean angular error of 28.2° — the 26.0° it
+actually makes is slightly better than its own prediction.
 
 ### Is the κ believable?
 
@@ -86,19 +86,19 @@ prediction:
 
 | bin (by predicted) | predicted | observed | ratio |
 |---|---|---|---|
-| 0–25 % | 22.3° | 24.8° | 1.11 |
-| 25–50 % | 25.9° | 25.5° | 0.98 |
-| 50–75 % | 28.6° | 28.4° | 0.99 |
-| 75–100 % | 32.3° | 34.0° | 1.05 |
+| 0–25 % | 20.2° | 19.0° | 0.94 |
+| 25–50 % | 22.1° | 21.2° | 0.96 |
+| 50–75 % | 30.2° | 31.0° | 1.03 |
+| 75–100 % | 40.4° | 42.6° | 1.06 |
 
 The ordering works: the events the network calls hard are harder, and the ratio
-is within 11 % of 1 in every bin. But the *absolute* probability at the mission's
-criterion does not:
+is within 6 % of 1 in every bin. The *absolute* probability at the mission's
+criterion is close as well:
 
-**P(θ ≤ 30°): 62.6 % predicted by the network's own κ, 53.9 % observed.**
+**P(θ ≤ 30°): 62.7 % predicted by the network's own κ, 59.9 % observed.**
 
-The vMF tail is too light. The median is right; the 30° probability is optimistic
-by about nine points.
+The vMF tail is slightly light — the 30° probability is optimistic by about three
+points — but the bin ratios show the shape is right.
 
 ## What it buys, and what it does not
 
@@ -106,7 +106,7 @@ by about nine points.
   direction identical to the regressor's within the noise. At inference it is one
   more output unit.
 - **Does not buy:** an absolute probability you can put in a trigger. The 30°
-  number is 62.6 % against an observed 53.9 %.
+  number is 62.7 % against an observed 59.9 %.
 - **The fix is cheap:** a single scale on `κ` fitted on held-out data
   (temperature scaling) moves the predicted 30° fraction to the observed one
   without touching the mean direction. A heavier-tailed distribution on the
@@ -117,7 +117,7 @@ by about nine points.
 The mission's criterion is the fraction within 30°, and that is a property of the
 **timing resolution**, not of the output head. A calibrated distribution tells
 you when to trust a reconstruction; it does not make a 28.4° detector a 25°
-detector. The design still fails the criterion at 53.9 % within 30°, and
+detector. The design still fails the criterion at 54.2 % within 30°, and
 [cherenkov.md](cherenkov.md) says why.
 
 ## Reproducing it

@@ -244,7 +244,7 @@ placement is poor, and the block's corners give 16°.
 
 ## The jitter budget
 
-| Part | ps | Random | Source |
+| Part | ps sigma | Random | Source |
 |---|---|---|---|
 | MICROFC-10035 | 42.5 | yes | **not in the datasheet**; 70–120 ps FWHM is the published range, 100 ps FWHM is the middle |
 | MAX35101 | 20.0 | yes | datasheet: 20 ps accuracy, 3.8 ps resolution |
