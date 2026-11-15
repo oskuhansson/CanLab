@@ -31,8 +31,8 @@ model rather than a measurement, it says so.*
 > The design point is therefore the **6 × 6 mm part behind the taper**, and the
 > numbers below are re-measured with it. The hexagon at 30 mm is **29.4° median
 > and 51.2 % within 30°** through the nominal readout — the design does not pass
-> the mission's criterion, and the light budget and the jitter, not the geometry,
-> are why: 20, 30 and 40 mm deep measure 30.7°, 29.4° and 30.6°.
+> the mission's criterion, and the light budget, the aperture and the jitter, not
+> the geometry, are why: 20, 30 and 40 mm deep measure 30.7°, 29.4° and 30.6°.
 > [vmf.md](vmf.md) has the distribution head measured on the same model.
 
 ---
@@ -237,7 +237,7 @@ The resolution follows the light:
 | **6 × 6 mm + taper** | **29.4°** | **51 %** | **160–360 €** |
 
 So the sensor is a straight trade of money for resolution, and no point on it
-passes the 30° criterion: the best is 57 % within 30°, and it is the most
+passes the 30° criterion: the best is 51 % within 30°, and it is the most
 expensive. The 1 mm² part cannot see the light even with the best possible taper:
 etendue caps a taper at 3.87× the bare coverage, so 0.12 % becomes 0.35 %, one
 photon per four muons. The 6 mm part sees 4.3 % bare and 12.4 % tapered — 2.21
