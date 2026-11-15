@@ -325,6 +325,29 @@ extra stops know, and the mean is dominated by the emission-time spread, which i
 noise for the direction. The features are kept because they cost nothing and the
 panel shows the data they summarise, but the design should not be sold on them.
 
+**But the count is not what the readout can supply.** The component list is a
+comparator and one TDC stop per sensor: a discriminator fires once per pulse and
+the TDC records one timestamp. That is eight features — four first arrival times
+and four flags — and retraining on exactly that (`train_realistic --first-only`)
+gives, for the hexagon at 30 mm through the nominal readout:
+
+| Features | Median | 68th | Within 30° | Within 60° |
+|---|---|---|---|---|
+| 24 — everything | 25.9° | 33.3° | 62 % | 95 % |
+| 16 — first, second, flags, counts | 25.5° | 34.0° | 60 % | 95 % |
+| **8 — first and flags, one threshold** | **33.6°** | **42.4°** | **43 %** | **91 %** |
+
+The **second arrival** is worth **8°**. It costs more than every other feature
+combined, and it takes the design from "borderline" to "fails the criterion". The
+count and the mean/spread are noise by comparison, because the second arrival is
+the feature that carries the track position — its gap from the first is the extra
+path length, which is the distance to the track.
+
+So the readout is the design. A single-threshold TDC gives 33.6° and 43 %; a
+multi-hit TDC gives 25.5° and 60 %. The TDC-GPX2 has a 16-stage FIFO per channel
+and unlimited multi-hit, so it is the part this design needs, not an optional
+extra — and that is also the €55–60 and QFN64 problem.
+
 ### 7.2 The measured results
 
 Through the realistic readout, on the corrected photon count:

@@ -16,7 +16,9 @@
 
 use canlab_muon::domain::Domain;
 use canlab_muon::net::{Network, Sample};
-use canlab_muon::timing_study::{training_sample, training_sample_realistic, Shape, TimingDesign};
+use canlab_muon::timing_study::{
+    training_sample, training_sample_first_only, training_sample_realistic, Shape, TimingDesign,
+};
 use canlab_muon::{Readout, Rng};
 
 /// How many events to train on.
@@ -70,6 +72,18 @@ fn summarise(mut errors: Vec<f64>) -> Summary {
     Summary { median: at(0.5), p68: at(0.68), within_30: within(30.0), within_60: within(60.0) }
 }
 
+/// What the readout is allowed to know.
+#[derive(Clone, Copy, PartialEq)]
+enum Features {
+    /// Everything: first and second arrivals, flags, counts, mean and spread.
+    Full,
+    /// First and second arrivals, flags and counts — no multi-hit summary.
+    FirstSecond,
+    /// Four first arrival times and four flags: one discriminator, one TDC stop
+    /// per sensor. The instrument the component list describes.
+    FirstOnly,
+}
+
 /// Generate a training set with the chosen readout.
 fn generate(
     design: &TimingDesign,
@@ -78,7 +92,7 @@ fn generate(
     realistic: bool,
     count: usize,
     seed: u64,
-    trim: bool,
+    features: Features,
 ) -> Vec<Sample> {
     let mut rng = Rng::new(seed);
     let mut samples = Vec::with_capacity(count);
@@ -94,15 +108,15 @@ fn generate(
             pde: light.pde,
             shape: design.shape,
         };
-        let sample = if realistic {
-            training_sample_realistic(&varied, readout, &mut rng)
-        } else {
-            training_sample(&varied, &mut rng)
+        let sample = match features {
+            // The readout cannot count, so the sample is built from the first
+            // arrival and the flags alone.
+            Features::FirstOnly => training_sample_first_only(&varied, readout, &mut rng),
+            _ if realistic => training_sample_realistic(&varied, readout, &mut rng),
+            _ => training_sample(&varied, &mut rng),
         };
         if let Some(mut sample) = sample {
-            // The ablation: the first and second arrivals, the flags and the
-            // counts, without the multi-hit summary the last eight features add.
-            if trim {
+            if features == Features::FirstSecond {
                 sample.features.truncate(16);
             }
             samples.push(sample);
@@ -118,10 +132,10 @@ fn run_configuration(
     domain: &Domain,
     readout: &Readout,
     realistic: bool,
-    trim: bool,
+    features: Features,
 ) -> Summary {
-    let training = generate(design, domain, readout, realistic, TRAINING, 1, trim);
-    let testing = generate(design, domain, readout, realistic, TESTING, 2, trim);
+    let training = generate(design, domain, readout, realistic, TRAINING, 1, features);
+    let testing = generate(design, domain, readout, realistic, TESTING, 2, features);
     let inputs = training.first().map(|s| s.features.len()).unwrap_or(0);
     let mut rng = Rng::new(3);
     let mut network = Network::new(inputs, HIDDEN, &mut rng);
@@ -181,7 +195,13 @@ fn main() {
     println!("matters, not the median. A design that is usually 20° and sometimes");
     println!("150° is not the same as one that is always 25°.\n");
 
-    let trim = std::env::args().any(|argument| argument == "--first-second-only");
+    let features = if std::env::args().any(|argument| argument == "--first-only") {
+        Features::FirstOnly
+    } else if std::env::args().any(|argument| argument == "--first-second-only") {
+        Features::FirstSecond
+    } else {
+        Features::Full
+    };
     let design = design_from_args();
     println!(
         "design: {:.0} mm tent, {:.0} mm deep, n = {:.2}\n",
@@ -198,9 +218,9 @@ fn main() {
     );
     println!("{}", "-".repeat(75));
 
-    run_configuration("ideal readout", &design, &domain, &ideal, false, trim);
-    run_configuration("nominal readout", &design, &domain, &nominal, true, trim);
-    run_configuration("conservative readout", &design, &domain, &conservative, true, trim);
+    run_configuration("ideal readout", &design, &domain, &ideal, false, features);
+    run_configuration("nominal readout", &design, &domain, &nominal, true, features);
+    run_configuration("conservative readout", &design, &domain, &conservative, true, features);
 
     println!("\nWhat this means");
     println!("{}", "-".repeat(75));

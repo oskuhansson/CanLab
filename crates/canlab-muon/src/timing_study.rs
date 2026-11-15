@@ -729,6 +729,21 @@ pub fn features(outcome: &TimingOutcome) -> [f64; FEATURES] {
     features
 }
 
+/// The features a **single-threshold** readout can supply: eight values.
+///
+/// Four first arrival times and four "did it fire" flags — nothing else. A
+/// discriminator fires once per pulse and a TDC records one timestamp, so the
+/// second arrival, the count, the mean and the spread are not available from
+/// this instrument. The only way to get them is a multi-hit TDC with a FIFO, or
+/// an integrating readout that measures charge.
+pub fn features_first_only(outcome: &TimingOutcome) -> [f64; 8] {
+    let full = features(outcome);
+    let mut trimmed = [0.0; 8];
+    trimmed[..4].copy_from_slice(&full[..4]);
+    trimmed[4..].copy_from_slice(&full[8..12]);
+    trimmed
+}
+
 /// The features without the photon counts: eight values.
 ///
 /// The ablation. The counts depend on the path length and therefore on where the
@@ -771,6 +786,25 @@ pub fn training_sample_realistic(
     let outcome = simulate_one_realistic(design, readout, zenith, azimuth, rng)?;
     Some(crate::net::Sample {
         features: features(&outcome).to_vec(),
+        target: outcome.direction,
+    })
+}
+
+/// One training sample as a single-threshold readout sees it.
+///
+/// The same event as [`training_sample_realistic`], reduced to the four first
+/// arrival times and their flags. This is the honest input for the instrument the
+/// component list describes: a comparator and one TDC stop per sensor.
+pub fn training_sample_first_only(
+    design: &TimingDesign,
+    readout: &Readout,
+    rng: &mut Rng,
+) -> Option<crate::net::Sample> {
+    let zenith = crate::muon::MuonFlux::measured().sample_zenith(rng.uniform());
+    let azimuth = rng.range(0.0, std::f64::consts::TAU);
+    let outcome = simulate_one_realistic(design, readout, zenith, azimuth, rng)?;
+    Some(crate::net::Sample {
+        features: features_first_only(&outcome).to_vec(),
         target: outcome.direction,
     })
 }
@@ -843,4 +877,36 @@ mod tests {
             small_run.mean_photons
         );
     }
+
+    #[test]
+    fn the_first_only_features_are_the_four_times_and_four_flags() {
+        // The single-threshold readout's whole vocabulary: a time or nothing,
+        // and a flag that says which. No count and no second arrival, because a
+        // discriminator fires once and a TDC records once.
+        let design = TimingDesign::design();
+        let mut rng = Rng::new(3);
+        let mut fired = 0;
+        let mut silent = 0;
+        for _ in 0..40 {
+            let Some(raw) = simulate_one(&design, 0.3, 0.7, &mut rng) else { continue };
+            let trimmed = features_first_only(&raw);
+            assert_eq!(trimmed.len(), 8);
+            for index in 0..4 {
+                match raw.times[index] {
+                    Some(_) => {
+                        assert_eq!(trimmed[4 + index], 1.0, "a fired sensor's flag is 1");
+                        fired += 1;
+                    }
+                    None => {
+                        assert_eq!(trimmed[index], 0.0, "a silent sensor's time is 0");
+                        assert_eq!(trimmed[4 + index], 0.0, "a silent sensor's flag is 0");
+                        silent += 1;
+                    }
+                }
+            }
+        }
+        assert!(fired > 0, "no sensor fired in 40 events");
+        assert!(silent > 0, "every sensor fired: the silent case was never tested");
+    }
+
 }
