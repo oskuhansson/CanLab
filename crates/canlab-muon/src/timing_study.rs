@@ -111,7 +111,13 @@ impl TimingDesign {
     pub fn sensors(&self) -> [SiPM; 4] {
         let jitter = components::total_jitter_ps();
         let pde = self.pde;
-        SENSOR_FACES.map(|face| SiPM { face, pde, jitter_ps: jitter, microcells: 40_000 })
+        SENSOR_FACES.map(|face| SiPM {
+            face,
+            pde,
+            jitter_ps: jitter,
+            microcells: 40_000,
+            coupling: 1.0,
+        })
     }
 
     /// The Cramér–Rao bound on the heading, worst case over four headings.
@@ -776,14 +782,29 @@ impl SensorModel {
     /// The four sensors, with this part's jitter and the design's PDE.
     pub fn sensors(self, design: &TimingDesign) -> [SiPM; 4] {
         let jitter = self.jitter_ps();
-        SENSOR_FACES.map(|face| SiPM { face, pde: design.pde, jitter_ps: jitter, microcells: 40_000 })
+        let coupling = crate::components::adhesive().transmission;
+        SENSOR_FACES.map(|face| SiPM {
+            face,
+            pde: design.pde,
+            jitter_ps: jitter,
+            microcells: 40_000,
+            coupling,
+        })
     }
 
     /// The optical model for a design and this sensor.
+    ///
+    /// The block is in air: the taper's mouth is a hole in the face, and the
+    /// rest of the face is bare PMMA, so the light that misses the mouth
+    /// reflects and gets another chance. The mouth's own Fresnel and glue loss
+    /// are inside the guide's transmission, which is the number a guide is
+    /// measured by.
     pub fn optical(self, design: &TimingDesign) -> Optical {
         let optical = Optical::block_in_air(design.index, 10_000.0).with_sensor(self.area_mm2);
         match self.guide_efficiency {
-            Some(efficiency) => optical.with_guide(efficiency),
+            Some(efficiency) => optical
+                .with_guide(efficiency)
+                .with_sensor_medium(crate::components::adhesive().index),
             None => optical,
         }
     }

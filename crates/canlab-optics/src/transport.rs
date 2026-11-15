@@ -135,6 +135,13 @@ pub struct Optical {
     /// `None` with `guide_efficiency` set means the etendue-limited gain for the
     /// block's index.
     pub guide_gain: Option<f64>,
+    /// The refractive index of the medium between the block and the silicon.
+    ///
+    /// `1.0` is a bare sensor: the light refracts into air at the face, so the
+    /// angle the silicon sees runs up to 90°. A potted taper keeps the light in
+    /// the adhesive (n = 1.54 for NOA 68), so the angle at the silicon is the
+    /// block's angle refracted into the glue and never exceeds 40°.
+    pub sensor_index: f64,
     /// The refractive index of the optical adhesive on the sensor faces, if any.
     ///
     /// Optical adhesive is not a polish substitute: it changes the **critical
@@ -164,6 +171,7 @@ impl Optical {
             sensor_area_mm2: 1.0,
             guide_efficiency: None,
             guide_gain: None,
+            sensor_index: 1.0,
             glue_index: None,
         }
     }
@@ -179,6 +187,12 @@ impl Optical {
     pub fn with_guide(mut self, efficiency: f64) -> Optical {
         self.guide_efficiency = Some(efficiency);
         self.guide_gain = Some(etendue_gain(self.index));
+        self
+    }
+
+    /// The same block with the medium at the sensor set to `index`.
+    pub fn with_sensor_medium(mut self, index: f64) -> Optical {
+        self.sensor_index = index;
         self
     }
 
@@ -260,6 +274,25 @@ impl Optical {
                 offset.dot(u).abs() <= 0.5 * side && offset.dot(v).abs() <= 0.5 * side
             }
         }
+    }
+
+    /// Whether a point on a face is inside a taper's entrance aperture.
+    ///
+    /// The mouth is a **hole in the face**: a photon that hits it crosses,
+    /// whatever its angle, and the rest of the face is bare PMMA and reflects.
+    /// That is what a recessed taper is, and it is why the aperture is a
+    /// property of the *point*, not of the face: bonding the whole face would
+    /// absorb the light that misses the mouth instead of letting it bounce back
+    /// and try again.
+    pub fn in_aperture(&self, block: &Block, face: Face, point: Vec3) -> bool {
+        if self.guide_efficiency.is_none() || !crate::block::SENSOR_FACES.contains(&face) {
+            return false;
+        }
+        let side = self.guide_area_mm2(block, face).sqrt();
+        let centre = block.face_centre(face);
+        let (u, v) = block.face_axes(face);
+        let offset = point.sub(centre);
+        offset.dot(u).abs() <= 0.5 * side && offset.dot(v).abs() <= 0.5 * side
     }
 
     /// The same block with the sensor faces bonded with an adhesive of `index`.
@@ -437,6 +470,17 @@ impl Transport {
                 fate = Fate::Absorbed;
                 break;
             }
+            // The taper's mouth is a hole: a photon that hits it crosses,
+            // whatever its angle. The rest of the face is bare PMMA and runs
+            // the Fresnel test below, so the light that misses the mouth
+            // reflects and gets another chance.
+            if self.optical.in_aperture(&self.block, next.face, next.point) {
+                fate = Fate::Escaped;
+                face = Some(next.face);
+                exit = Some(next.point);
+                exit_direction = Some(heading);
+                break;
+            }
             let outcome = fresnel::interface(
                 heading,
                 next.normal,
@@ -570,6 +614,25 @@ mod tests {
             .unwrap();
         assert_eq!(traced.fate, Fate::Absorbed);
         assert!(traced.path_mm > 0.0 && traced.path_mm <= 6.0, "{}", traced.path_mm);
+    }
+
+    #[test]
+    fn the_aperture_is_a_hole_and_the_rest_of_the_face_reflects() {
+        // The bug this prevents: bonding the whole face, which absorbs the light
+        // that misses the taper's mouth instead of letting it bounce back. The
+        // mouth is a hole; the rest of the face is bare PMMA and reflects.
+        let block = Block::new(Tropical::fits_in(20.0, 10.0).expect("fits"));
+        let optical = Optical::block_in_air(1.49, 10_000.0).with_sensor(36.0).with_guide(0.75);
+        let face = Face::Top;
+        let centre = block.face_centre(face);
+        let (u, _) = block.face_axes(face);
+        let half = 0.5 * optical.guide_area_mm2(&block, face).sqrt();
+        assert!(optical.in_aperture(&block, face, centre));
+        assert!(optical.in_aperture(&block, face, centre.add(u.scale(0.9 * half))));
+        assert!(!optical.in_aperture(&block, face, centre.add(u.scale(1.1 * half))));
+        // A bare sensor has no mouth at all.
+        let bare = Optical::block_in_air(1.49, 10_000.0).with_sensor(36.0);
+        assert!(!bare.in_aperture(&block, face, centre));
     }
 
     #[test]

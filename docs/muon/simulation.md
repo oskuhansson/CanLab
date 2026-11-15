@@ -101,7 +101,7 @@ sequenceDiagram
     TR->>TR: absorb by exp(-d/L)
     TR->>TR: Fresnel: reflect or escape
     TR->>SIM: fate, face, time of flight
-    SIM->>SIPM: coverage draw, then PDE draw
+    SIM->>SIPM: aperture test (geometric), then angular PDE
     SIPM->>EV: true time, plus jitter
     Note over EV: every photon has exactly one fate
 ```
@@ -172,13 +172,31 @@ between `t = L·n/c` and the answer a timing measurement gives.
 
 ### 5. The sensor decides
 
-Three draws, in order: does the photon land on the sensor's fraction of the face
-(15 % for a 6 × 6 mm sensor on a 236 mm² face), then does it convert (PDE 35 %),
-then what is its jitter (a Box–Muller normal with σ = the sensor's `jitter_ps`).
+The aperture test is **not a draw**. The taper's mouth is a square of
+`sensor area × gain` centred on the face — 11.8 mm on the side for the 6 × 6 mm
+part — and a photon that hits it crosses, whatever its angle; one that misses it
+reflects off the bare PMMA and gets another chance. *Where the photon and the
+sensor are* decides the detection, not a random number. The earlier model drew
+the photon against the face's mean coverage, which is why a detection could sit
+tens of millimetres from the sensor.
 
-The coverage draw is the one that dominates. Leaving it out is how the first
-version of the study reported tens of photons per sensor where the geometry allows
-a handful.
+What *is* a draw is the conversion: the sensor's PDE at the angle it sees, times
+the bond's transmission (0.95 for NOA 68, whose TDS admits voids and unwetted
+patches), and then the jitter (a Box–Muller normal with σ = the sensor's
+`jitter_ps`).
+
+The PDE is angle-dependent. The measured intrinsic response (Otte et al.,
+arXiv:1606.05186, §3.8) is flat to 60° and about 80 % there for S polarisation,
+then falls; the model interpolates that in `cos θ` **in the sensor's medium**. A
+potted taper keeps the light in the adhesive (n = 1.54), so the angle at the
+silicon never exceeds 40° and the PDE stays within 10 % of its normal-incidence
+value. A bare sensor refracts into air, where the angle runs to 90° and the PDE
+falls to zero — which is why the bare 6 × 6 mm part measures 2.5 photons and the
+potted one 10.2.
+
+The aperture is the term that dominates. Leaving it out is how the first version
+of the study reported tens of photons per sensor where the geometry allows a
+handful.
 
 ### 6. Every photon has exactly one fate
 
@@ -196,12 +214,14 @@ the walls — averaged over 200 events:
 | Quantity | Value |
 |---|---|
 | Cherenkov photons born | ~210 |
-| Reaching a sensor after Fresnel, absorption and coverage | ~19 |
-| Sensors with at least one photon | 2.95 of 4 |
-| Photons lost to total internal reflection | ~11 % |
 | Arrival-time spread within one sensor | ~18 ps |
 | Timing difference between the furthest sensors | ~224 ps |
 | Muons through the plane in a 100 s flight | ~31–46 |
+
+The light budget — how many of those photons reach a sensor — is in
+[cherenkov.md](cherenkov.md) §4: **10.2 photons per muon and 2.27 sensors timed**
+for the design point, the hexagon at 30 mm with the 6 × 6 mm part behind the
+taper.
 
 The last two are the study's problem. The spread within one sensor is 18 ps, which
 is the *geometry's* own blur and is comparable to the timer's 20 ps. The timing

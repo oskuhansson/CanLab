@@ -791,7 +791,17 @@ mod tests {
         // switches have to compose: hiding the losses must not hide a photon
         // that reached a sensor, and showing only trapped photons must show
         // exactly the trapped ones.
-        let mut scene = DetectorScene::new(hexagon(), 1).expect("a scene");
+        // The seed is searched, not fixed: a model change moves which photons
+        // are trapped, and a test pinned to one seed then fails for a reason
+        // that is not the switch it is testing.
+        let mut scene = (1..64u64)
+            .filter_map(|seed| DetectorScene::new(hexagon(), seed))
+            .find(|scene| {
+                scene.photons.iter().any(|photon| {
+                    photon.detected.is_none() && photon.fate == Fate::Trapped
+                }) && scene.photons.iter().any(|photon| photon.detected.is_some())
+            })
+            .expect("a scene with a trapped photon and a detection");
         scene.show_detected = false;
         scene.show_lost = false;
         scene.show_absorbed = false;

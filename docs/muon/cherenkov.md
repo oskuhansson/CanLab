@@ -29,10 +29,10 @@ model rather than a measurement, it says so.*
 > FWHM) for its light.
 >
 > The design point is therefore the **6 × 6 mm part behind the taper**, and the
-> numbers below are re-measured with it. The hexagon at 30 mm is **29.4° median
-> and 51.2 % within 30°** through the nominal readout — the design does not pass
+> numbers below are re-measured with it. The hexagon at 30 mm is **29.9° median
+> and 50.3 % within 30°** through the nominal readout — the design does not pass
 > the mission's criterion, and the light budget, the aperture and the jitter, not
-> the geometry, are why: 20, 30 and 40 mm deep measure 30.7°, 29.4° and 30.6°.
+> the geometry, are why: 20, 30 and 40 mm deep measure 29.6°, 29.9° and 29.9°.
 > [vmf.md](vmf.md) has the distribution head measured on the same model.
 
 ---
@@ -50,8 +50,8 @@ no gap, no coincidence, no second plane — which is what makes it small and che
 The design's problem is not the idea. It is **how few photons arrive**: a 30 mm
 crossing makes about 630 photons, but most are trapped by total internal
 reflection, the sensors cover a fraction of the faces, and their PDE is 35 % — so
-an event yields about **10.4 photoelectrons across the four sensors** and
-**2.21 of them fire**. Everything below is a consequence of those numbers — and
+an event yields about **10.2 photoelectrons across the four sensors** and
+**2.27 of them fire**. Everything below is a consequence of those numbers — and
 of the aperture that sets them.
 
 ---
@@ -168,21 +168,21 @@ the same six-point polygon and the transport never asks which.
 
 | Block | Mass | Horizontal area | Median | Within 30° |
 |---|---|---|---|---|
-| 20 mm tent, 10 mm | 36 g | 400 mm² | 31.0° | 48 % |
-| 24 mm tent, 20 mm | 103 g | 960 mm² | 31.4° | 47 % |
-| 28 mm hexagon, 20 mm | 48 g | 2 036 mm² | 30.7° | 49 % |
-| **28 mm hexagon, 30 mm** | **73 g** | **2 036 mm²** | **29.4°** | **51 %** |
-| 28 mm hexagon, 40 mm | 97 g | 2 036 mm² | 30.6° | 49 % |
+| 20 mm tent, 10 mm | 36 g | 400 mm² | 31.5° | 47 % |
+| 24 mm tent, 20 mm | 103 g | 960 mm² | 32.5° | 45 % |
+| 28 mm hexagon, 20 mm | 48 g | 2 036 mm² | 29.6° | 51 % |
+| **28 mm hexagon, 30 mm** | **73 g** | **2 036 mm²** | **29.9°** | **50 %** |
+| 28 mm hexagon, 40 mm | 97 g | 2 036 mm² | 29.9° | 50 % |
 
 **The depth buys almost nothing.** With the 6 × 6 mm part behind the taper the
 light budget is set by the sensor's area and the taper, not by the chord: 20, 30
-and 40 mm deep measure 30.7°, 29.4° and 30.6°, a spread of 1.3° against a
+and 40 mm deep measure 29.6°, 29.9° and 29.9°, a spread of 0.3° against a
 sampling error of about 1.3° on the median. The depth buys photons, not
 resolution.
 
-**The shape buys rate, not resolution.** The 20 mm tent measures 31.0° and 48 %
-against the hexagon's 29.4° and 51 % — 1.6° apart, about one sampling error, for
-half the mass. What the hexagon buys is **muon rate**: 2 036 mm² of horizontal
+**The shape buys rate more than resolution.** The 20 mm tent measures 31.5° and
+47 % against the hexagon's 29.9° and 50 % — 1.6° apart, about one sampling error,
+for half the mass. What the hexagon buys is **muon rate**: 2 036 mm² of horizontal
 area against 400, five times the crossings. The resolution is set by the
 sensor's aperture on the face it sits on, not by the face's size.
 
@@ -215,16 +215,16 @@ muon, on the hexagon at 30 mm:
 
 | Sensor | Photons detected | Sensors timed | Aperture | Coverage of a side face | Jitter, sigma |
 |---|---|---|---|---|---|
-| 1 mm² bare | 0.09 | 0.06 | 1.0 mm | 0.12 % | 47.4 ps |
-| 1 mm² + taper | 0.31 | 0.26 | 2.0 mm | 0.35 % | 47.4 ps |
-| 3 × 3 mm + taper | 2.46 | 1.11 | 5.9 mm | 3.1 % | 87.5 ps |
-| 6 × 6 mm bare | 3.91 | 1.42 | 6.0 mm | 4.3 % | 143.1 ps |
-| **6 × 6 mm + taper** | **10.43** | **2.21** | **11.8 mm** | **12.4 %** | **143.1 ps** |
+| 1 mm² bare | 0.11 | 0.08 | 1.0 mm | 0.12 % | 47.4 ps |
+| 1 mm² + taper | 0.26 | 0.22 | 2.0 mm | 0.35 % | 47.4 ps |
+| 3 × 3 mm + taper | 2.91 | 1.26 | 5.9 mm | 3.1 % | 87.5 ps |
+| 6 × 6 mm bare | 2.51 | 1.15 | 6.0 mm | 4.3 % | 143.1 ps |
+| **6 × 6 mm + taper** | **10.16** | **2.27** | **11.8 mm** | **12.4 %** | **143.1 ps** |
 
 The aperture is the square on the face a photon must hit: the sensor's own side
 for a bare part, `side × sqrt(gain)` for a tapered one. The taper's mouth is
 11.8 mm for the 6 mm part, so it catches the light near the face centre that the
-bare 6 mm square misses — 10.4 photons and 2.2 sensors against 3.9 and 1.4. It
+bare 6 mm square misses — 10.2 photons and 2.3 sensors against 2.5 and 1.2. It
 does not make the sensor cover the face: a photon outside the 11.8 mm square is
 lost however normal its direction.
 
@@ -232,12 +232,12 @@ The resolution follows the light:
 
 | Sensor | Median | Within 30° | Four sensors, € |
 |---|---|---|---|
-| 1 mm² + taper | 35.5° | 37 % | 40–100 € |
-| 3 × 3 mm + taper | 32.3° | 45 % | 80–180 € |
-| **6 × 6 mm + taper** | **29.4°** | **51 %** | **160–360 €** |
+| 1 mm² + taper | 35.9° | 38 % | 40–100 € |
+| 3 × 3 mm + taper | 32.4° | 45 % | 80–180 € |
+| **6 × 6 mm + taper** | **29.9°** | **50 %** | **160–360 €** |
 
 So the sensor is a straight trade of money for resolution, and no point on it
-passes the 30° criterion: the best is 51 % within 30°, and it is the most
+passes the 30° criterion: the best is 50 % within 30°, and it is the most
 expensive. The 1 mm² part cannot see the light even with the best possible taper:
 etendue caps a taper at 3.87× the bare coverage, so 0.12 % becomes 0.35 %, one
 photon per four muons. The 6 mm part sees 4.3 % bare and 12.4 % tapered — 2.21
@@ -371,7 +371,7 @@ linear fit uses, which is wrong because the light does not leave from a point. A
 the design point's 143 ps the same formula gives ~245°, past the point where it
 says anything at all. The measured 26° is not a violation of it: it comes from a
 different model, and the ablation shows where — the four timestamps and the flags
-alone give 33.3°, and the second arrival and the counts add the rest.
+alone give 33.5°, and the second arrival and the counts add the rest.
 
 The bound is not the limit on the design. The limit is **where the sensors are**:
 the two end sensors sit 10 mm apart (the block's thickness), so a heading along
@@ -412,7 +412,7 @@ counts. The second, mean and spread are what a multi-hit TDC records and a
 single-threshold readout throws away.
 
 **The multi-hit summary does not pay.** The ablation is direct: the hexagon at
-30 mm is 29.4° with the mean and spread and 29.1° without: a third of a degree,
+30 mm is 29.9° with the mean and spread and 30.0° without: a tenth of a degree,
 which is the noise. The mean and spread are dominated by the emission-time spread
 and the path-length spread, and they buy nothing. The 16-feature set is the one
 to ship because it is the smaller instrument for the same number.
@@ -425,19 +425,19 @@ gives, for the hexagon at 30 mm through the nominal readout:
 
 | Features | Median | 68th | Within 30° | Within 60° |
 |---|---|---|---|---|
-| 24 — everything | 29.4° | 38.3° | 51.2 % | 93.3 % |
-| **16 — first, second, flags, counts** | **29.1°** | **37.9°** | **52.1 %** | **93.5 %** |
-| 8 — first and flags, one threshold | 33.3° | 41.8° | 42.7 % | 90.9 % |
+| 24 — everything | 29.9° | 39.4° | 50.3 % | 92.5 % |
+| **16 — first, second, flags, counts** | **30.0°** | **38.8°** | **50.1 %** | **92.5 %** |
+| 8 — first and flags, one threshold | 33.5° | 42.8° | 42.2 % | 89.9 % |
 
-The multi-hit record is worth **4.2°** in total and nine points of within-30°:
-33.3° and 42.7 % on one threshold, 29.1° and 52.1 % with the second arrival and
+The multi-hit record is worth **3.5°** in total and eight points of within-30°:
+33.5° and 42.2 % on one threshold, 30.0° and 50.1 % with the second arrival and
 the counts. The gap is the **second arrival**: its gap from the first is the
 extra path length, and the extra path length is the distance to the track — the
 latent variable the direction fit is missing. The mean and spread are not worth
 adding on top.
 
-So the readout is the design. A single-threshold TDC gives 33.3° and 42.7 %; a
-multi-hit TDC gives 29.1° and 52.1 %. The TDC-GPX2 has a 16-stage FIFO per channel
+So the readout is the design. A single-threshold TDC gives 33.5° and 42.2 %; a
+multi-hit TDC gives 30.0° and 50.1 %. The TDC-GPX2 has a 16-stage FIFO per channel
 and unlimited multi-hit, so it is the part this design needs, not an optional
 extra — and that is also the €55–60 and QFN64 problem.
 
@@ -447,11 +447,11 @@ Through the realistic readout, on the corrected photon count:
 
 | Block | Median | 68th | Within 30° | Within 60° |
 |---|---|---|---|---|
-| 20 mm tent, 10 mm | 31.0° | 39.6° | 48 % | 93 % |
-| 24 mm tent, 20 mm | 31.4° | 41.0° | 47 % | 92 % |
-| 28 mm hexagon, 20 mm | 30.7° | 39.0° | 49 % | 94 % |
-| 28 mm hexagon, 30 mm | 29.4° | 38.3° | 51 % | 93 % |
-| 28 mm hexagon, 40 mm | 30.6° | 40.0° | 49 % | 92 % |
+| 20 mm tent, 10 mm | 31.5° | 40.9° | 47 % | 91 % |
+| 24 mm tent, 20 mm | 32.5° | 40.9° | 45 % | 92 % |
+| 28 mm hexagon, 20 mm | 29.6° | 37.8° | 51 % | 94 % |
+| 28 mm hexagon, 30 mm | 29.9° | 39.4° | 50 % | 93 % |
+| 28 mm hexagon, 40 mm | 29.9° | 38.5° | 50 % | 93 % |
 
 The mission's criterion is 30°. The best block reaches it for 59 % of the events,
 which is **a fail rather than a pass** — the mission wants most events inside
@@ -467,8 +467,8 @@ order as the jitter. The absolute arrival is the honest number.
 
 ### 7.3 The photon count the transport measures
 
-The design block fires **2.21 of its four sensors** on average over the measured
-sky, with **10.4 photons** across the four (`sensor_study`). Those are the numbers
+The design block fires **2.27 of its four sensors** on average over the measured
+sky, with **10.2 photons** across the four (`sensor_study`). Those are the numbers
 that decide the timing, and they are measured, not modelled: the command runs the
 transport event by event.
 
@@ -557,7 +557,7 @@ is how the table in §3.2 was produced.
 4. **The adhesive's cure is unproven on this geometry.** NOA 68 cures at 365 nm,
    and PMMA absorbs there; it has to be cured from the bond line's edge with a
    395–405 nm LED, which needs a trial on scrap acrylic.
-5. **The network's 29.4° is a simulation result.** The sim-to-real gap is
+5. **The network's 29.9° is a simulation result.** The sim-to-real gap is
    unmeasured, and the domain randomisation only covers the parameters that were
    varied.
 6. **The 30° criterion is met for a little over half the events**, not for most,
@@ -569,6 +569,6 @@ is how the table in §3.2 was produced.
 ## 11. The one-line summary
 
 A 73 g hexagon of acrylic, four 6 × 6 mm SiPMs behind recessed tapers and four
-timestamps recover a muon's direction to **29.4° median, 51 % within 30°**, for
+timestamps recover a muon's direction to **29.9° median, 50 % within 30°**, for
 **308–513 €** — which is the best this approach gives, it **fails** the mission's
 30° criterion, and it is at or over the detector's budget.

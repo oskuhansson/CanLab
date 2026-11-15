@@ -156,6 +156,13 @@ pub struct SiPM {
     pub jitter_ps: f64,
     /// Microcells, for the saturation limit.
     pub microcells: usize,
+    /// The fraction of the light crossing the bonded interface that reaches the
+    /// silicon, from the adhesive's own datasheet.
+    ///
+    /// Not 1.0 because the bond is imperfect: the TDS quotes a few percent of
+    /// volume shrinkage and the process leaves voids and unwetted patches. The
+    /// Fresnel transmission is separate and is computed by the transport.
+    pub coupling: f64,
 }
 
 impl SiPM {
@@ -171,7 +178,25 @@ impl SiPM {
             pde: 0.35,
             jitter_ps: 100.0,
             microcells: 40_000,
+            coupling: 1.0,
         }
+    }
+
+    /// The PDE at an angle of incidence, from the measured angular response.
+    ///
+    /// The measurement (Otte et al., arXiv:1606.05186, §3.8) corrects for the
+    /// projected area and finds the **intrinsic** response flat to 60° and about
+    /// 80 % there for light polarised perpendicular to the plane of incidence,
+    /// then falling quickly. The transport traces S polarisation, so 0.8 is the
+    /// right anchor. The model is piecewise linear in `cos θ`: 1.0 at normal
+    /// incidence, 0.8 at 60°, 0 at 90°.
+    ///
+    /// `cos_theta` is measured **in the sensor's medium**, after Snell — the
+    /// angle the silicon sees, not the angle in the block.
+    pub fn pde_at(&self, cos_theta: f64) -> f64 {
+        let cos = cos_theta.clamp(0.0, 1.0);
+        let angular = if cos >= 0.5 { 1.0 - 0.4 * (1.0 - cos) } else { 1.6 * cos };
+        self.pde * angular
     }
 }
 
@@ -491,7 +516,16 @@ fn simulate_inner(
             event.lost += 1;
             continue;
         }
-        if random() >= sensor.pde {
+        // The sensor's own efficiency at the angle it sees. The angle in the
+        // sensor's medium comes from Snell: the block's index over the glue's,
+        // which is below one for a bonded face, so the light bends towards the
+        // normal and the angle the silicon sees is smaller than the block's.
+        let cos_block = direction.dot(block.face_normal(face)).clamp(0.0, 1.0);
+        let sin_block = (1.0 - cos_block * cos_block).max(0.0).sqrt();
+        let ratio = optical.index / optical.sensor_index;
+        let sin_sensor = (ratio * sin_block).clamp(0.0, 1.0);
+        let cos_sensor = (1.0 - sin_sensor * sin_sensor).max(0.0).sqrt();
+        if random() >= sensor.pde_at(cos_sensor) * sensor.coupling {
             event.lost += 1;
             continue;
         }
@@ -642,6 +676,24 @@ mod tests {
     fn setup_guided() -> (Block, Optical, [SiPM; 4]) {
         let (block, optical, sensors) = setup();
         (block, optical.with_guide(0.6), sensors)
+    }
+
+    #[test]
+    fn the_pde_falls_with_the_angle_it_sees() {
+        // The measured intrinsic response is flat to 60 deg and about 80 % there
+        // for S polarisation, then falls. The model is piecewise linear in cos.
+        let sensor = SiPM::typical(Face::Top);
+        assert!((sensor.pde_at(1.0) - sensor.pde).abs() < 1e-12);
+        assert!((sensor.pde_at(0.5) - 0.8 * sensor.pde).abs() < 1e-12);
+        assert!(sensor.pde_at(0.0).abs() < 1e-12);
+        // Monotone in between, so no angle is better than normal incidence.
+        let mut previous = sensor.pde_at(1.0);
+        for step in 1..=20 {
+            let cos = 1.0 - step as f64 / 20.0;
+            let now = sensor.pde_at(cos);
+            assert!(now <= previous + 1e-12, "cos {cos}: {now} > {previous}");
+            previous = now;
+        }
     }
 
     #[test]

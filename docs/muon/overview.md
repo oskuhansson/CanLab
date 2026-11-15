@@ -23,8 +23,8 @@ timestamps them. Twenty-four numbers per event — four first arrivals, four sec
 arrivals, four means, four spreads, four "did it fire" flags and four photon
 counts — go into a small neural network, which returns the muon's direction.
 
-**The measured resolution is 29.4° median (38.3° at the 68th percentile), and
-51.2 % of events are within the mission's 30° — a fail, not a pass.**
+**The measured resolution is 29.9° median (39.4° at the 68th percentile), and
+50.3 % of events are within the mission's 30° — a fail, not a pass.**
 
 ---
 
@@ -47,7 +47,7 @@ flowchart LR
     subgraph G_NET["The network"]
         FEAT["24 features: first, second, flags, counts, mean, spread"]
         MLP["64 x 64 network, 5890 parameters"]
-        DIR{{"Direction, 29.4 deg median"}}
+        DIR{{"Direction, 29.9 deg median"}}
     end
     MUON -->|"emits"| CONE
     CONE -->|"trapped"| TIR
@@ -73,12 +73,12 @@ sensors cover 15 % of the faces they sit on.
 | Block | 56 mm hexagon, 30 mm deep, PMMA, n = 1.49 | `Tropical::hexagon(28, 30)` |
 | Block mass | 73 g | `hexagon_mass_g` |
 | Cherenkov yield | 21 photons/mm, 630 per 30 mm crossing | `photons_per_mm(1.0, 1.49)` |
-| Photons detected | 10.4 per muon across the four sensors | `sensor_study` |
+| Photons detected | 10.2 per muon across the four sensors | `sensor_study` |
 | Sensors | 4 × MICROFC-60035, 18 980 microcells, 35 % PDE, behind a taper | `components` |
 | Readout jitter | 143.1 ps total (141.4 SiPM, 20 timer, 6 amp, 2 comparator) | `SensorModel::jitter_ps` |
-| Timestamps per event | 2.21 of 4 on average | `sensor_study` |
+| Timestamps per event | 2.27 of 4 on average | `sensor_study` |
 | Timing signal | 209 ps across the detector | `timing_signal_ps` |
-| **Direction resolution** | **29.4° median, 38.3° at 68 %, 51.2 % within 30°** | `train_realistic` |
+| **Direction resolution** | **29.9° median, 39.4° at 68 %, 50.3 % within 30°** | `train_realistic` |
 | Cost | 308–513 € | `cherenkov.md` §8 |
 
 ---
@@ -90,21 +90,21 @@ The network is a **regressor**, not a classifier: it outputs two continuous numb
 recovered from the unit constraint. The loss is mean squared error, so it converges
 to the conditional mean `E[direction | features]`.
 
-The reported 29.4° is therefore the **median angular error of that point estimate**
+The reported 29.9° is therefore the **median angular error of that point estimate**
 over held-out events — the irreducible spread of the true direction around its own
-conditional mean. Half the muons are reconstructed to better than 29.4°, and the
-**realistic readout** (a threshold, dark counts, crosstalk and walk) keeps **51 %**
+conditional mean. Half the muons are reconstructed to better than 29.9°, and the
+**realistic readout** (a threshold, dark counts, crosstalk and walk) keeps **50 %**
 of events within the mission's 30°.
 
 | Configuration | Median | 68th percentile | Within 30° |
 |---|---|---|---|
-| first and flags, one threshold (8 features) | 33.3° | 41.8° | 42.7 % |
-| **first, second, flags, counts (16 features)** | **29.1°** | **37.9°** | **52.1 %** |
-| everything (24 features) | 29.4° | 38.3° | 51.2 % |
+| first and flags, one threshold (8 features) | 33.5° | 42.8° | 42.2 % |
+| **first, second, flags, counts (16 features)** | **30.0°** | **38.8°** | **50.1 %** |
+| everything (24 features) | 29.9° | 39.4° | 50.3 % |
 
 The extra stops are the **second arrival** at each sensor — what a multi-hit TDC
 records and a single-threshold readout throws away — plus the photon counts. The
-second arrival and the counts together are worth **4.2°** and nine points of
+second arrival and the counts together are worth **3.5°** and eight points of
 within-30°. The mean and spread over every photon are not worth adding: they buy
 a third of a degree, which is the noise, because they are dominated by the
 emission-time spread.
@@ -117,14 +117,14 @@ Two analytic reconstructions were tried first, and both are worse:
 |---|---|---|
 | Linear fit, `t = t₀ + (r·d)/v` | 119.5° | The model is wrong: the light does not leave from a point |
 | Cherenkov model, **true** track point | 81.1° | The model is right, but four timestamps cannot determine the track position |
-| **Network** | **29.4°** | Learns `p(direction \| features)`, marginalising over the track position |
+| **Network** | **29.9°** | Learns `p(direction \| features)`, marginalising over the track position |
 
 The network is not doing better physics. It is doing something the analytic
 inversion cannot: the track position is a **latent variable**, and the network
 absorbs it into the conditional distribution. The ablation shows where the
 information comes from — the photon counts depend on the path length, and the path
 length depends on where the track is, so the counts and the second arrival are
-worth **4.2°** together.
+worth **3.5°** together.
 That is less than the earlier study reported, and the difference is a bug fix: the
 photon count used to be taken from the caller's 200 mm path instead of the block's
 own chord, which credited the block with six times the light it makes.
@@ -134,12 +134,12 @@ own chord, which credited the block with six times the light it makes.
 The regressor returns a point and no uncertainty. A second head — the same
 network with a **von Mises–Fisher** output — returns a mean direction *and* a
 concentration `κ`, so every event carries its own predicted error. On the same
-8 000 events (hexagon at 30 mm) it lands on **28.9°** and **53.5 % within 30°**,
+8 000 events (hexagon at 30 mm) it lands on **29.3°** and **52.0 % within 30°**,
 within half a degree and two points of the regressor, so the distribution costs
 nothing in the mean direction. Its `κ` ranks events correctly — the events it
-calls hard are harder — and its 30° probability is close: **58.2 % predicted,
-53.5 % observed**. The vMF tail is slightly light, and a single scale on `κ` would
-close the last five points without touching the direction. [vmf.md](vmf.md) has the measurement and the calibration table.
+calls hard are harder — and its 30° probability is close: **57.7 % predicted,
+52.0 % observed**. The vMF tail is slightly light, and a single scale on `κ` would
+close the last six points without touching the direction. [vmf.md](vmf.md) has the measurement and the calibration table.
 
 ---
 
@@ -217,7 +217,7 @@ than corrected for.
 2. **The tracker's light model is a kernel, not a transport.** It gives the
    expected photoelectrons per pixel and draws the Poisson count; it does not trace
    individual photons.
-3. **The network's 29.4° is a simulation result.** The sim-to-real gap is
+3. **The network's 29.9° is a simulation result.** The sim-to-real gap is
    unmeasured, and the domain randomisation only covers the parameters that were
    varied.
 4. **The timer part is wrong.** The MAX35101 cannot timestamp four independent
